@@ -1,0 +1,267 @@
+# FinSwipe — Product & Technical Blueprint (v2)
+
+**Date:** 2026-07-25 (v2 — supersedes the 2026-07-12 FinHub blueprint)
+**Status:** Approved design (pre-implementation)
+**Owner:** Solo founder, building solo
+**Budget constraint:** ~₹2,000/month running cost at launch; scale spend only after traction
+**Repo:** `finhub` (name kept; product name is FinSwipe)
+
+---
+
+## 1. Vision
+
+FinSwipe is not another finance news app, stock screener, or charting platform. It is **the fastest way for retail investors and traders to understand what is happening in the market and why it matters.**
+
+Customer interviews showed people don't want more news — they want **better explanations**. The questions they actually ask: "Why is the market falling?", "Which stocks are affected?", "Is this short-term or long-term?", "How does this affect me?" Every feature must serve that single goal: context, not headlines.
+
+**Market focus:** India-first (NSE/BSE, SEBI, RBI, Indian IPOs, corporate news) plus global/geopolitical news that can impact Indian markets. English. Android-first (Flutter).
+
+### Success metric: Time to Understanding
+
+> A user opens the app and understands the biggest market-moving event of the day in **under 15 seconds**.
+
+Not downloads. Not time-in-app. Supporting signals (PostHog free tier): time from app-open to first full card read, cards understood per session, Q&A usage, alert open rate, D1/D7 return rate.
+
+### Product principles
+
+1. **Context over headlines** — every card answers: what happened, why, who is affected, positive or negative, short-term or long-term, why you should care.
+2. **Trust is the foundation** — AI explains, never invents. Every summary and impact call is backed by named sources with links. Confidence is shown where relevant. No buy/sell recommendations, ever.
+3. **Speed** — markets move in minutes; ingestion, summarization, and alerts are built for fast delivery.
+4. **Ruthless focus** — interviewees asked for charts, broker integration, portfolio tools, AI ratings, trade journals. All refused for MVP. Solve one problem exceptionally well first.
+
+---
+
+## 2. Scope
+
+### MVP (this blueprint — what gets built)
+
+| Feature | Description |
+|---|---|
+| **Swipe feed** | Vertical, Reels-style. One swipe = one story, fully understood in seconds. |
+| **Smart news card** | Single card, no tabs: headline · concise AI summary (what/why/who/why-care) · expected impact (positive/negative + strength) · **short-term vs long-term flag** · affected sectors & stocks (tappable) · source name + link to original. Written plainly enough for beginners, precise enough for traders. |
+| **Q&A search** | Ask "Why is NIFTY falling today?" → sourced AI explanation. Two-tier: our stories first, whitelisted-web fallback. Suggested follow-up questions. |
+| **Smart alerts** | Push notifications only for significant market-moving events; instant, machine-gated, personalized to follows. |
+| **Basic stock page** | Current price (delayed) · lightweight chart · recent related news · a few key metrics. Deliberately NOT competing with Screener/TradingView. |
+| **Follow** | Stocks, sectors, topics → boosts feed ranking and drives personalized alerts. |
+| **Save / Share** | Bookmarks; share card rendered as branded image (WhatsApp/LinkedIn/X). |
+| **Admin panel** | Streamlit: review queue, edit AI output, feature stories, merge duplicates, source health, alert override, kill switches. |
+
+Login: Google sign-in required at first launch. Onboarding: sign in → pick ≥3 interests (sectors/topics/popular stocks) → feed. Under 60 seconds.
+
+### Explicit non-goals for MVP (requested in interviews, deliberately refused)
+
+Advanced charts, broker integration, portfolio management, AI stock recommendations/ratings, trade journals, advanced analytics. These delay validation and dilute focus.
+
+### Phase 2+ (after Time-to-Understanding is validated)
+
+Portfolio integration (news mapped to holdings) → richer fundamentals & AI company context → historical event comparisons → richer watchlists & risk views → eventually broker integration. Also: FastAPI backend (slots between Supabase and app when needed), ML recommendation engine (trained on `events` data collected from day one), iOS release, Supabase Pro (~₹2,100/mo — first scaling cost, triggered by success).
+
+---
+
+## 3. Architecture
+
+Serverless-max: no owned servers. Two significant codebases (pipeline, app) + one small admin tool.
+
+```
+┌────────────────────────────────────────────────────────┐
+│ 1. PIPELINE — Python, GitHub Actions cron              │
+│    every 15 min (Mon–Fri 09:00–16:00 IST)              │
+│    every 2 h otherwise                                 │
+│                                                        │
+│    fetch RSS (15–20 feeds) ──┐                         │
+│    fetch NSE/BSE filings ────┼→ normalize → dedupe     │
+│    fetch SEBI/RBI releases ──┘  + cluster   ↓          │
+│                     OpenAI: one structured call/story  │
+│                                     ↓                  │
+│               insert 'pending' → auto-approve rules    │
+│                                     ↓                  │
+│               alert engine: machine-gated FCM push     │
+└──────────────────────────────┬─────────────────────────┘
+                               ↓
+┌────────────────────────────────────────────────────────┐
+│ 2. SUPABASE (free tier)                                │
+│    Postgres · Auth (Google, required) · RLS            │
+│    Edge Function: Q&A search (two-tier, sourced)       │
+└───────┬──────────────────────────────────┬─────────────┘
+        ↓                                  ↓
+┌───────────────────┐   ┌────────────────────────────────┐
+│ 3. FLUTTER APP    │   │ 4. ADMIN PANEL — Streamlit     │
+│    Android, v1    │   │    (Community Cloud, free)     │
+│    + FCM push     │   └────────────────────────────────┘
+│    + Yahoo prices │
+└───────────────────┘   5. PostHog (free) — analytics
+```
+
+Key decisions:
+
+- **Feed cards contain zero runtime AI** — fully pre-generated by the pipeline; cards render instantly. The only runtime AI is Q&A search, behind an Edge Function (API key never ships in the app).
+- **Feed ranking is SQL:** approved stories by recency + impact score, boosted for followed entities, featured pinned. Honest ₹0 personalization; the ML rec engine waits for Phase 2 and trains on `events` data collected from day one.
+- **GitHub Actions as scheduler:** free, logged, emails on failure, stateless idempotent runs. Known limitation: cron can lag a few minutes under load — acceptable at MVP, documented as the first thing Phase 2's always-on worker fixes.
+- **Speed path for breaking news:** primary-source and multi-source-confirmed high-impact stories flow ingest → AI → auto-approve → alert with no human in the loop (see §7).
+
+---
+
+## 4. Content Sourcing
+
+1. **RSS (~15–20 feeds)** — breadth & speed: ET Markets, Moneycontrol, LiveMint, Business Standard, Hindu BusinessLine, Reuters India/World, global & geopolitics feeds.
+2. **Primary sources** — depth & zero copyright risk: NSE/BSE corporate announcements, SEBI press releases, RBI notifications.
+3. **AI rewriting** — headlines and summaries in original words; facts aren't copyrightable, expression is. Article bodies stored transiently for processing only. Every card shows source name + link.
+4. **Market data** — Yahoo Finance (unofficial, free): ~15-min delayed prices + daily history for `.NS` symbols. Acceptable because FinSwipe explains news — it is not a trading terminal. Swappable for a paid API (Upstox/Kite ~₹2,000/mo) post-traction; the stock page reads prices through one internal interface so the swap touches one module.
+
+**Legal guardrails:** attribution everywhere; no body-text republishing; SEBI-safe framing (describe impact and what to watch — never buy/sell advice); persistent "Not investment advice" disclaimer; drop any source on request.
+
+---
+
+## 5. AI Engine
+
+**Provider:** OpenAI. **Model:** GPT-4o-mini at launch (GPT-5-mini drop-in upgrade). Structured Outputs everywhere.
+
+### Story processing — one structured call per story
+
+```json
+{
+  "headline_rewrite": "original wording, plain language",
+  "summary": "what happened / why / who is affected / why you should care",
+  "impact": {
+    "direction": "positive|negative|mixed|neutral",
+    "strength": 1-3,
+    "horizon": "short_term|long_term|both",
+    "score": 1-10
+  },
+  "companies": [{"name": "...", "nse_symbol": "..."}],
+  "sectors": ["..."],
+  "category": "Markets|Economy|IPO|Global|Commodities|Corporate|Policy|Geopolitics",
+  "is_india_relevant": true,
+  "confidence": "high|medium|low"
+}
+```
+
+One call, not eight chained steps: cheaper, and impact/summary stay coherent. `confidence` is shown on the card when not high — trust principle made visible.
+
+**Quality safeguards:** schema validation before insert (1 retry with error appended → else `flagged`, never published) · company symbols validated against a seeded NSE/BSE table (no hallucinated tickers) · `is_india_relevant=false` dropped unless Geopolitics with score ≥ 6 · prompts versioned in `prompts/` with a ~20-article golden-set eval run on every change · admin edits stored as future few-shot data.
+
+### Q&A search — the only runtime AI
+
+1. User asks a question → Supabase Edge Function.
+2. **Tier 1:** full-text search over our processed stories (last 7 days) + companies table → top ~5 stories → GPT-4o-mini answers **only from those sources**, citing each claim. If sources don't cover it → Tier 2.
+3. **Tier 2 (fallback):** live web search restricted to a **whitelisted domain list** (Reuters, ET, Mint, Moneycontrol, Business Standard, NSE/BSE/RBI/SEBI official). Answers labeled "from web sources" with links. The model never answers from its own knowledge — if the whitelist can't support an answer: "our sources don't clearly explain this yet."
+4. **Answer format:** what's happening → why → who's affected → what to watch, confidence level, tappable source cards, and 2–3 suggested follow-up questions (each follow-up is a fresh sourced answer — mini-chat feel without freewheeling chat).
+5. **Cost control:** no visible cap; silent abuse guard at 50 questions/user/day; popular questions cached 15 min (market panic ≠ thousand identical AI calls). ~₹0.05/query Tier 1; Tier 2 adds a search-API call (Tavily/Brave free tier at MVP volume).
+
+---
+
+## 6. Data Model (Supabase Postgres)
+
+- **stories** — id, url, url_hash (unique, dedupe), cluster_id, headline, summary, impact_direction, impact_strength, impact_horizon, impact_score, confidence, source_name, source_url, image_url, published_at, category, sectors[], status (`pending|approved|rejected|flagged`), is_featured, alerted_at, created_at
+- **companies** — id, name, nse_symbol, bse_code, sector, logo_url, aliases[] (seeded from NSE/BSE listings)
+- **story_companies** — story_id, company_id
+- **users** — Supabase Auth + profile: display_name, fcm_token, alert_settings
+- **follows** — user_id, target_type (`company|sector|category`), target_id
+- **saves** — user_id, story_id, saved_at
+- **sources** — id, name, type (`rss|nse|bse|sebi|rbi`), feed_url, is_active, last_fetched_at
+- **events** — user_id, story_id, type (`view|swipe_past|save|share|qa_ask|alert_open`), created_at (pruned after 90 days; future rec-engine training data)
+- **qa_cache** — question_hash, answer_json, created_at (15-min TTL)
+
+**Dedupe, two layers:** `url_hash` drops exact duplicates before any AI cost; `cluster_id` groups near-duplicates (same story, many outlets) → one card showing "also covered by ET, Mint, BS" — and multi-source confirmation doubles as the alert trust gate.
+
+**Search:** Postgres full-text over headline + summary + company names (also powers Q&A Tier 1). ₹0.
+
+**RLS:** stories readable by authenticated users, writable only by pipeline service key; users write only their own rows. **Retention:** events > 90 d pruned; stories > 6 mo archived to JSON then deleted.
+
+---
+
+## 7. Smart Alerts
+
+Push via FCM (free), sent by the pipeline the moment a qualifying story lands.
+
+**Machine gate (speed without false alarms):** impact score ≥ 8 auto-alerts instantly **if** the story is (a) confirmed by 2+ independent sources (cluster size ≥ 2) **or** (b) from a primary source (exchange filing, RBI/SEBI release). Single-source high-impact stories wait in the admin queue instead.
+
+**Rules:**
+- Global market-movers: max 5/day.
+- Personalized: impact ≥ 6 touching a followed stock/sector → alert, max 5/day per user.
+- Quiet hours 22:00–07:00 IST; pierced only by impact ≥ 9 ("wake me if the market is crashing").
+- Every alert deep-links to its story card: open → understand → done. That flow *is* the 15-second metric.
+- Admin panel: manual "send alert" override + per-user mute stats.
+
+---
+
+## 8. Flutter App (Android v1)
+
+**Stack:** Flutter, Riverpod, Supabase Flutter SDK, FCM, PostHog SDK.
+
+**Screens:**
+1. **Onboarding** — Google sign-in (required) → pick ≥3 interests → feed. < 60 s.
+2. **Home feed** — full-screen vertical PageView, snap-per-story, preload 3. The smart card (§2) with impact badge (direction/strength color), short-vs-long-term chip, company/sector chips (tap = follow or open stock page), source link, save/share.
+3. **Search / Ask** — one box, two behaviors: entity queries ("Tata Motors") → stock page & related stories; question queries ("why is nifty falling") → Q&A answer card. Suggested trending questions shown.
+4. **Stock page** — delayed price + light line chart (Yahoo), recent related story cards, a few key metrics (market cap, P/E, 52-wk range). Nothing more, by design.
+5. **Watchlist** — followed entities + filtered feed.
+6. **Saved** — bookmarks.
+7. **Profile** — interests, alert settings, disclaimer, sign-out.
+8. **Story detail** — deep-link target (alerts & shares). Recipients without the app get a web preview page with install button.
+
+**Share:** card rendered as branded image — every share is an ad.
+
+---
+
+## 9. Admin Panel (Streamlit, free hosting)
+
+Review queue (AI output beside source article; approve/reject/edit) · auto-approve: score < 7 auto-approves after 2 h unreviewed; single-source score ≥ 8 held for approval (multi-source/primary auto-flows, §7) · feature/pin · cluster merge/split · flagged stories · source health · manual alert send · kill switches (pipeline, auto-approve, alerts).
+
+---
+
+## 10. Operations, Error Handling & Testing
+
+Idempotent runs: hashes re-checked each run; no state in the runner; re-processing is a no-op.
+
+| Failure | Handling |
+|---|---|
+| One feed down | Log, skip, continue; visible in source health |
+| OpenAI error / invalid JSON | 1 retry with error appended → else `flagged`, never published |
+| Yahoo Finance breaks | Stock page degrades gracefully (news + metrics still render); price module isolated for API swap |
+| Actions run crashes | Email to owner; next run self-heals |
+| Free-tier limits near | Automated pruning; documented Supabase Pro threshold |
+| False-alarm risk on alerts | Machine gate (§7); alerts kill switch in admin |
+
+**Testing:** pipeline unit tests (dedupe hashing, feed parsing, schema validation) · golden set ~20 real articles, run on every pipeline/prompt change · Q&A eval: ~15 canned questions incl. unanswerables (must refuse, not invent) · widget tests for card + Q&A answer · manual device pass before each release.
+
+---
+
+## 11. Build Order
+
+| # | Milestone | Est. | Runnable outcome |
+|---|---|---|---|
+| 1 | Pipeline core: RSS → dedupe/cluster → OpenAI card → Supabase | 1–2 wk | AI cards in DB |
+| 2 | Admin panel (Streamlit) | 3–5 d | You curate & read your own feed daily — first product test |
+| 3 | Primary sources: NSE/BSE, SEBI, RBI + alert engine (machine gate, FCM send) | 1–1.5 wk | Exclusive content + alerts firing |
+| 4 | Flutter app core: auth/onboarding → feed → save/share → stock page | 3–4 wk | Installable app |
+| 5 | Q&A search (Edge Function + UI) + alert receive/deep-links + share images + PostHog → Play internal testing → closed beta | 1.5–2 wk | Beta users onboard |
+
+Gate between 2→4: if *you* don't want to read your own feed every morning, fix content quality before writing any Flutter.
+
+---
+
+## 12. Cost Summary (launch)
+
+| Item | Cost |
+|---|---|
+| OpenAI — story processing (~3,000 stories/mo, single card) | ~₹250–400/mo |
+| OpenAI — Q&A (est. early volume, cached) | ~₹200–400/mo |
+| Web search API for Q&A Tier 2 (Tavily/Brave free tier) | ₹0 |
+| Supabase, GitHub Actions, Streamlit, PostHog, FCM, Yahoo | ₹0 |
+| Google Play developer account | ₹2,600 one-time |
+| **Total running** | **~₹450–800/mo** (headroom inside ₹2,000) |
+
+---
+
+## 13. Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| AI fabrication in Q&A | Source-locked prompting (whitelist only), mandatory citations, refusal path, unanswerable-question evals |
+| False alert on bad story | Machine gate: multi-source or primary-source only; kill switch |
+| Yahoo Finance unofficial API breaks | Isolated price module; graceful degradation; paid-API swap path documented |
+| GitHub Actions cron lag vs "speed" promise | Accepted at MVP (minutes, not hours); Phase 2 always-on worker is the fix; primary-source path is already fastest |
+| Copyright complaints | Original wording only, attribution + link-back, drop source on request |
+| SEBI/regulatory | No advice language (prompt-enforced + evals), visible disclaimers |
+| Scope creep (charts, brokers, portfolios…) | §2 non-goals list; roadmap gates features behind validated Time-to-Understanding |
+| Solo-founder burnout | Auto-approve + machine-gated alerts keep the app alive unattended; every milestone ships something usable |
