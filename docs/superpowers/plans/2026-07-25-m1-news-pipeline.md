@@ -146,6 +146,15 @@ insert into sources (name, type, feed_url) values
 ('CNBC World',        'rss', 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114'),
 ('BBC Business',      'rss', 'https://feeds.bbci.co.uk/news/business/rss.xml'),
 ('Investing.com',     'rss', 'https://www.investing.com/rss/news.rss'),
+('ET Economy',        'rss', 'https://economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms'),
+('ET IPO',            'rss', 'https://economictimes.indiatimes.com/markets/ipos/fpos/rssfeeds/14655708.cms'),
+('TOI Business',      'rss', 'https://timesofindia.indiatimes.com/rssfeeds/1898055.cms'),
+('Business Today',    'rss', 'https://www.businesstoday.in/rssfeeds/?id=home'),
+('Inc42',             'rss', 'https://inc42.com/feed/'),
+('Zerodha Z-Connect', 'rss', 'https://zerodha.com/z-connect/feed'),
+('WSJ Markets',       'rss', 'https://feeds.content.dowjones.io/public/rss/RSSMarketsMain'),
+('Guardian Business', 'rss', 'https://www.theguardian.com/uk/business/rss'),
+('OilPrice',          'rss', 'https://oilprice.com/rss/main'),
 ('GNews Moneycontrol','google_news_query', 'site:moneycontrol.com'),
 ('GNews Breaking-IN', 'google_news_query', 'nifty OR sensex OR RBI OR SEBI when:1h'),
 ('GNews IPO',         'google_news_query', 'ipo india when:6h'),
@@ -156,7 +165,7 @@ insert into sources (name, type, feed_url) values
 - [ ] **Step 4: Apply SQL in Supabase (manual)**
 
 Supabase dashboard → SQL Editor → paste `001_initial.sql` → Run. Then paste `sources_seed.sql` → Run.
-Verify: Table Editor shows 4 tables; `sources` has 15 rows.
+Verify: Table Editor shows 4 tables; `sources` has 24 rows.
 
 - [ ] **Step 5: Create `pipeline/.env.example` and your local `.env`**
 

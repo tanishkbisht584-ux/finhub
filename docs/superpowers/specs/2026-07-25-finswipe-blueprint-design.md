@@ -130,7 +130,18 @@ Key decisions:
 | CNBC World | `search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114` | ✅ fresh |
 | BBC Business (global/geo) | `feeds.bbci.co.uk/news/business/rss.xml` | ✅ fresh |
 | Investing.com | `investing.com/rss/news.rss` | ✅ fresh |
+| ET Economy | `economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms` | ✅ fresh same-day |
+| ET IPO/FPO | `economictimes.indiatimes.com/markets/ipos/fpos/rssfeeds/14655708.cms` | ✅ fresh |
+| Times of India Business | `timesofindia.indiatimes.com/rssfeeds/1898055.cms` | ✅ fresh same-day |
+| Business Today | `businesstoday.in/rssfeeds/?id=home` | ✅ fresh same-day |
+| Inc42 (startups/IPO ecosystem) | `inc42.com/feed/` | ✅ fresh |
+| Zerodha Z-Connect (market commentary) | `zerodha.com/z-connect/feed` | ✅ live, low frequency |
+| WSJ Markets (global) | `feeds.content.dowjones.io/public/rss/RSSMarketsMain` | ✅ fresh |
+| Guardian Business (global) | `theguardian.com/uk/business/rss` | ✅ fresh |
+| OilPrice (commodities) | `oilprice.com/rss/main` | ✅ fresh same-day |
+| Al Jazeera all-news (geopolitics) | `aljazeera.com/xml/rss/all.xml` | ⚠️ fresh but high non-market noise — burns AI quota on irrelevant stories; keep `is_active=false`, prefer the Google News geopolitics query |
 | Google News `when:1h` queries | `news.google.com/rss/search?q=<query>+when:1h&hl=en-IN&gl=IN&ceid=IN:en` | ✅ fresh — breaking-news workhorse |
+| NDTV Profit, HT Business, The Hindu Business, Zee Business, CNN Money, Mint non-markets sections | various | ❌ dead/blocked — reach via Google News `site:` queries if needed |
 | Moneycontrol native RSS | `moneycontrol.com/rss/*.xml` | ❌ frozen Apr 2024 — use Google News `site:` query |
 | Business Standard, Financial Express, PIB RSS | various | ❌ dead/blocked — use Google News `site:` queries |
 | CNBC-TV18, BusinessLine | feed URLs exist | ⚠️ verify item dates in parser during M1 |
