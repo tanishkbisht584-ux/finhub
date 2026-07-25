@@ -122,6 +122,7 @@ create table stories (
 create index stories_status_idx     on stories (status, published_at desc);
 create index stories_cluster_idx    on stories (cluster_id);
 create index stories_created_idx    on stories (created_at desc);
+create index stories_category_idx   on stories (category, status, published_at desc);
 
 create table story_companies (
   story_id   bigint references stories(id) on delete cascade,
@@ -1285,6 +1286,7 @@ git commit -m "feat: gemini structured card generation with retry and symbol val
 ```python
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from finswipe import ai, extract, fetchers
 from finswipe.db import Database
@@ -1294,6 +1296,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 log = logging.getLogger("finswipe.run")
 
 MAX_AI_STORIES_PER_RUN = 40  # free-tier quota guard per run
+FETCH_WORKERS = 8            # source agents fetched in parallel
 
 
 def main() -> None:
@@ -1304,12 +1307,14 @@ def main() -> None:
     stats = {"fetched": 0, "new": 0, "dupes": 0, "published": 0,
              "dropped": 0, "flagged": 0}
 
+    # Level 1: source agents — one worker per outlet, in parallel.
+    sources = db.active_sources()
     items = []
-    for source in db.active_sources():
-        got = fetchers.fetch_source(source)
-        db.mark_fetched(source["id"])
-        stats["fetched"] += len(got)
-        items.extend(got)
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+        for source, got in zip(sources, pool.map(fetchers.fetch_source, sources)):
+            db.mark_fetched(source["id"])
+            stats["fetched"] += len(got)
+            items.extend(got)
 
     ai_budget = MAX_AI_STORIES_PER_RUN
     for item in items:
