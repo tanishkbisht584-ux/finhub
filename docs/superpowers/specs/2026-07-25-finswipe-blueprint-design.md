@@ -142,6 +142,19 @@ Key decisions:
 | Al Jazeera all-news (geopolitics) | `aljazeera.com/xml/rss/all.xml` | ⚠️ fresh but high non-market noise — burns AI quota on irrelevant stories; keep `is_active=false`, prefer the Google News geopolitics query |
 | Google News `when:1h` queries | `news.google.com/rss/search?q=<query>+when:1h&hl=en-IN&gl=IN&ceid=IN:en` | ✅ fresh — breaking-news workhorse |
 | NDTV Profit, HT Business, The Hindu Business, Zee Business, CNN Money, Mint non-markets sections | various | ❌ dead/blocked — reach via Google News `site:` queries if needed |
+
+**Primary coverage by card category** (the AI assigns each story's actual category; this maps each source's main contribution):
+
+| Category | Primary sources |
+|---|---|
+| Markets | ET Markets, LiveMint Markets, Moneycontrol (GNews), breaking-IN query, Zerodha Z-Connect, brokerage-calls query |
+| Economy | ET Economy, RBI, TOI Business, Business Today |
+| Policy | SEBI, RBI, breaking-IN query |
+| IPO | ET IPO, GNews IPO query, Inc42 |
+| Global | Yahoo Finance, MarketWatch, CNBC World, WSJ Markets, Investing.com |
+| Commodities | OilPrice, Investing.com, ET Markets |
+| Corporate | ET Top Stories, Business Today, TOI Business, Moneycontrol (GNews); NSE/BSE filings from M3 |
+| Geopolitics | GNews geopolitics query, BBC Business, Guardian Business |
 | Moneycontrol native RSS | `moneycontrol.com/rss/*.xml` | ❌ frozen Apr 2024 — use Google News `site:` query |
 | Business Standard, Financial Express, PIB RSS | various | ❌ dead/blocked — use Google News `site:` queries |
 | CNBC-TV18, BusinessLine | feed URLs exist | ⚠️ verify item dates in parser during M1 |
