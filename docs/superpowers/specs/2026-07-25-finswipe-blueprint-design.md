@@ -71,7 +71,7 @@ Serverless-max: no owned servers. Two significant codebases (pipeline, app) + on
 │    fetch RSS (15–20 feeds) ──┐                         │
 │    fetch NSE/BSE filings ────┼→ normalize → dedupe     │
 │    fetch SEBI/RBI releases ──┘  + cluster   ↓          │
-│                     OpenAI: one structured call/story  │
+│                     Gemini (free tier): 1 call/story   │
 │                                     ↓                  │
 │               insert 'pending' → auto-approve rules    │
 │                                     ↓                  │
@@ -114,7 +114,13 @@ Key decisions:
 
 ## 5. AI Engine
 
-**Provider:** OpenAI. **Model:** GPT-4o-mini at launch (GPT-5-mini drop-in upgrade). Structured Outputs everywhere.
+**Provider:** Google Gemini **free tier** (AI Studio API). **Model:** Gemini 2.5 Flash-Lite (Flash for Q&A if limits allow). Structured JSON output everywhere.
+
+**Free-tier design rules:**
+- All AI calls go through one small internal interface (`ai.py` / the Edge Function's single client) — switching to paid Gemini or OpenAI (~₹300–500/mo) is a config change, not a rewrite.
+- Pipeline throttles to stay under free-tier requests-per-minute; a burst of breaking stories processes over minutes, not seconds — acceptable at MVP.
+- Known trade-off: Google may use free-tier inputs to improve models. Our inputs are public news articles and anonymous market questions — nothing sensitive.
+- Quota risk (Google shrinking free limits) is mitigated by the swappable interface + the ₹2,000/mo budget held in reserve.
 
 ### Story processing — one structured call per story
 
@@ -143,10 +149,10 @@ One call, not eight chained steps: cheaper, and impact/summary stay coherent. `c
 ### Q&A search — the only runtime AI
 
 1. User asks a question → Supabase Edge Function.
-2. **Tier 1:** full-text search over our processed stories (last 7 days) + companies table → top ~5 stories → GPT-4o-mini answers **only from those sources**, citing each claim. If sources don't cover it → Tier 2.
+2. **Tier 1:** full-text search over our processed stories (last 7 days) + companies table → top ~5 stories → Gemini answers **only from those sources**, citing each claim. If sources don't cover it → Tier 2.
 3. **Tier 2 (fallback):** live web search restricted to a **whitelisted domain list** (Reuters, ET, Mint, Moneycontrol, Business Standard, NSE/BSE/RBI/SEBI official). Answers labeled "from web sources" with links. The model never answers from its own knowledge — if the whitelist can't support an answer: "our sources don't clearly explain this yet."
 4. **Answer format:** what's happening → why → who's affected → what to watch, confidence level, tappable source cards, and 2–3 suggested follow-up questions (each follow-up is a fresh sourced answer — mini-chat feel without freewheeling chat).
-5. **Cost control:** no visible cap; silent abuse guard at 50 questions/user/day; popular questions cached 15 min (market panic ≠ thousand identical AI calls). ~₹0.05/query Tier 1; Tier 2 adds a search-API call (Tavily/Brave free tier at MVP volume).
+5. **Cost control:** no visible cap; silent abuse guard at 50 questions/user/day; popular questions cached 15 min (market panic ≠ thousand identical AI calls — and protects the free-tier daily quota). ₹0 within Gemini free tier; Tier 2 adds a search-API call (Tavily/Brave free tier at MVP volume).
 
 ---
 
@@ -216,7 +222,8 @@ Idempotent runs: hashes re-checked each run; no state in the runner; re-processi
 | Failure | Handling |
 |---|---|
 | One feed down | Log, skip, continue; visible in source health |
-| OpenAI error / invalid JSON | 1 retry with error appended → else `flagged`, never published |
+| AI call error / invalid JSON | 1 retry with error appended → else `flagged`, never published |
+| Free-tier quota exhausted mid-day | Stories queue as unprocessed; next runs catch up; admin sees backlog; config switch to paid model if chronic |
 | Yahoo Finance breaks | Stock page degrades gracefully (news + metrics still render); price module isolated for API swap |
 | Actions run crashes | Email to owner; next run self-heals |
 | Free-tier limits near | Automated pruning; documented Supabase Pro threshold |
@@ -230,7 +237,7 @@ Idempotent runs: hashes re-checked each run; no state in the runner; re-processi
 
 | # | Milestone | Est. | Runnable outcome |
 |---|---|---|---|
-| 1 | Pipeline core: RSS → dedupe/cluster → OpenAI card → Supabase | 1–2 wk | AI cards in DB |
+| 1 | Pipeline core: RSS → dedupe/cluster → Gemini card → Supabase | 1–2 wk | AI cards in DB |
 | 2 | Admin panel (Streamlit) | 3–5 d | You curate & read your own feed daily — first product test |
 | 3 | Primary sources: NSE/BSE, SEBI, RBI + alert engine (machine gate, FCM send) | 1–1.5 wk | Exclusive content + alerts firing |
 | 4 | Flutter app core: auth/onboarding → feed → save/share → stock page | 3–4 wk | Installable app |
@@ -244,12 +251,12 @@ Gate between 2→4: if *you* don't want to read your own feed every morning, fix
 
 | Item | Cost |
 |---|---|
-| OpenAI — story processing (~3,000 stories/mo, single card) | ~₹250–400/mo |
-| OpenAI — Q&A (est. early volume, cached) | ~₹200–400/mo |
+| Gemini free tier — story processing (~100 stories/day) | ₹0 |
+| Gemini free tier — Q&A (cached, abuse-guarded) | ₹0 |
 | Web search API for Q&A Tier 2 (Tavily/Brave free tier) | ₹0 |
 | Supabase, GitHub Actions, Streamlit, PostHog, FCM, Yahoo | ₹0 |
 | Google Play developer account | ₹2,600 one-time |
-| **Total running** | **~₹450–800/mo** (headroom inside ₹2,000) |
+| **Total running** | **₹0/mo** — the ₹2,000/mo budget is held in reserve for the paid-model switch if free limits ever pinch (~₹300–500/mo) or Supabase Pro at scale |
 
 ---
 
@@ -260,6 +267,7 @@ Gate between 2→4: if *you* don't want to read your own feed every morning, fix
 | AI fabrication in Q&A | Source-locked prompting (whitelist only), mandatory citations, refusal path, unanswerable-question evals |
 | False alert on bad story | Machine gate: multi-source or primary-source only; kill switch |
 | Yahoo Finance unofficial API breaks | Isolated price module; graceful degradation; paid-API swap path documented |
+| Gemini free-tier limits shrink or vanish | Swappable AI interface; budget reserve covers paid Gemini/OpenAI (~₹300–500/mo) same-day |
 | GitHub Actions cron lag vs "speed" promise | Accepted at MVP (minutes, not hours); Phase 2 always-on worker is the fix; primary-source path is already fastest |
 | Copyright complaints | Original wording only, attribution + link-back, drop source on request |
 | SEBI/regulatory | No advice language (prompt-enforced + evals), visible disclaimers |
