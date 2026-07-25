@@ -220,6 +220,8 @@ Key decisions:
 
 One call, not eight chained steps: cheaper, and impact/summary stay coherent. `confidence` is shown on the card when not high — trust principle made visible.
 
+**Severity levels (L1 highest):** the DB derives `severity_level` from `impact_score` automatically (generated column): L1 = score 9–10 (breaking/historic — alert + pierces quiet hours), L2 = 7–8 (major — machine-gated alert), L3 = 4–6 (notable — normal feed), L4 = 1–3 (minor — sinks). Severity is rated by the same free-tier AI call that categorizes the story — zero extra cost or latency — then adjusted by the other four signals (authority, corroboration, velocity, entity weight).
+
 **Quality safeguards:** schema validation before insert (1 retry with error appended → else `flagged`, never published) · company symbols validated against a seeded NSE/BSE table (no hallucinated tickers) · `is_india_relevant=false` dropped unless Geopolitics with score ≥ 6 · prompts versioned in `prompts/` with a ~20-article golden-set eval run on every change · admin edits stored as future few-shot data.
 
 ### Q&A search — the only runtime AI

@@ -107,6 +107,12 @@ create table stories (
   impact_strength  int  check (impact_strength between 1 and 3),
   impact_horizon   text check (impact_horizon in ('short_term','long_term','both')),
   impact_score     int  check (impact_score between 1 and 10),
+  severity_level   int generated always as (
+                     case when impact_score >= 9 then 1
+                          when impact_score >= 7 then 2
+                          when impact_score >= 4 then 3
+                          when impact_score is not null then 4
+                     end) stored,   -- L1 highest priority ... L4 lowest
   confidence       text check (confidence in ('high','medium','low')),
   source_name      text not null,
   source_url       text not null,
