@@ -116,6 +116,26 @@ Key decisions:
 - **Nuvama:** no public feed. Corporate WordPress API is open but empty; retail site (nuvamawealth.com) is a closed JS app; research reports are proprietary/client-only. **Route: ingest public news coverage** of their research via Google News RSS query `"Nuvama"` — outlets report their calls ("Nuvama says…"), which is also the legally clean path (never summarize proprietary broker PDFs directly). Same pattern works for other brokerages (Motilal Oswal, Jefferies India, etc.).
 - Pipeline implication: the `sources` table supports type `google_news_query` alongside `rss` — a source can be a query, not just a feed URL.
 
+**Verified-fresh free feeds (tested 2026-07-25):**
+
+| Source | URL | Status |
+|---|---|---|
+| ET Markets | `economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms` | ✅ fresh same-day |
+| ET Top Stories | `economictimes.indiatimes.com/rssfeedstopstories.cms` | ✅ fresh |
+| LiveMint Markets | `livemint.com/rss/markets` | ✅ live |
+| SEBI | `sebi.gov.in/sebirss.xml` | ✅ fresh same-day |
+| RBI press releases | `rbi.org.in/pressreleases_rss.xml` | ✅ fresh |
+| Yahoo Finance (global) | `finance.yahoo.com/news/rssindex` | ✅ fresh |
+| MarketWatch (global) | `feeds.content.dowjones.io/public/rss/mw_topstories` | ✅ fresh |
+| CNBC World | `search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114` | ✅ fresh |
+| BBC Business (global/geo) | `feeds.bbci.co.uk/news/business/rss.xml` | ✅ fresh |
+| Investing.com | `investing.com/rss/news.rss` | ✅ fresh |
+| Google News `when:1h` queries | `news.google.com/rss/search?q=<query>+when:1h&hl=en-IN&gl=IN&ceid=IN:en` | ✅ fresh — breaking-news workhorse |
+| Moneycontrol native RSS | `moneycontrol.com/rss/*.xml` | ❌ frozen Apr 2024 — use Google News `site:` query |
+| Business Standard, Financial Express, PIB RSS | various | ❌ dead/blocked — use Google News `site:` queries |
+| CNBC-TV18, BusinessLine | feed URLs exist | ⚠️ verify item dates in parser during M1 |
+| NSE/BSE announcements | JSON APIs (cookie/header handshake needed) | Milestone 3; fastest primary source |
+
 ---
 
 ## 5. AI Engine
