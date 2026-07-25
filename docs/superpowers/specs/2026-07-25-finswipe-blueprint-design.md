@@ -110,6 +110,12 @@ Key decisions:
 
 **Legal guardrails:** attribution everywhere; no body-text republishing; SEBI-safe framing (describe impact and what to watch — never buy/sell advice); persistent "Not investment advice" disclaimer; drop any source on request.
 
+### Verified source endpoints (checked 2026-07-25)
+
+- **Moneycontrol:** official RSS is dead — all feeds at `moneycontrol.com/rss/*.xml` return HTTP 200 but froze on 23 Apr 2024 (some 2016). **Working route: Google News RSS** filtered to the site, verified fresh: `https://news.google.com/rss/search?q=site:moneycontrol.com&hl=en-IN&gl=IN&ceid=IN:en` (add keywords for topics, e.g. `+ipo`, `+nifty`). Applies to any outlet whose native RSS dies — Google News RSS is the universal fallback.
+- **Nuvama:** no public feed. Corporate WordPress API is open but empty; retail site (nuvamawealth.com) is a closed JS app; research reports are proprietary/client-only. **Route: ingest public news coverage** of their research via Google News RSS query `"Nuvama"` — outlets report their calls ("Nuvama says…"), which is also the legally clean path (never summarize proprietary broker PDFs directly). Same pattern works for other brokerages (Motilal Oswal, Jefferies India, etc.).
+- Pipeline implication: the `sources` table supports type `google_news_query` alongside `rss` — a source can be a query, not just a feed URL.
+
 ---
 
 ## 5. AI Engine
