@@ -80,6 +80,7 @@ create table sources (
   name          text not null,
   type          text not null check (type in ('rss','google_news_query','nse','bse','sebi','rbi')),
   feed_url      text not null,          -- for google_news_query this is the query string
+  authority     int not null default 5 check (authority between 1 and 10),
   is_active     boolean not null default true,
   last_fetched_at timestamptz
 );
@@ -91,6 +92,7 @@ create table companies (
   bse_code    text,
   sector      text,
   logo_url    text,
+  is_nifty50  boolean not null default false,
   aliases     text[] default '{}'
 );
 
@@ -136,31 +138,31 @@ create table story_companies (
 Create `pipeline/seed/sources_seed.sql`:
 
 ```sql
-insert into sources (name, type, feed_url) values
-('ET Markets',        'rss', 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms'),
-('ET Top Stories',    'rss', 'https://economictimes.indiatimes.com/rssfeedstopstories.cms'),
-('LiveMint Markets',  'rss', 'https://www.livemint.com/rss/markets'),
-('SEBI',              'rss', 'https://www.sebi.gov.in/sebirss.xml'),
-('RBI Press',         'rss', 'https://www.rbi.org.in/pressreleases_rss.xml'),
-('Yahoo Finance',     'rss', 'https://finance.yahoo.com/news/rssindex'),
-('MarketWatch',       'rss', 'https://feeds.content.dowjones.io/public/rss/mw_topstories'),
-('CNBC World',        'rss', 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114'),
-('BBC Business',      'rss', 'https://feeds.bbci.co.uk/news/business/rss.xml'),
-('Investing.com',     'rss', 'https://www.investing.com/rss/news.rss'),
-('ET Economy',        'rss', 'https://economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms'),
-('ET IPO',            'rss', 'https://economictimes.indiatimes.com/markets/ipos/fpos/rssfeeds/14655708.cms'),
-('TOI Business',      'rss', 'https://timesofindia.indiatimes.com/rssfeeds/1898055.cms'),
-('Business Today',    'rss', 'https://www.businesstoday.in/rssfeeds/?id=home'),
-('Inc42',             'rss', 'https://inc42.com/feed/'),
-('Zerodha Z-Connect', 'rss', 'https://zerodha.com/z-connect/feed'),
-('WSJ Markets',       'rss', 'https://feeds.content.dowjones.io/public/rss/RSSMarketsMain'),
-('Guardian Business', 'rss', 'https://www.theguardian.com/uk/business/rss'),
-('OilPrice',          'rss', 'https://oilprice.com/rss/main'),
-('GNews Moneycontrol','google_news_query', 'site:moneycontrol.com'),
-('GNews Breaking-IN', 'google_news_query', 'nifty OR sensex OR RBI OR SEBI when:1h'),
-('GNews IPO',         'google_news_query', 'ipo india when:6h'),
-('GNews Brokerages',  'google_news_query', '"Nuvama" OR "Motilal Oswal" OR "Jefferies India" when:6h'),
-('GNews Geopolitics', 'google_news_query', 'geopolitics oil sanctions tariff india market when:6h');
+insert into sources (name, type, feed_url, authority) values
+('ET Markets',        'rss', 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms', 8),
+('ET Top Stories',    'rss', 'https://economictimes.indiatimes.com/rssfeedstopstories.cms', 8),
+('LiveMint Markets',  'rss', 'https://www.livemint.com/rss/markets', 8),
+('SEBI',              'rss', 'https://www.sebi.gov.in/sebirss.xml', 10),
+('RBI Press',         'rss', 'https://www.rbi.org.in/pressreleases_rss.xml', 10),
+('Yahoo Finance',     'rss', 'https://finance.yahoo.com/news/rssindex', 6),
+('MarketWatch',       'rss', 'https://feeds.content.dowjones.io/public/rss/mw_topstories', 7),
+('CNBC World',        'rss', 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114', 7),
+('BBC Business',      'rss', 'https://feeds.bbci.co.uk/news/business/rss.xml', 8),
+('Investing.com',     'rss', 'https://www.investing.com/rss/news.rss', 6),
+('ET Economy',        'rss', 'https://economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms', 8),
+('ET IPO',            'rss', 'https://economictimes.indiatimes.com/markets/ipos/fpos/rssfeeds/14655708.cms', 8),
+('TOI Business',      'rss', 'https://timesofindia.indiatimes.com/rssfeeds/1898055.cms', 7),
+('Business Today',    'rss', 'https://www.businesstoday.in/rssfeeds/?id=home', 7),
+('Inc42',             'rss', 'https://inc42.com/feed/', 6),
+('Zerodha Z-Connect', 'rss', 'https://zerodha.com/z-connect/feed', 7),
+('WSJ Markets',       'rss', 'https://feeds.content.dowjones.io/public/rss/RSSMarketsMain', 8),
+('Guardian Business', 'rss', 'https://www.theguardian.com/uk/business/rss', 7),
+('OilPrice',          'rss', 'https://oilprice.com/rss/main', 6),
+('GNews Moneycontrol','google_news_query', 'site:moneycontrol.com', 8),
+('GNews Breaking-IN', 'google_news_query', 'nifty OR sensex OR RBI OR SEBI when:1h', 5),
+('GNews IPO',         'google_news_query', 'ipo india when:6h', 5),
+('GNews Brokerages',  'google_news_query', '"Nuvama" OR "Motilal Oswal" OR "Jefferies India" when:6h', 5),
+('GNews Geopolitics', 'google_news_query', 'geopolitics oil sanctions tariff india market when:6h', 5);
 ```
 
 - [ ] **Step 4: Apply SQL in Supabase (manual)**
