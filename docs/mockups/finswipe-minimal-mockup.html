@@ -16,6 +16,7 @@
   :root[data-theme="light"]{ --paper:#F0F1ED; --paper-raised:#FFFFFF; --ink:#14181A; --ink-soft:#5B655F;
            --line:#D7DBD3; --accent:#1F5C4E; --accent-soft:#E6EEEA;
            --positive:#2F6B3A; --negative:#8A3324; }
+  :root{ --pos-a:#3FAE7C; --pos-b:#1f6e4e; --neg-a:#e0684a; --neg-b:#a83a24; }
 
   *{box-sizing:border-box}
   body{background:var(--paper); color:var(--ink); margin:0; padding:36px 22px 70px;
@@ -40,9 +41,14 @@
   .caption{text-align:center; color:var(--ink-soft); font-size:12px; margin-top:9px}
 
   /* ledger card (the story) */
-  .tick{border-left:3px solid var(--negative)}
+  .tick{position:relative}
+  .tick::before{content:""; position:absolute; left:0; top:2px; bottom:4px; width:3px;
+                background:linear-gradient(180deg, var(--neg-a), var(--neg-b))}
   .card{margin:2px 12px 10px; padding:12px 2px 4px; display:flex; flex-direction:column; gap:9px}
   .meta-row{font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); padding-left:9px}
+  .grad-txt{font-weight:800; -webkit-background-clip:text; background-clip:text; color:transparent}
+  .grad-txt.pos{background-image:linear-gradient(90deg, var(--pos-a), var(--pos-b))}
+  .grad-txt.neg{background-image:linear-gradient(90deg, var(--neg-a), var(--neg-b))}
   .hook{font-family:"Sitka Text","Iowan Old Style",Georgia,serif; font-size:19px; line-height:1.3;
         font-weight:600; padding-left:9px; margin:0; text-wrap:balance}
   .photo{height:96px; margin-left:9px; margin-right:2px; border:1px solid var(--line); position:relative; overflow:hidden;
@@ -53,7 +59,9 @@
   .summary{color:var(--ink-soft); font-size:12px; padding-left:9px}
   .summary b{color:var(--ink); font-weight:600}
   .chipline{padding-left:9px; font-size:11.5px; color:var(--ink-soft)}
-  .chipline .up{color:var(--positive)} .chipline .dn{color:var(--negative)}
+  .chipline .up, .chipline .dn{-webkit-background-clip:text; background-clip:text; color:transparent; font-weight:700}
+  .chipline .up{background-image:linear-gradient(90deg, var(--pos-a), var(--pos-b))}
+  .chipline .dn{background-image:linear-gradient(90deg, var(--neg-a), var(--neg-b))}
   .watch{margin:2px 9px 0; padding-top:9px; border-top:1px solid var(--line)}
   .watch b{display:block; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:4px; font-weight:600}
   .watch span{font-size:11.5px}
@@ -97,10 +105,11 @@
   .psec b.lab{display:block; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:8px; font-weight:600}
   .togrow{display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-top:1px solid var(--line); font-size:12px}
   .togrow:first-of-type{border-top:none}
-  .tog{width:28px; height:15px; border:1px solid var(--line); position:relative}
-  .tog.on{background:var(--accent-soft); border-color:var(--accent)}
-  .tog::after{content:""; position:absolute; top:2px; left:2px; width:9px; height:9px; background:var(--ink-soft)}
-  .tog.on::after{left:auto; right:2px; background:var(--accent)}
+  .tog{width:28px; height:15px; border:1px solid var(--line); position:relative;
+       background:linear-gradient(90deg, var(--neg-a), var(--neg-b)); opacity:.3}
+  .tog.on{background:linear-gradient(90deg, var(--pos-a), var(--pos-b)); opacity:1; border-color:transparent}
+  .tog::after{content:""; position:absolute; top:2px; left:2px; width:9px; height:9px; background:var(--paper-raised)}
+  .tog.on::after{left:auto; right:2px}
   .signout{margin:22px 14px 4px; text-align:center; border:1px solid var(--negative); color:var(--negative); padding:9px 0; font-size:12px}
 
   /* admin */
@@ -110,19 +119,23 @@
   .abar .t{font-family:"Sitka Text","Iowan Old Style",Georgia,serif; font-weight:600; font-size:16px}
   .astatus{display:flex; gap:16px; flex-wrap:wrap; font-size:11.5px; color:var(--ink-soft)}
   .astatus .dot{display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:6px}
-  .ok .dot{background:var(--positive)} .off .dot{background:var(--ink-soft)}
+  .ok .dot{background:linear-gradient(135deg, var(--pos-a), var(--pos-b))}
+  .off .dot{background:linear-gradient(135deg, var(--neg-a), var(--neg-b))}
   .agrid{display:flex; flex-wrap:wrap}
   .aq{flex:2 1 500px; padding:6px 20px 18px}
   .aq h3, .aside h3{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); font-weight:600; margin:16px 0 8px}
   .qrow{display:flex; gap:14px; align-items:center; padding:12px 0; border-top:1px solid var(--line); flex-wrap:wrap}
   .qrow.flagged{background:color-mix(in srgb, var(--negative) 7%, transparent); margin:0 -20px; padding-left:20px; padding-right:20px}
   .qrow .imp{font-size:10.5px; color:var(--ink-soft); white-space:nowrap; min-width:64px}
-  .qrow .imp.hi{color:var(--negative); font-weight:600}
+  .qrow .imp.hi{font-weight:800; -webkit-background-clip:text; background-clip:text; color:transparent;
+                background-image:linear-gradient(90deg, var(--neg-a), var(--neg-b))}
   .qrow .htext{flex:1; min-width:220px; font-size:12.5px}
   .qrow .htext small{display:block; color:var(--ink-soft); font-size:10.5px; margin-top:2px}
   .qbtn{font-size:10.5px; padding:5px 10px; border:1px solid var(--line); color:var(--ink-soft); white-space:nowrap}
-  .qbtn.ap{border-color:var(--accent); color:var(--accent)}
-  .qbtn.rj{border-color:var(--negative); color:var(--negative)}
+  .qbtn.ap{border-color:var(--pos-b); font-weight:700; -webkit-background-clip:text; background-clip:text; color:transparent;
+           background-image:linear-gradient(90deg, var(--pos-a), var(--pos-b))}
+  .qbtn.rj{border-color:var(--neg-b); font-weight:700; -webkit-background-clip:text; background-clip:text; color:transparent;
+           background-image:linear-gradient(90deg, var(--neg-a), var(--neg-b))}
   .aside{flex:1 1 240px; padding:6px 20px 18px; border-left:1px solid var(--line); min-width:240px}
   .stat{display:flex; justify-content:space-between; font-size:12px; padding:5px 0; border-top:1px solid var(--line)}
   .stat:first-of-type{border-top:none}
@@ -134,7 +147,7 @@
 <div class="wrap">
   <p class="eyebrow">Alternate direction</p>
   <h1>FinSwipe, minimalist — a financial ledger, not a lightbox</h1>
-  <p class="sub">Same product, opposite instinct. No blur, no aurora, no colour-by-category. Sentiment reads as a single hairline tick; numbers sit in a monospace column like a statement; the news itself — a serif hook, set quietly — is the only thing asked to carry weight.</p>
+  <p class="sub">Same product, opposite instinct. No blur, no aurora, no colour-by-category. The one exception: a red/green gradient, spent only on market direction and on/off state — a gradient tick, a gradient number, never a filled shape. Numbers sit in a monospace column like a statement; the news itself — a serif hook, set quietly — is the only thing asked to carry weight.</p>
 
   <div class="row">
     <!-- CARD / FEED -->
@@ -142,7 +155,7 @@
       <div class="phone"><div class="screen">
         <div class="statusbar"><span>09:41</span><span>FinSwipe</span><span>5G</span></div>
         <div class="card tick">
-          <div class="meta-row mono">Impact 9/10 · Short + Long</div>
+          <div class="meta-row mono"><span class="grad-txt neg">Impact 9/10</span> · Short + Long</div>
           <p class="hook">Oil just got scary for India.</p>
           <div class="photo"></div>
           <p class="headline">Iran strikes Israeli targets; crude surges 8%, rupee slides</p>
@@ -189,10 +202,10 @@
         <div class="apphead"><span class="t">Saved</span><span class="n mono">12 stories</span></div>
         <div class="search">Search your saved news…</div>
         <div>
-          <div class="srow"><div class="h">Oil just got scary for India</div><div class="m mono"><span>Impact 9/10</span><span>BBC · ET — 21:32</span></div></div>
+          <div class="srow"><div class="h">Oil just got scary for India</div><div class="m mono"><span class="grad-txt neg">Impact 9/10</span><span>BBC · ET — 21:32</span></div></div>
           <div class="srow"><div class="h">RBI stands still, markets exhale</div><div class="m mono"><span>Impact 7/10</span><span>RBI · Mint — 11:02</span></div></div>
-          <div class="srow"><div class="h">Ather's IPO is running hot</div><div class="m mono"><span>Impact 5/10</span><span>ET IPO · Inc42</span></div></div>
-          <div class="srow"><div class="h">Infosys just raised its own bar</div><div class="m mono"><span>Impact 6/10</span><span>Moneycontrol</span></div></div>
+          <div class="srow"><div class="h">Ather's IPO is running hot</div><div class="m mono"><span class="grad-txt pos">Impact 5/10</span><span>ET IPO · Inc42</span></div></div>
+          <div class="srow"><div class="h">Infosys just raised its own bar</div><div class="m mono"><span class="grad-txt pos">Impact 6/10</span><span>Moneycontrol</span></div></div>
           <div class="srow"><div class="h">Inflation cooled more than expected</div><div class="m mono"><span>Impact 6/10</span><span>ET Economy</span></div></div>
         </div>
         <div class="fine">Swipe a row left to remove</div>
@@ -219,7 +232,7 @@
           <b class="lab">Alerts</b>
           <div class="togrow"><span>Market-moving alerts</span><span class="tog on"></span></div>
           <div class="togrow"><span>My stocks &amp; sectors</span><span class="tog on"></span></div>
-          <div class="togrow"><span>Quiet hours 22:00–07:00</span><span class="tog on"></span></div>
+          <div class="togrow"><span>Quiet hours 22:00–07:00</span><span class="tog"></span></div>
         </div>
         <div class="psec">
           <b class="lab">App</b>

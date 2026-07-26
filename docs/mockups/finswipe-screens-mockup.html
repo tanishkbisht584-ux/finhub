@@ -8,6 +8,7 @@
   }
   :root[data-theme="dark"]{ --bg:#0f141b; --ink:#e6ecf2; --muted:#93a1af; --line:#27313c; }
   :root[data-theme="light"]{ --bg:#eef0f4; --ink:#1d2530; --muted:#5d6b7a; --line:#dde3e2; }
+  :root{ --pos-a:#8ef0c2; --pos-b:#1f9e6e; --neg-a:#ffb3a4; --neg-b:#c8402c; }
 
   *{box-sizing:border-box}
   body{background:var(--bg); color:var(--ink); font:16px/1.55 "Segoe UI",system-ui,sans-serif; margin:0; padding:32px 20px 64px}
@@ -65,6 +66,8 @@
   .shook{font-weight:700; font-size:13.5px; line-height:1.3}
   .smeta{display:flex; gap:8px; align-items:center; font-size:10.5px; color:#9fb0c2}
   .impill{font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.16); color:#ffd98a}
+  .impill.neg{background:linear-gradient(135deg, rgba(255,150,130,.55), rgba(200,60,35,.6)); border-color:rgba(255,140,120,.5); color:#fff}
+  .impill.pos{background:linear-gradient(135deg, rgba(160,245,200,.55), rgba(35,160,105,.6)); border-color:rgba(120,230,170,.5); color:#06231a}
   .swipetip{text-align:center; color:#67788c; font-size:10.5px; margin-top:10px}
 
   /* profile */
@@ -76,8 +79,9 @@
   .pcard{margin:0 10px 10px; padding:12px 14px}
   .pcard b{font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:#9cc3ef; display:block; margin-bottom:8px}
   .togrow{display:flex; justify-content:space-between; align-items:center; font-size:12.5px; padding:5px 0; color:#dbe5ef}
-  .tog{width:34px; height:19px; border-radius:999px; background:rgba(255,255,255,.15); position:relative}
-  .tog.on{background:#2fc7a0}
+  .tog{width:34px; height:19px; border-radius:999px; position:relative;
+       background:linear-gradient(135deg, rgba(255,150,130,.4), rgba(200,60,35,.4))}
+  .tog.on{background:linear-gradient(135deg, #8ef0c2, #1f9e6e)}
   .tog::after{content:""; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:#fff}
   .tog.on::after{left:auto; right:2px}
   .signout{margin:auto 10px 6px; text-align:center; border-radius:999px; padding:9px 0; font-size:13px; color:#ffb0aa; background:rgba(180,50,45,.18); border:1px solid rgba(255,120,110,.35)}
@@ -89,7 +93,8 @@
   .astatus{display:flex; gap:8px; flex-wrap:wrap}
   .apill{font-size:11px; padding:4px 11px; border-radius:999px; border:1px solid #2c3d58; color:#c9d6e6}
   .apill .dot{display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px}
-  .ok .dot{background:#43e0a8} .warn .dot{background:#f5c169} .off .dot{background:#697b93}
+  .ok .dot{background:linear-gradient(135deg, #8ef0c2, #1f9e6e)} .warn .dot{background:#f5c169}
+  .off .dot{background:linear-gradient(135deg, #ffb3a4, #c8402c)}
   .agrid{display:flex; gap:0; flex-wrap:wrap}
   .aq{flex:2 1 480px; padding:14px 16px; min-width:320px}
   .aq h3, .aside h3{font-size:12px; letter-spacing:.07em; text-transform:uppercase; color:#8fb4e0; margin:0 0 10px}
@@ -99,8 +104,8 @@
   .qrow .htext{flex:1; min-width:180px; font-size:13px}
   .qrow .htext small{display:block; color:#8b9cb1; font-size:10.5px}
   .qbtn{font-size:11px; padding:5px 11px; border-radius:8px; border:1px solid #2c3d58; color:#c9d6e6; white-space:nowrap}
-  .qbtn.ap{background:#123528; color:#6fe8b5; border-color:#1e5a43}
-  .qbtn.rj{background:#3a1416; color:#ff9d96; border-color:#5c2224}
+  .qbtn.ap{background:linear-gradient(135deg, rgba(160,245,200,.28), rgba(35,160,105,.28)); color:#8ef0c2; border-color:rgba(90,230,180,.45)}
+  .qbtn.rj{background:linear-gradient(135deg, rgba(255,150,130,.28), rgba(200,60,35,.28)); color:#ff9d96; border-color:rgba(255,120,110,.45)}
   .flagged{outline:1px solid #6e2325; background:#160d12}
   .aside{flex:1 1 240px; padding:14px 16px; border-left:1px solid #223047; min-width:240px}
   .stat{display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0; color:#c9d6e6}
@@ -154,7 +159,7 @@
           <div class="slist">
             <div class="scard glass geo">
               <div class="shook">Oil just got scary for India</div>
-              <div class="smeta"><span class="impill">Impact 9/10</span><span>BBC · ET — today 21:32</span></div>
+              <div class="smeta"><span class="impill neg">Impact 9/10</span><span>BBC · ET — today 21:32</span></div>
             </div>
             <div class="scard glass eco">
               <div class="shook">RBI stands still, markets exhale</div>
@@ -162,11 +167,11 @@
             </div>
             <div class="scard glass ipo">
               <div class="shook">Ather's IPO is running hot</div>
-              <div class="smeta"><span class="impill">Impact 5/10</span><span>ET IPO · Inc42 — yesterday</span></div>
+              <div class="smeta"><span class="impill pos">Impact 5/10</span><span>ET IPO · Inc42 — yesterday</span></div>
             </div>
             <div class="scard glass corp">
               <div class="shook">Infosys just raised its own bar</div>
-              <div class="smeta"><span class="impill">Impact 6/10</span><span>Moneycontrol — Tue</span></div>
+              <div class="smeta"><span class="impill pos">Impact 6/10</span><span>Moneycontrol — Tue</span></div>
             </div>
             <div class="scard glass eco">
               <div class="shook">Inflation cooled more than expected</div>
@@ -201,7 +206,7 @@
             <b>Alerts</b>
             <div class="togrow"><span>Market-moving alerts</span><span class="tog on"></span></div>
             <div class="togrow"><span>My stocks &amp; sectors</span><span class="tog on"></span></div>
-            <div class="togrow"><span>Quiet hours 22:00–07:00</span><span class="tog on"></span></div>
+            <div class="togrow"><span>Quiet hours 22:00–07:00</span><span class="tog"></span></div>
           </div>
           <div class="pcard glass">
             <b>App</b>
