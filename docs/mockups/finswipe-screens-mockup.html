@@ -1,0 +1,271 @@
+<title>FinSwipe — login, saved, profile & admin screens</title>
+<style>
+  :root{
+    --bg:#eef0f4; --ink:#1d2530; --muted:#5d6b7a; --line:#dde3e2;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f141b; --ink:#e6ecf2; --muted:#93a1af; --line:#27313c; }
+  }
+  :root[data-theme="dark"]{ --bg:#0f141b; --ink:#e6ecf2; --muted:#93a1af; --line:#27313c; }
+  :root[data-theme="light"]{ --bg:#eef0f4; --ink:#1d2530; --muted:#5d6b7a; --line:#dde3e2; }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg); color:var(--ink); font:16px/1.55 "Segoe UI",system-ui,sans-serif; margin:0; padding:32px 20px 64px}
+  .wrap{max-width:1120px; margin:0 auto}
+  h1{font-family:Georgia,serif; font-size:clamp(24px,4vw,34px); margin:0 0 6px; text-wrap:balance}
+  .sub{color:var(--muted); max-width:64ch; margin:0 0 30px}
+  h2.section{font-family:Georgia,serif; font-size:20px; margin:38px 0 14px}
+  .row{display:flex; gap:26px; flex-wrap:wrap; justify-content:center}
+
+  .phone{width:300px; flex:0 0 auto; background:#04060b; border-radius:32px; padding:10px; box-shadow:0 22px 55px rgba(0,0,0,.4)}
+  .screen{position:relative; border-radius:23px; overflow:hidden; color:#eef3f9; font-size:13.5px; line-height:1.5; background:#0a0f1c; isolation:isolate; min-height:560px; display:flex; flex-direction:column}
+  .aurora{position:absolute; inset:0; z-index:0}
+  .aurora i{position:absolute; border-radius:50%; filter:blur(44px); opacity:.7; display:block}
+  .a-login i:nth-child(1){width:240px;height:240px; left:-60px; top:-30px; background:#0f4d6e}
+  .a-login i:nth-child(2){width:220px;height:220px; right:-50px; top:200px; background:#0e5a4a}
+  .a-login i:nth-child(3){width:200px;height:200px; left:-20px; bottom:-50px; background:#3d2a5e}
+  .a-saved i:nth-child(1){width:240px;height:240px; left:-60px; top:-40px; background:#134a63}
+  .a-saved i:nth-child(2){width:220px;height:220px; right:-60px; bottom:-40px; background:#153f33}
+  .a-prof i:nth-child(1){width:240px;height:240px; right:-60px; top:-40px; background:#4a2145}
+  .a-prof i:nth-child(2){width:220px;height:220px; left:-60px; bottom:-40px; background:#123c5e}
+  .content{position:relative; z-index:1; display:flex; flex-direction:column; flex:1; padding:0 12px 12px}
+  .statusbar{display:flex; justify-content:space-between; padding:9px 8px 6px; font-size:11px; color:#c4d2e2}
+
+  .glass{background:rgba(255,255,255,.09); backdrop-filter:blur(16px) saturate(1.5); -webkit-backdrop-filter:blur(16px) saturate(1.5);
+         border:1px solid rgba(255,255,255,.16); border-top-color:rgba(255,255,255,.28);
+         box-shadow:0 8px 28px rgba(0,0,0,.28); border-radius:18px}
+
+  .screenlabel{text-align:center; color:var(--muted); font-size:13px; margin-top:10px}
+
+  /* login */
+  .login-hero{margin:34px 10px 14px; padding:26px 18px 22px; text-align:center; display:flex; flex-direction:column; gap:8px; align-items:center}
+  .logomark{width:54px; height:54px; border-radius:16px; display:flex; align-items:center; justify-content:center; font-size:26px;
+            background:linear-gradient(135deg,#1d6f5c,#134a63); border:1px solid rgba(255,255,255,.25); box-shadow:0 6px 20px rgba(0,0,0,.35)}
+  .appname{font-size:24px; font-weight:800; letter-spacing:-.01em}
+  .tagline{color:#c2cfdc; font-size:13px}
+  .gbtn{margin:14px 10px 0; background:#fff; color:#1c2330; border-radius:999px; padding:11px 0; font-weight:600; font-size:14px; text-align:center; width:100%}
+  .gbtn span{font-weight:800; background:linear-gradient(90deg,#4285F4,#EA4335,#FBBC05,#34A853); -webkit-background-clip:text; background-clip:text; color:transparent; margin-right:8px}
+  .interests{margin:14px 10px 0; padding:14px 14px 16px}
+  .interests b{font-size:12px; letter-spacing:.07em; text-transform:uppercase; color:#9cc3ef; display:block; margin-bottom:9px}
+  .ichips{display:flex; flex-wrap:wrap; gap:7px}
+  .ichip{border-radius:999px; padding:5px 12px; font-size:12px; color:#dbe5ef; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.15)}
+  .ichip.on{background:rgba(46,180,140,.25); border-color:rgba(90,230,180,.45); color:#9df0cd}
+  .cta{margin:14px 10px 4px; text-align:center; border-radius:999px; padding:11px 0; font-weight:600; font-size:14px; color:#06231a;
+       background:linear-gradient(90deg,#43e0a8,#2fc7a0)}
+  .fineprint{text-align:center; color:#7c8ca0; font-size:10px; margin-top:auto; padding:10px 0 4px}
+
+  /* saved + lists */
+  .apphead{display:flex; justify-content:space-between; align-items:center; margin:6px 10px 10px}
+  .apphead .t{font-size:19px; font-weight:800}
+  .apphead .n{font-size:11px; color:#9fb0c2}
+  .search{margin:0 10px 12px; padding:9px 14px; font-size:12.5px; color:#9fb0c2; border-radius:999px}
+  .slist{display:flex; flex-direction:column; gap:9px; margin:0 10px}
+  .scard{padding:11px 13px; display:flex; flex-direction:column; gap:5px; border-left:3px solid}
+  .scard.geo{border-left-color:#ff8f86} .scard.eco{border-left-color:#7fc6e8} .scard.ipo{border-left-color:#6fe8b5} .scard.corp{border-left-color:#d9a4e8}
+  .shook{font-weight:700; font-size:13.5px; line-height:1.3}
+  .smeta{display:flex; gap:8px; align-items:center; font-size:10.5px; color:#9fb0c2}
+  .impill{font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.16); color:#ffd98a}
+  .swipetip{text-align:center; color:#67788c; font-size:10.5px; margin-top:10px}
+
+  /* profile */
+  .avatar-row{display:flex; align-items:center; gap:12px; margin:10px 12px 12px}
+  .avatar{width:52px; height:52px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:18px;
+          background:linear-gradient(135deg,#6e3a63,#1d4a73); border:1px solid rgba(255,255,255,.3)}
+  .pname{font-weight:700; font-size:15.5px}
+  .pmail{font-size:11px; color:#9fb0c2}
+  .pcard{margin:0 10px 10px; padding:12px 14px}
+  .pcard b{font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:#9cc3ef; display:block; margin-bottom:8px}
+  .togrow{display:flex; justify-content:space-between; align-items:center; font-size:12.5px; padding:5px 0; color:#dbe5ef}
+  .tog{width:34px; height:19px; border-radius:999px; background:rgba(255,255,255,.15); position:relative}
+  .tog.on{background:#2fc7a0}
+  .tog::after{content:""; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:#fff}
+  .tog.on::after{left:auto; right:2px}
+  .signout{margin:auto 10px 6px; text-align:center; border-radius:999px; padding:9px 0; font-size:13px; color:#ffb0aa; background:rgba(180,50,45,.18); border:1px solid rgba(255,120,110,.35)}
+
+  /* admin */
+  .admin{margin-top:8px; border-radius:20px; overflow:hidden; background:#0b1120; color:#e8eef6; border:1px solid #223047; box-shadow:0 18px 50px rgba(0,0,0,.35)}
+  .abar{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:13px 18px; background:#0e1626; border-bottom:1px solid #223047; flex-wrap:wrap}
+  .abar .t{font-weight:700; font-size:15px}
+  .astatus{display:flex; gap:8px; flex-wrap:wrap}
+  .apill{font-size:11px; padding:4px 11px; border-radius:999px; border:1px solid #2c3d58; color:#c9d6e6}
+  .apill .dot{display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px}
+  .ok .dot{background:#43e0a8} .warn .dot{background:#f5c169} .off .dot{background:#697b93}
+  .agrid{display:flex; gap:0; flex-wrap:wrap}
+  .aq{flex:2 1 480px; padding:14px 16px; min-width:320px}
+  .aq h3, .aside h3{font-size:12px; letter-spacing:.07em; text-transform:uppercase; color:#8fb4e0; margin:0 0 10px}
+  .qrow{display:flex; gap:10px; align-items:center; padding:10px 12px; border:1px solid #223047; border-radius:12px; margin-bottom:8px; background:#0e1626; flex-wrap:wrap}
+  .qrow .imp{font-size:10px; padding:3px 8px; border-radius:999px; white-space:nowrap; background:#3a2c17; color:#f5c169; border:1px solid #57431f}
+  .qrow .imp.hi{background:#4a1618; color:#ff8f8a; border-color:#6e2325}
+  .qrow .htext{flex:1; min-width:180px; font-size:13px}
+  .qrow .htext small{display:block; color:#8b9cb1; font-size:10.5px}
+  .qbtn{font-size:11px; padding:5px 11px; border-radius:8px; border:1px solid #2c3d58; color:#c9d6e6; white-space:nowrap}
+  .qbtn.ap{background:#123528; color:#6fe8b5; border-color:#1e5a43}
+  .qbtn.rj{background:#3a1416; color:#ff9d96; border-color:#5c2224}
+  .flagged{outline:1px solid #6e2325; background:#160d12}
+  .aside{flex:1 1 240px; padding:14px 16px; border-left:1px solid #223047; min-width:240px}
+  .stat{display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0; color:#c9d6e6}
+  .stat b{font-variant-numeric:tabular-nums}
+  .shealth{margin-top:14px}
+  .shrow{display:flex; justify-content:space-between; font-size:11.5px; color:#a9bacd; padding:3px 0}
+  .shrow .ok2{color:#6fe8b5} .shrow .bad{color:#f5c169}
+</style>
+
+<div class="wrap">
+  <h1>FinSwipe screens — login, saved, profile &amp; admin</h1>
+  <p class="sub">Same liquid-glass system as the story card: frosted panels over category-neutral auroras. The admin panel is the Streamlit web dashboard (your control room), so it gets a desktop layout.</p>
+
+  <div class="row">
+    <!-- LOGIN -->
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="aurora a-login"><i></i><i></i><i></i></div>
+        <div class="content">
+          <div class="statusbar"><span>09:12</span><span>▲ 5G</span></div>
+          <div class="login-hero glass">
+            <div class="logomark">⚡</div>
+            <div class="appname">FinSwipe</div>
+            <div class="tagline">Understand the market<br>in 15 seconds a day</div>
+            <div class="gbtn"><span>G</span>Continue with Google</div>
+          </div>
+          <div class="interests glass">
+            <b>Pick 3+ things you follow</b>
+            <div class="ichips">
+              <span class="ichip on">Nifty 50 ✓</span><span class="ichip on">Banking ✓</span>
+              <span class="ichip on">IT ✓</span><span class="ichip">Oil &amp; Gas</span>
+              <span class="ichip">IPOs</span><span class="ichip on">Tata Motors ✓</span>
+              <span class="ichip">Pharma</span><span class="ichip">Gold</span><span class="ichip">Geopolitics</span>
+            </div>
+          </div>
+          <div class="cta">Start swiping →</div>
+          <div class="fineprint">Not investment advice · Terms · Privacy</div>
+        </div>
+      </div></div>
+      <p class="screenlabel">Login &amp; onboarding — under 60 seconds</p>
+    </div>
+
+    <!-- SAVED -->
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="aurora a-saved"><i></i><i></i></div>
+        <div class="content">
+          <div class="statusbar"><span>21:50</span><span>▲ 5G</span></div>
+          <div class="apphead"><span class="t">Saved</span><span class="n">12 stories</span></div>
+          <div class="search glass">🔍 Search your saved news…</div>
+          <div class="slist">
+            <div class="scard glass geo">
+              <div class="shook">Oil just got scary for India</div>
+              <div class="smeta"><span class="impill">Impact 9/10</span><span>BBC · ET — today 21:32</span></div>
+            </div>
+            <div class="scard glass eco">
+              <div class="shook">RBI stands still, markets exhale</div>
+              <div class="smeta"><span class="impill">Impact 7/10</span><span>RBI · Mint — today 11:02</span></div>
+            </div>
+            <div class="scard glass ipo">
+              <div class="shook">Ather's IPO is running hot</div>
+              <div class="smeta"><span class="impill">Impact 5/10</span><span>ET IPO · Inc42 — yesterday</span></div>
+            </div>
+            <div class="scard glass corp">
+              <div class="shook">Infosys just raised its own bar</div>
+              <div class="smeta"><span class="impill">Impact 6/10</span><span>Moneycontrol — Tue</span></div>
+            </div>
+            <div class="scard glass eco">
+              <div class="shook">Inflation cooled more than expected</div>
+              <div class="smeta"><span class="impill">Impact 6/10</span><span>ET Economy — Mon</span></div>
+            </div>
+          </div>
+          <div class="swipetip">⟵ swipe a story left to remove</div>
+        </div>
+      </div></div>
+      <p class="screenlabel">Saved — bookmarks, colour-coded by category</p>
+    </div>
+
+    <!-- PROFILE -->
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="aurora a-prof"><i></i><i></i></div>
+        <div class="content">
+          <div class="statusbar"><span>21:51</span><span>▲ 5G</span></div>
+          <div class="avatar-row">
+            <div class="avatar">T</div>
+            <div><div class="pname">Tanishk</div><div class="pmail">tanishkbisht584@gmail.com</div></div>
+          </div>
+          <div class="pcard glass">
+            <b>Following · 6</b>
+            <div class="ichips">
+              <span class="ichip on">Nifty 50</span><span class="ichip on">Banking</span><span class="ichip on">IT</span>
+              <span class="ichip on">Tata Motors</span><span class="ichip on">Crude Oil</span><span class="ichip on">IPOs</span>
+              <span class="ichip">+ Edit</span>
+            </div>
+          </div>
+          <div class="pcard glass">
+            <b>Alerts</b>
+            <div class="togrow"><span>Market-moving alerts</span><span class="tog on"></span></div>
+            <div class="togrow"><span>My stocks &amp; sectors</span><span class="tog on"></span></div>
+            <div class="togrow"><span>Quiet hours 22:00–07:00</span><span class="tog on"></span></div>
+          </div>
+          <div class="pcard glass">
+            <b>App</b>
+            <div class="togrow"><span>Theme</span><span style="color:#9fb0c2; font-size:12px">Liquid dark ›</span></div>
+            <div class="togrow"><span>Share FinSwipe</span><span style="color:#9fb0c2; font-size:12px">›</span></div>
+          </div>
+          <div class="signout">Sign out</div>
+          <div class="fineprint">FinSwipe explains news. It never gives investment advice.</div>
+        </div>
+      </div></div>
+      <p class="screenlabel">Profile — follows, alert controls, settings</p>
+    </div>
+  </div>
+
+  <h2 class="section">Admin panel — your control room (Streamlit, web)</h2>
+  <div class="admin">
+    <div class="abar">
+      <span class="t">FinSwipe Admin · Review Queue</span>
+      <div class="astatus">
+        <span class="apill ok"><span class="dot"></span>Pipeline running · last run 4 min ago</span>
+        <span class="apill ok"><span class="dot"></span>Auto-approve ON</span>
+        <span class="apill ok"><span class="dot"></span>Alerts ON</span>
+        <span class="apill off"><span class="dot"></span>Pause all</span>
+      </div>
+    </div>
+    <div class="agrid">
+      <div class="aq">
+        <h3>Pending review · 3</h3>
+        <div class="qrow">
+          <span class="imp hi">Impact 8</span>
+          <span class="htext">Adani Ports wins ₹12,000 cr Mundra expansion approval
+            <small>single source (TOI) — held for your approval · 6 min ago</small></span>
+          <span class="qbtn ap">✓ Approve</span><span class="qbtn">✎ Edit</span><span class="qbtn rj">✕ Reject</span><span class="qbtn">🔔 Alert</span>
+        </div>
+        <div class="qrow">
+          <span class="imp">Impact 6</span>
+          <span class="htext">Zomato quick-commerce arm turns profitable in Q1
+            <small>2 sources (ET, Mint) — auto-approves in 1 h 12 m</small></span>
+          <span class="qbtn ap">✓ Approve</span><span class="qbtn">✎ Edit</span><span class="qbtn rj">✕ Reject</span>
+        </div>
+        <div class="qrow flagged">
+          <span class="imp">flagged</span>
+          <span class="htext">Feed item from Investing.com — AI returned invalid JSON twice
+            <small>raw article attached · will not publish without you</small></span>
+          <span class="qbtn">🔍 Inspect</span><span class="qbtn rj">✕ Discard</span>
+        </div>
+      </div>
+      <div class="aside">
+        <h3>Today</h3>
+        <div class="stat"><span>Stories fetched</span><b>412</b></div>
+        <div class="stat"><span>New after dedupe</span><b>84</b></div>
+        <div class="stat"><span>Published</span><b>61</b></div>
+        <div class="stat"><span>Clustered duplicates</span><b>19</b></div>
+        <div class="stat"><span>Flagged</span><b>2</b></div>
+        <div class="stat"><span>Alerts sent</span><b>2 / 5</b></div>
+        <div class="shealth">
+          <h3>Source health</h3>
+          <div class="shrow"><span>ET Markets</span><span class="ok2">✓ 4 min</span></div>
+          <div class="shrow"><span>LiveMint</span><span class="ok2">✓ 4 min</span></div>
+          <div class="shrow"><span>RBI · SEBI</span><span class="ok2">✓ 19 min</span></div>
+          <div class="shrow"><span>Google News ×5</span><span class="ok2">✓ 4 min</span></div>
+          <div class="shrow"><span>Investing.com</span><span class="bad">⚠ 3 h — check feed</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
