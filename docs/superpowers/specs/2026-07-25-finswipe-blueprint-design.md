@@ -275,6 +275,8 @@ Push via FCM (free), sent by the pipeline the moment a qualifying story lands.
 
 **Stack:** Flutter, Riverpod, Supabase Flutter SDK, FCM, PostHog SDK.
 
+**Design language: liquid glass.** Frosted translucent cards (blur + saturation, 1px light borders) floating over deep, category-tinted static aurora gradients — the background hue itself signals the news category before reading a word. Performance rules for budget Android (most of the Indian market): at most two live blur surfaces per screen (story card + action dock); aurora backgrounds are pre-rendered static gradients, never live blur; devices that can't hold 60fps in the feed fall back to semi-transparent solid cards with identical layout. Severity/impact color accents ride on top of the glass (L1 ember red, positive mint, negative coral).
+
 **Screens:**
 1. **Onboarding** — Google sign-in (required) → pick ≥3 interests → feed. < 60 s.
 2. **Home feed** — full-screen vertical PageView, snap-per-story, preload 3. The smart card (§2) with impact badge (direction/strength color), short-vs-long-term chip, company/sector chips (tap = follow or open stock page), source link, save/share.
