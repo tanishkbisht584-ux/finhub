@@ -234,6 +234,7 @@ One call, not eight chained steps: cheaper, and impact/summary stay coherent. `c
 3. **Tier 2 (fallback):** live web search restricted to a **whitelisted domain list** (Reuters, ET, Mint, Moneycontrol, Business Standard, NSE/BSE/RBI/SEBI official). Answers labeled "from web sources" with links. The model never answers from its own knowledge — if the whitelist can't support an answer: "our sources don't clearly explain this yet."
 4. **Answer format:** what's happening → why → who's affected → what to watch, confidence level, tappable source cards, and 2–3 suggested follow-up questions (each follow-up is a fresh sourced answer — mini-chat feel without freewheeling chat).
 5. **Cost control:** no visible cap; silent abuse guard at 50 questions/user/day; popular questions cached 15 min (market panic ≠ thousand identical AI calls — and protects the free-tier daily quota). ₹0 within Gemini free tier; Tier 2 adds a search-API call (Tavily/Brave free tier at MVP volume).
+6. **Provider fallback (Q&A only):** Gemini free tier caps at 1,000 requests/day. When the day's Gemini quota is near exhausted, Q&A calls fail over to **Groq** (free tier, Llama 3.3 70B, ~1,000 RPD, 30 RPM) — roughly doubling daily Q&A capacity to ~2,000/day at ₹0. Groq's inference is also near-instant, so failover costs no perceptible latency. Story processing and the Chief Editor stay on Gemini only (their volume is small and predictable — no fallback needed there). Routed through the same swappable AI interface (§5 intro) — trying Gemini first, Groq on quota/rate-limit error.
 
 ---
 
