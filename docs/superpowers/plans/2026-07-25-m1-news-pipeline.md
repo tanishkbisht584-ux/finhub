@@ -101,6 +101,7 @@ create table stories (
   url              text not null,
   url_hash         text not null unique,
   cluster_id       uuid not null,
+  hook             text,               -- billboard line, <=8 words, factual
   headline         text not null,
   summary          text,
   impact_direction text check (impact_direction in ('positive','negative','mixed','neutral')),
@@ -331,6 +332,7 @@ from finswipe.models import StoryCard, Impact, CompanyRef, FeedItem
 
 def valid_card_dict():
     return {
+        "hook": "RBI stands still, markets exhale",
         "headline_rewrite": "RBI holds repo rate at 6.5%",
         "summary": "What happened... why... who is affected... why you should care.",
         "impact": {"direction": "neutral", "strength": 2, "horizon": "short_term", "score": 6},
@@ -404,6 +406,7 @@ class Impact(BaseModel):
 
 
 class StoryCard(BaseModel):
+    hook: str
     headline_rewrite: str
     summary: str
     impact: Impact
@@ -728,8 +731,8 @@ git commit -m "feat: url hashing and title-similarity clustering"
 **Interfaces:**
 - Consumes: `FeedItem` (Task 2), `settings` (Task 1).
 - Produces:
-  - `needs_enrichment(item: FeedItem) -> bool` — True when `len(item.summary) < 300` and URL is not a Google News redirect (`news.google.com` links block scraping — skip those).
-  - `enrich(item: FeedItem) -> FeedItem` — returns a copy with `summary` replaced by extracted article text (capped at 4000 chars) when extraction succeeds; original item unchanged on any failure. Never raises.
+  - `needs_enrichment(item: FeedItem) -> bool` — True when the summary is thin (`< 300` chars) **or** the item has no image, unless the URL is a Google News redirect (`news.google.com` blocks scraping — skip those).
+  - `enrich(item: FeedItem) -> FeedItem` — fetches the article page once; returns a copy with `summary` replaced by extracted text (capped 4000 chars) when longer, and `image_url` filled from the page's `og:image` meta tag when the item had none. Original item unchanged on any failure. Never raises.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -737,19 +740,25 @@ git commit -m "feat: url hashing and title-similarity clustering"
 ```python
 from unittest.mock import patch
 
-from finswipe.extract import needs_enrichment, enrich
+from finswipe.extract import needs_enrichment, enrich, _og_image
 from finswipe.models import FeedItem
 
 
-def make_item(summary: str, url: str = "https://example.com/story") -> FeedItem:
-    return FeedItem(source_id=1, source_name="ET", title="T", url=url, summary=summary)
+def make_item(summary: str, url: str = "https://example.com/story",
+              image_url: str | None = "https://example.com/i.jpg") -> FeedItem:
+    return FeedItem(source_id=1, source_name="ET", title="T", url=url,
+                    summary=summary, image_url=image_url)
 
 
 def test_needs_enrichment_when_summary_thin():
     assert needs_enrichment(make_item("short")) is True
 
 
-def test_no_enrichment_when_summary_rich():
+def test_needs_enrichment_when_image_missing():
+    assert needs_enrichment(make_item("x" * 400, image_url=None)) is True
+
+
+def test_no_enrichment_when_rich_and_has_image():
     assert needs_enrichment(make_item("x" * 400)) is False
 
 
@@ -758,17 +767,26 @@ def test_no_enrichment_for_google_news_links():
     assert needs_enrichment(item) is False
 
 
-def test_enrich_replaces_summary_on_success():
-    item = make_item("short")
-    with patch("finswipe.extract._download_and_extract", return_value="Full article text " * 30):
+def test_og_image_extracts_meta_tag():
+    html = '<head><meta property="og:image" content="https://cdn.example.com/pic.jpg" /></head>'
+    assert _og_image(html) == "https://cdn.example.com/pic.jpg"
+    assert _og_image("<head></head>") is None
+
+
+def test_enrich_fills_summary_and_image():
+    item = make_item("short", image_url=None)
+    html = '<meta property="og:image" content="https://cdn.example.com/pic.jpg">'
+    with patch("finswipe.extract._download", return_value=html), \
+         patch("finswipe.extract.trafilatura") as t:
+        t.extract.return_value = "Full article text " * 30
         out = enrich(item)
     assert len(out.summary) > 300
-    assert out.title == item.title
+    assert out.image_url == "https://cdn.example.com/pic.jpg"
 
 
 def test_enrich_keeps_original_on_failure():
     item = make_item("short")
-    with patch("finswipe.extract._download_and_extract", return_value=None):
+    with patch("finswipe.extract._download", return_value=None):
         out = enrich(item)
     assert out.summary == "short"
 ```
@@ -782,6 +800,7 @@ Run: `pytest tests/test_extract.py -v` — Expected: FAIL (no module)
 `pipeline/src/finswipe/extract.py`:
 ```python
 import logging
+import re
 
 import httpx
 import trafilatura
@@ -792,30 +811,50 @@ from finswipe.models import FeedItem
 log = logging.getLogger(__name__)
 MIN_RICH_SUMMARY = 300
 MAX_TEXT_CHARS = 4000
+_OG_IMAGE_RE = re.compile(
+    r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', re.I)
+_OG_IMAGE_RE_REV = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', re.I)
 
 
 def needs_enrichment(item: FeedItem) -> bool:
     if "news.google.com" in item.url:
         return False
-    return len(item.summary) < MIN_RICH_SUMMARY
+    return len(item.summary) < MIN_RICH_SUMMARY or not item.image_url
 
 
-def _download_and_extract(url: str) -> str | None:
+def _download(url: str) -> str | None:
     try:
         resp = httpx.get(url, headers={"User-Agent": settings.user_agent},
                          timeout=settings.fetch_timeout, follow_redirects=True)
         resp.raise_for_status()
-        return trafilatura.extract(resp.text, include_comments=False)
+        return resp.text
     except Exception as exc:
-        log.info("article extraction failed for %s: %s", url, exc)
+        log.info("article download failed for %s: %s", url, exc)
         return None
 
 
+def _og_image(html: str) -> str | None:
+    m = _OG_IMAGE_RE.search(html) or _OG_IMAGE_RE_REV.search(html)
+    return m.group(1) if m else None
+
+
 def enrich(item: FeedItem) -> FeedItem:
-    text = _download_and_extract(item.url)
+    html = _download(item.url)
+    if not html:
+        return item
+    updates = {}
+    try:
+        text = trafilatura.extract(html, include_comments=False)
+    except Exception:
+        text = None
     if text and len(text) > len(item.summary):
-        return item.model_copy(update={"summary": text[:MAX_TEXT_CHARS]})
-    return item
+        updates["summary"] = text[:MAX_TEXT_CHARS]
+    if not item.image_url:
+        img = _og_image(html)
+        if img:
+            updates["image_url"] = img
+    return item.model_copy(update=updates) if updates else item
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -864,6 +903,7 @@ def make_item() -> FeedItem:
 
 def make_card() -> StoryCard:
     return StoryCard.model_validate({
+        "hook": "RBI stands still",
         "headline_rewrite": "RBI holds repo rate at 6.5%",
         "summary": "s", 
         "impact": {"direction": "neutral", "strength": 1, "horizon": "short_term", "score": 5},
@@ -947,6 +987,7 @@ class Database:
             "url": item.url,
             "url_hash": url_hash(item.url),
             "cluster_id": cluster_id,
+            "hook": card.hook,
             "headline": card.headline_rewrite,
             "summary": card.summary,
             "impact_direction": card.impact.direction,
@@ -1099,6 +1140,7 @@ def make_item() -> FeedItem:
 
 def card_json(symbol="HDFCBANK", relevant=True, category="Economy", score=6) -> str:
     return json.dumps({
+        "hook": "RBI stands still, markets exhale",
         "headline_rewrite": "RBI holds repo rate at 6.5%",
         "summary": "s",
         "impact": {"direction": "neutral", "strength": 1, "horizon": "short_term", "score": score},
@@ -1185,6 +1227,9 @@ Rules — follow every one:
   who is affected, and why the reader should care.
 - NEVER give buy/sell/hold advice or price targets. Describe impact and what to
   watch — never what to do. This is a legal requirement.
+- "hook": a billboard line, 8 words max, that makes someone stop scrolling —
+  punchy, concrete, and STRICTLY factual. Good: "Oil just got scary for India".
+  Bad (never do): curiosity-gap clickbait like "You won't believe what happened".
 - Only mention companies actually central to the story. Use official NSE symbols
   when you are certain; otherwise set nse_symbol to null.
 - If facts are thin or the article is vague, set confidence to "medium" or "low".
@@ -1193,6 +1238,7 @@ Rules — follow every one:
 
 JSON schema (all fields required):
 {
+  "hook": "string, 8 words max",
   "headline_rewrite": "string",
   "summary": "string",
   "impact": {"direction": "positive|negative|mixed|neutral", "strength": 1-3,

@@ -38,7 +38,7 @@ Not downloads. Not time-in-app. Supporting signals (PostHog free tier): time fro
 | Feature | Description |
 |---|---|
 | **Swipe feed** | Vertical, Reels-style. One swipe = one story, fully understood in seconds. |
-| **Smart news card** | Single card, no tabs: headline · concise AI summary (what/why/who/why-care) · expected impact (positive/negative + strength) · **short-term vs long-term flag** · affected sectors & stocks (tappable) · source name + link to original. Written plainly enough for beginners, precise enough for traders. |
+| **Smart news card** | Single card, no tabs, read as a billboard in three levels: **hook** (AI-written, ≤8 words, arresting but strictly factual — never clickbait) · **story image** (article's own og:image preview with attribution; category-tinted aurora as the fallback visual — no empty image boxes) · headline · concise AI summary (what/why/who/why-care) · expected impact (positive/negative + strength) · **short-term vs long-term flag** · affected sectors & stocks (tappable) · source name + link to original. Written plainly enough for beginners, precise enough for traders. |
 | **Q&A search** | Ask "Why is NIFTY falling today?" → sourced AI explanation. Two-tier: our stories first, whitelisted-web fallback. Suggested follow-up questions. |
 | **Smart alerts** | Push notifications only for significant market-moving events; instant, machine-gated, personalized to follows. |
 | **Basic stock page** | Current price (delayed) · lightweight chart · recent related news · a few key metrics. Deliberately NOT competing with Screener/TradingView. |
@@ -202,6 +202,7 @@ Key decisions:
 
 ```json
 {
+  "hook": "billboard line, <=8 words, arresting but strictly factual",
   "headline_rewrite": "original wording, plain language",
   "summary": "what happened / why / who is affected / why you should care",
   "impact": {
