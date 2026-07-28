@@ -271,11 +271,13 @@ Push via FCM (free), sent by the pipeline the moment a qualifying story lands.
 - Every alert deep-links to its story card: open → understand → done. That flow *is* the 15-second metric.
 - Admin panel: manual "send alert" override + per-user mute stats.
 
+**Voice alerts for L1 only.** The rarest, historic-tier stories (impact 9–10) also get spoken aloud, not just pushed silently — reserved for L1 so the interruption stays meaningful and never trains users to ignore it. Uses the phone's **on-device text-to-speech** (Android's built-in TTS via `flutter_tts`) — ₹0 cost, no audio generation or hosting, since the phone synthesizes speech from text the pipeline already wrote. Speaks the AI-written **hook only** (e.g. "Oil just got scary for India") — roughly 3 seconds, matching the 15-second-understanding ethos; tapping the notification opens the full card. Toggle in Profile → Alerts ("Read the biggest stories aloud"), on by default since it's L1-gated and therefore rare.
+
 ---
 
 ## 8. Flutter App (Android v1)
 
-**Stack:** Flutter, Riverpod, Supabase Flutter SDK, FCM, PostHog SDK.
+**Stack:** Flutter, Riverpod, Supabase Flutter SDK, FCM, PostHog SDK, `flutter_tts` (on-device voice for L1 alerts, §7).
 
 **Design language: liquid glass.** Frosted translucent cards (blur + saturation, 1px light borders) floating over deep, category-tinted static aurora gradients — the background hue itself signals the news category before reading a word. Performance rules for budget Android (most of the Indian market): at most two live blur surfaces per screen (story card + action dock); aurora backgrounds are pre-rendered static gradients, never live blur; devices that can't hold 60fps in the feed fall back to semi-transparent solid cards with identical layout. Severity/impact color accents ride on top of the glass (L1 ember red, positive mint, negative coral).
 
@@ -286,7 +288,7 @@ Push via FCM (free), sent by the pipeline the moment a qualifying story lands.
 4. **Stock page** — delayed price + light line chart (Yahoo), recent related story cards, a few key metrics (market cap, P/E, 52-wk range). Nothing more, by design.
 5. **Watchlist** — followed entities + filtered feed.
 6. **Saved** — bookmarks.
-7. **Profile** — interests, alert settings, disclaimer, sign-out.
+7. **Profile** — interests, alert settings (incl. voice-alert toggle, §7), disclaimer, sign-out.
 8. **Story detail** — deep-link target (alerts & shares). Recipients without the app get a web preview page with install button.
 
 **Share:** card rendered as branded image — every share is an ad.
