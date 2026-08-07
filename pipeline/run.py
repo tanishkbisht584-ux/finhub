@@ -19,8 +19,9 @@ import requests
 # AI calls per run. Only genuinely new stories cost one — same-story items from
 # other outlets are stored as cluster duplicates for free, so this goes much
 # further than the old flat story cap it replaces.
-MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "40"))
+MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "120"))
 AI_CONCURRENCY = int(os.environ.get("AI_CONCURRENCY", "6"))
+AI_PHASE_SECONDS = int(os.environ.get("AI_PHASE_SECONDS", "300"))  # leave room for alerts/approve before the job timeout
 AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
 TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
 TRUSTED_AUTHORITY = 8       # ET/Mint/WSJ/BBC/Moneycontrol tier; below this never alerts solo
@@ -473,7 +474,8 @@ def insert_story(row, companies_by_key, card=None):
 
 def main():
     load_env()
-    from ai import AIError, QuotaExhausted, editor_pass, process_story  # after env load
+    from ai import (AIError, QuotaExhausted, editor_pass, process_story,
+                    usage_report)  # after env load
 
     sources = sb("GET", "sources?select=*&is_active=eq.true")
     companies_by_key = {}
@@ -538,10 +540,21 @@ def main():
             except requests.RequestException as e:
                 print(f"{status.upper()} INSERT FAIL {item['url_hash'][:8]}: {e}")
 
-    # Concurrent AI; ai.py's shared throttle keeps the free tier happy.
+    # Concurrent AI; ai.py's per-lane throttle keeps the free tier happy.
+    # Hard wall-clock budget: when only one model lane is live the throttle caps
+    # throughput at ~15/min, so a full cap could outlast the job timeout and kill
+    # the run before alerts and auto-approve ever execute. Past the deadline the
+    # remaining stories defer exactly like a quota block — nothing is lost.
     processed = flagged = dropped = quota_blocked = 0
+    deadline = time.monotonic() + AI_PHASE_SECONDS
+
+    def process_within_budget(name, headline, body):
+        if time.monotonic() > deadline:
+            raise QuotaExhausted("AI phase budget spent; deferred to next run")
+        return process_story(name, headline, body)
+
     with ThreadPoolExecutor(max_workers=AI_CONCURRENCY) as pool:
-        futures = {pool.submit(process_story, item["source"]["name"],
+        futures = {pool.submit(process_within_budget, item["source"]["name"],
                                item["headline"], item["body"]): (item, cid)
                    for item, cid in to_process}
         for fut in as_completed(futures):
@@ -593,6 +606,10 @@ def main():
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
           + f" | editor: {releveled} releveled | alerts: {alerted} sent | "
           f"self-heal: {healed} recovered, {disabled} sources disabled, {approved} auto-approved")
+    served = usage_report()
+    if served:  # which lane actually carried the run — silent failover is visible
+        print("AI served by: " + ", ".join(f"{m}={n}" for m, n in
+                                           sorted(served.items(), key=lambda kv: -kv[1])))
 
 
 if __name__ == "__main__":

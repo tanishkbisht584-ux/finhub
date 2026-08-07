@@ -5,28 +5,38 @@ import os
 import pathlib
 import threading
 import time
+from collections import Counter
 
 import requests
 
 PROMPT = (pathlib.Path(__file__).parent / "prompts" / "story_v1.txt").read_text(encoding="utf-8")
 EDITOR_PROMPT = (pathlib.Path(__file__).parent / "prompts" / "editor_v1.txt").read_text(encoding="utf-8")
 
-# Requests/minute ceiling shared by every caller, so stories can be processed
-# concurrently without tripping the free tier. Replaces the old serial sleep.
-GEMINI_RPM = int(os.environ.get("GEMINI_RPM", "24"))
+# Rate limits are metered per model/provider, so the throttle is too: one global
+# gate made 4 models queue behind each other and capped the whole pipeline at one
+# model's speed. Each lane now paces itself, and the fallbacks are paced as well
+# instead of running wide open into their own 429s.
+RPM_PER_LANE = int(os.environ.get("AI_RPM_PER_LANE", "15"))
 _gate_lock = threading.Lock()
-_next_slot = 0.0
+_next_slot = {}          # lane -> monotonic time its next call may start
+_usage = Counter()       # lane -> successful calls this process (attribution)
 
 
-def _throttle():
-    global _next_slot
-    gap = 60.0 / max(GEMINI_RPM, 1)
+def _throttle(lane):
+    gap = 60.0 / max(RPM_PER_LANE, 1)
     with _gate_lock:
         now = time.monotonic()
-        slot = max(now, _next_slot)
-        _next_slot = slot + gap
+        slot = max(now, _next_slot.get(lane, 0.0))
+        _next_slot[lane] = slot + gap
     if slot > now:
         time.sleep(slot - now)
+
+
+def usage_report():
+    """Which model actually served this run — printed by the caller so a silent
+    failover (or one model carrying everything) is visible in the logs."""
+    with _gate_lock:
+        return dict(_usage)
 
 DIRECTIONS = {"positive", "negative", "mixed", "neutral"}
 HORIZONS = {"short_term", "long_term", "both"}
@@ -50,19 +60,43 @@ MODELS = [m.strip() for m in os.environ.get(
     "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.0-flash-lite,gemini-3.5-flash"
 ).split(",") if m.strip()]
 
-_cooldown = {}      # model -> monotonic deadline before we try it again
+_cooldown = {}      # lane -> monotonic deadline before we try it again
 _cooldown_lock = threading.Lock()
 
 
-def _live_models():
+def _gemini_lanes():
+    """Quota is metered per ACCOUNT as well as per model, so GEMINI_API_KEY takes
+    a comma-separated list: N keys from N Google accounts multiply the daily pool
+    by N. A lane is one (key, model) pair — the unit quota, throttling and
+    cooldown are all metered on. Ordered model-major: we exhaust the preferred
+    model across every key before dropping to the next model, so a 429 costs us
+    an account and not the answer quality."""
+    keys = [k.strip() for k in os.environ.get("GEMINI_API_KEY", "").split(",") if k.strip()]
+    return [(k, m, f"{m}#{i + 1}") for m in MODELS for i, k in enumerate(keys)]
+
+
+def _live_lanes():
     now = time.monotonic()
     with _cooldown_lock:
-        return [m for m in MODELS if _cooldown.get(m, 0.0) <= now]
+        return [l for l in _gemini_lanes() if _cooldown.get(l[2], 0.0) <= now]
 
 
-def _benched(model, seconds=900):
+def _benched(lane, seconds):
     with _cooldown_lock:
-        _cooldown[model] = time.monotonic() + seconds
+        _cooldown[lane] = time.monotonic() + seconds
+
+
+def _retry_after(resp, default=60.0):
+    """A 429 is usually a per-minute trip, not a spent day — benching for 15 min
+    threw away a model for three runs. Google states the real wait in RetryInfo;
+    honour it, and fall back to a minute rather than assuming the worst."""
+    try:
+        for d in resp.json()["error"]["details"]:
+            if str(d.get("@type", "")).endswith("RetryInfo"):
+                return min(float(str(d["retryDelay"]).rstrip("s")), 900.0)
+    except (ValueError, KeyError, TypeError):
+        pass
+    return default
 
 
 def validate(card):
@@ -108,23 +142,40 @@ FALLBACKS = [
 ]
 
 
+def _fallback_lanes():
+    """Every configured (key, provider) pair, in preference order. Like Gemini,
+    each provider's key env takes a comma-separated list — quota is per account,
+    so a second Groq key is a second free 1000/day."""
+    lanes = []
+    for key_env, url, model_env, default_model in FALLBACKS:
+        model = os.environ.get(model_env, default_model)
+        for i, key in enumerate(k.strip() for k in os.environ.get(key_env, "").split(",")):
+            if key:
+                lanes.append((key, url, model, f"{model}#{i + 1}"))
+    return lanes
+
+
 def _fallback_chat(prompt):
     """Returns None when every configured provider is unset or throttled, so the
     caller can fall through to 'try again next run'."""
-    for key_env, url, model_env, default_model in FALLBACKS:
-        key = os.environ.get(key_env)
-        if not key:
-            continue
+    for key, url, model, lane in _fallback_lanes():
+        with _cooldown_lock:
+            if _cooldown.get(lane, 0.0) > time.monotonic():
+                continue  # still benched from an earlier 429 this run
         try:
+            _throttle(lane)  # fallbacks have their own limits; pace them too
             r = requests.post(
                 url, headers={"Authorization": f"Bearer {key}"},
-                json={"model": os.environ.get(model_env, default_model),
+                json={"model": model,
                       "messages": [{"role": "user", "content": prompt}],
                       "response_format": {"type": "json_object"}, "temperature": 0.2},
                 timeout=60)
             if r.status_code in (429, 503):
-                continue  # this provider is tapped out; try the next one
+                _benched(lane, _retry_after(r))  # don't re-probe a dead key all run
+                continue                         # this lane is tapped out; next one
             r.raise_for_status()
+            with _gate_lock:
+                _usage[lane] += 1
             return r.json()["choices"][0]["message"]["content"]
         except requests.RequestException:
             continue  # a dead provider must never stall the pipeline
@@ -133,11 +184,11 @@ def _fallback_chat(prompt):
 
 def _gemini(prompt):
     last = None
-    for model in _live_models():
-        _throttle()
+    for key, model, lane in _live_lanes():
+        _throttle(lane)
         r = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
+            headers={"x-goog-api-key": key},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"response_mime_type": "application/json",
@@ -145,11 +196,14 @@ def _gemini(prompt):
             },
             timeout=60,
         )
-        if r.status_code in (429, 503):  # quota or model overloaded -> next model
-            _benched(model)
-            last = f"{r.status_code} on {model}"
+        if r.status_code in (429, 503):  # quota or model overloaded -> next lane
+            wait = _retry_after(r)
+            _benched(lane, wait)
+            last = f"{r.status_code} on {lane} (benched {wait:.0f}s)"
             continue
         r.raise_for_status()
+        with _gate_lock:
+            _usage[lane] += 1
         return r.json()["candidates"][0]["content"]["parts"][0]["text"]
     text = _fallback_chat(prompt)
     if text is not None:
@@ -168,8 +222,13 @@ def editor_pass(digest):
                     and 1 <= r["score"] <= 10]
         top = out.get("top_story_id")
         return {"relevel": relevels, "top_story_id": top if isinstance(top, int) else None}
-    except (AIError, ValueError, KeyError, json.JSONDecodeError, requests.RequestException):
-        return None  # advisory pass; never let it break the run
+    except (AIError, ValueError, KeyError, json.JSONDecodeError,
+            requests.RequestException) as e:
+        # Advisory pass: never break the run — but never fail silently either.
+        # Returning None quietly meant a permanently broken editor looked
+        # identical to "nothing needed re-levelling".
+        print(f"EDITOR PASS FAILED ({type(e).__name__}): {str(e)[:200]}")
+        return None
 
 
 def process_story(source_name, headline, body):
