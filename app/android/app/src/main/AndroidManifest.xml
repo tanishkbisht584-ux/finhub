@@ -49,5 +49,11 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Android 11+ package visibility: without this, launching the OAuth
+             browser tab fails silently and sign-in appears to do nothing -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
     </queries>
 </manifest>

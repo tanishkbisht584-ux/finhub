@@ -13,10 +13,10 @@ class SignInScreen extends StatelessWidget {
         redirectTo: 'finswipe://login-callback',
         authScreenLaunchMode: LaunchMode.externalApplication,
       );
-    } on AuthException catch (e) {
+    } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+            .showSnackBar(SnackBar(content: Text('Sign-in failed: $e')));
       }
     }
   }
