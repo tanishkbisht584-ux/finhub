@@ -19,7 +19,7 @@ import requests
 # AI calls per run. Only genuinely new stories cost one — same-story items from
 # other outlets are stored as cluster duplicates for free, so this goes much
 # further than the old flat story cap it replaces.
-MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "60"))
+MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "20"))
 AI_CONCURRENCY = int(os.environ.get("AI_CONCURRENCY", "6"))
 AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
 TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
@@ -374,7 +374,7 @@ def parse_ts(s):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def retry_flagged(process_story, AIError, companies_by_key):
+def retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key):
     """Re-run AI on recently flagged stories (headline-only — body isn't stored).
     Older than 24h we stop trying; admin sees them. Cap 5/run to protect quota."""
     cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=24))
@@ -385,6 +385,8 @@ def retry_flagged(process_story, AIError, companies_by_key):
         try:
             card = process_story(row["source_name"], row["headline"],
                                  "(body unavailable — assess from the headline alone)")
+        except QuotaExhausted:
+            break  # out of budget, not a bad story: leave it untouched for later
         except AIError as e:
             sb("PATCH", f"stories?id=eq.{row['id']}", json={"raw_ai_error": str(e)})
             continue
@@ -565,7 +567,7 @@ def main():
 
     releveled = chief_editor(editor_pass)
     alerted = alert_engine({s["name"]: s["authority"] for s in sources})
-    healed = retry_flagged(process_story, AIError, companies_by_key)
+    healed = retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key)
     disabled = disable_dead_sources()
     approved = auto_approve()
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
