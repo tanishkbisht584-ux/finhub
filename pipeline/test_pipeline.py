@@ -51,6 +51,22 @@ def test_validate_rejects_bad_cards(patch):
         validate({**CARD, **patch})
 
 
+def test_prioritized_interleaves_sources_by_authority():
+    from run import prioritized
+    et = {"name": "ET", "authority": 8}
+    rbi = {"name": "RBI", "authority": 10}
+    items = [{"source": et, "published_at": f"2026-08-0{i}"} for i in range(1, 4)]
+    items += [{"source": rbi, "published_at": "2026-08-01"}]
+    out = prioritized(items)
+    # highest authority leads, then every source gets a turn before ET's seconds
+    assert out[0]["source"]["name"] == "RBI"
+    assert out[1]["source"]["name"] == "ET"
+    # newest first within a source
+    assert [i["published_at"] for i in out if i["source"]["name"] == "ET"] == [
+        "2026-08-03", "2026-08-02", "2026-08-01"]
+    assert len(out) == len(items)  # nothing dropped
+
+
 def test_alert_gate():
     from run import gate_passes
     assert gate_passes(8, 2, 5)        # multi-source confirmed

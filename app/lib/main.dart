@@ -35,13 +35,28 @@ class FinSwipeApp extends StatelessWidget {
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
+  /// saves/events carry a foreign key to profiles, so without this row every
+  /// save silently fails. Safe to call on each launch — it upserts.
+  Future<void> _ensureProfile(User user) async {
+    try {
+      await Supabase.instance.client.from('profiles').upsert({
+        'id': user.id,
+        'display_name': user.userMetadata?['full_name'] ?? user.email,
+      }, onConflict: 'id');
+    } catch (_) {
+      // offline or transient: saves retry the upsert themselves
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<AuthState>(
       stream: Supabase.instance.client.auth.onAuthStateChange,
       builder: (context, snapshot) {
         final session = Supabase.instance.client.auth.currentSession;
-        return session == null ? const SignInScreen() : const HomeShell();
+        if (session == null) return const SignInScreen();
+        _ensureProfile(session.user);
+        return const HomeShell();
       },
     );
   }

@@ -59,18 +59,45 @@ class FeedScreen extends ConsumerWidget {
   }
 }
 
-class StoryCard extends StatelessWidget {
+class StoryCard extends StatefulWidget {
   const StoryCard({super.key, required this.story});
   final Story story;
 
-  Future<void> _save(BuildContext context) async {
-    final uid = Supabase.instance.client.auth.currentUser!.id;
-    await Supabase.instance.client
-        .from('saves')
-        .upsert({'user_id': uid, 'story_id': story.id});
-    if (context.mounted) {
+  @override
+  State<StoryCard> createState() => _StoryCardState();
+}
+
+class _StoryCardState extends State<StoryCard>
+    with SingleTickerProviderStateMixin {
+  Story get story => widget.story;
+  bool _saved = false;
+
+  late final AnimationController _burst = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 550));
+
+  @override
+  void dispose() {
+    _burst.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save({bool viaDoubleTap = false}) async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    if (viaDoubleTap) _burst.forward(from: 0);
+    try {
+      await Supabase.instance.client
+          .from('saves')
+          .upsert({'user_id': user.id, 'story_id': story.id});
+      if (!mounted) return;
+      setState(() => _saved = true);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          duration: Duration(milliseconds: 900), content: Text('Saved')));
+    } catch (e) {
+      if (!mounted) return;
+      // used to fail silently — surface it instead
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Saved')));
+          .showSnackBar(SnackBar(content: Text('Could not save: $e')));
     }
   }
 
@@ -85,7 +112,31 @@ class StoryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final dir = directionColor(story.impactDirection);
     return SafeArea(
-      child: Container(
+      child: GestureDetector(
+        onDoubleTap: () => _save(viaDoubleTap: true),
+        child: Stack(alignment: Alignment.center, children: [
+          _card(dir),
+          // brief bookmark flash confirming the double tap registered
+          FadeTransition(
+            opacity: Tween<double>(begin: 1, end: 0).animate(
+                CurvedAnimation(parent: _burst, curve: const Interval(0.5, 1))),
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.6, end: 1.25).animate(
+                  CurvedAnimation(parent: _burst, curve: Curves.easeOutBack)),
+              child: IgnorePointer(
+                child: _burst.isAnimating || _burst.isCompleted
+                    ? const Icon(Icons.bookmark_rounded, size: 96, color: green)
+                    : const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _card(Color dir) {
+    return Container(
         margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         decoration: BoxDecoration(
           color: surface,
@@ -166,18 +217,16 @@ class StoryCard extends StatelessWidget {
             ]),
             const SizedBox(height: 10),
             Row(children: [
-              _action('Save', () => _save(context)),
+              _action(_saved ? 'Saved ✓' : 'Save', () => _save()),
               _action('Source',
                   () => launchUrl(Uri.parse(story.sourceUrl),
                       mode: LaunchMode.externalApplication)),
               const Spacer(),
-              Text('Not investment advice',
+              Text('double-tap to save',
                   style: mono.copyWith(fontSize: 11)),
             ]),
           ],
-        ),
-      ),
-    );
+        ));
   }
 
   Widget _action(String label, VoidCallback onTap) => Padding(

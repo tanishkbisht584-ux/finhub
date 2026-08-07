@@ -8,14 +8,19 @@ import re
 import time
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from itertools import zip_longest
 from urllib.parse import quote_plus, urlsplit, urlunsplit, parse_qsl, urlencode
 
 import feedparser
 import requests
 
-MAX_STORIES_PER_RUN = int(os.environ.get("MAX_STORIES_PER_RUN", "40"))
-AI_CALL_GAP_SECONDS = 5  # free-tier RPM throttle (spec §5)
+# AI calls per run. Only genuinely new stories cost one — same-story items from
+# other outlets are stored as cluster duplicates for free, so this goes much
+# further than the old flat story cap it replaces.
+MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "60"))
+AI_CONCURRENCY = int(os.environ.get("AI_CONCURRENCY", "6"))
 AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
 TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
 TRUSTED_AUTHORITY = 8       # ET/Mint/WSJ/BBC/Moneycontrol tier; below this never alerts solo
@@ -46,7 +51,9 @@ def sb(method, path, **kwargs):
         headers={"apikey": key, "Authorization": f"Bearer {key}",
                  "Content-Type": "application/json", **kwargs.pop("headers", {})},
         timeout=30, **kwargs)
-    r.raise_for_status()
+    if not r.ok:  # PostgREST puts the actual reason in the body, not the status
+        raise requests.HTTPError(f"{r.status_code} {path.split('?')[0]}: {r.text[:300]}",
+                                 response=r)
     return r.json() if r.text else None
 
 
@@ -70,6 +77,31 @@ STOPWORDS = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "as", "at",
 
 def title_tokens(title):
     return {w for w in re.findall(r"[a-z0-9]+", title.lower()) if w not in STOPWORDS}
+
+
+# AI budget is ~500 calls/day/model; spending it on grey-market-premium updates
+# is what starved the real news. These are stored 'rejected' (visible in admin),
+# never silently dropped, and never sent to the AI.
+LOW_VALUE = re.compile(
+    r"grey market premium|\bGMP\b|subscription status|allotment status"
+    r"|IPO day \d|day \d+ of (?:bidding|subscription)"
+    r"|top (?:gainers|losers)|multibagger|penny stock"
+    r"|stocks? to (?:watch|buy)|trade spotlight|f&o ban", re.I)
+
+
+def prioritized(items):
+    """Interleave sources so the per-run cap can never starve one (the old
+    flat slice spent every run on the first 5 feeds and 21 sources never
+    published). Highest-authority source first in each round, newest first
+    within a source, so regulators and breaking news reach the AI soonest."""
+    by_source = {}
+    for i in items:
+        by_source.setdefault(i["source"]["name"], []).append(i)
+    for queue in by_source.values():
+        queue.sort(key=lambda i: i["published_at"] or "", reverse=True)
+    rounds = sorted(by_source.values(),
+                    key=lambda q: -(q[0]["source"].get("authority") or 5))
+    return [i for tier in zip_longest(*rounds) for i in tier if i is not None]
 
 
 def assign_cluster(title, recent):
@@ -136,6 +168,20 @@ def fetch_items(source):
 
 # ---------- primary sources: NSE/BSE corporate announcements (spec M3) ----------
 
+def parse_exchange_ts(value):
+    """BSE/NSE return '07-Aug-2026 23:57:46' (sometimes T-separated), which
+    Postgres rejects outright — pass None rather than poison the insert."""
+    if not value:
+        return None
+    text = str(value).strip().replace("T", " ")
+    for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%dT%H:%M:%S+05:30")
+        except ValueError:
+            continue
+    return None
+
+
 FILING_NOISE = re.compile(
     r"trading window|share certificate|duplicate share|loss of share|regulation 74"
     r"|reg\. 74|esop|investor meet|analyst meet|newspaper publication|book closure",
@@ -165,7 +211,7 @@ def fetch_bse(source):
         items.append({"source": source, "url": url, "url_hash": url_hash(url),
                       "headline": headline[:500], "body": a.get("MORE", "") or subject,
                       "image_url": None,
-                      "published_at": (a.get("NEWS_DT") or None) and a["NEWS_DT"] + "+05:30"})
+                      "published_at": parse_exchange_ts(a.get("NEWS_DT"))})
     return items
 
 
@@ -189,8 +235,7 @@ def fetch_nse(source):
         items.append({"source": source, "url": url, "url_hash": url_hash(url),
                       "headline": f"{symbol}: {subject}"[:500],
                       "body": a.get("attchmntText", "") or subject, "image_url": None,
-                      "published_at": (a.get("an_dt") or None) and
-                                      a["an_dt"].replace(" ", "T") + "+05:30"})
+                      "published_at": parse_exchange_ts(a.get("an_dt"))})
     return items
 
 
@@ -354,8 +399,7 @@ def retry_flagged(process_story, AIError, companies_by_key):
             "sectors": card["sectors"], "raw_ai_error": None,
             "status": "pending" if keep else "rejected",
         })
-        healed += 1
-        time.sleep(AI_CALL_GAP_SECONDS)
+        healed += 1  # ai.py throttles; no extra sleep needed
     return healed
 
 
@@ -408,7 +452,7 @@ def insert_story(row, companies_by_key, card=None):
 
 def main():
     load_env()
-    from ai import AIError, editor_pass, process_story  # after env load
+    from ai import AIError, QuotaExhausted, editor_pass, process_story  # after env load
 
     sources = sb("GET", "sources?select=*&is_active=eq.true")
     companies_by_key = {}
@@ -437,41 +481,82 @@ def main():
         if i["url_hash"] not in seen and i["url_hash"] not in batch_hashes:
             fresh.append(i)
             batch_hashes.add(i["url_hash"])
-    fresh = fresh[:MAX_STORIES_PER_RUN]
-    print(f"{len(items)} fetched, {len(fresh)} new (cap {MAX_STORIES_PER_RUN})")
+    fresh = prioritized(fresh)
 
-    processed = flagged = dropped = 0
+    # Cluster first, AI second. An item that joins an existing cluster is the
+    # same story from another outlet: store it as a 'duplicate' member (free
+    # corroboration for the alert gate) and spend no AI call on it.
+    to_process, dupes, noise = [], [], []
     for item in fresh:
-        s = item["source"]
-        base = {
-            "url": item["url"], "url_hash": item["url_hash"],
-            "cluster_id": assign_cluster(item["headline"], recent),
-            "headline": item["headline"], "source_name": s["name"],
-            "source_url": item["url"], "image_url": item["image_url"],
-            "published_at": item["published_at"],
-        }
-        try:
-            card = process_story(s["name"], item["headline"], item["body"])
-        except AIError as e:
-            insert_story({**base, "status": "flagged", "raw_ai_error": str(e)}, companies_by_key)
-            flagged += 1
-            continue
-        imp = card["impact"]
-        keep = card["is_india_relevant"] or (card["category"] == "Geopolitics" and imp["score"] >= 6)
-        story = insert_story({
-            **base,
-            "hook": card["hook"], "headline": card["headline_rewrite"],
-            "summary": card["summary"],
-            "impact_direction": imp["direction"], "impact_strength": imp["strength"],
-            "impact_horizon": imp["horizon"], "impact_score": imp["score"],
-            "confidence": card["confidence"], "category": card["category"],
-            "sectors": card["sectors"],
-            "status": "pending" if keep else "rejected",
-        }, companies_by_key, card)
-        recent.append((story["cluster_id"], title_tokens(item["headline"])))
-        processed += 1 if keep else 0
-        dropped += 0 if keep else 1
-        time.sleep(AI_CALL_GAP_SECONDS)
+        cid = assign_cluster(item["headline"], recent)
+        known = any(cid == c for c, _ in recent)
+        recent.append((cid, title_tokens(item["headline"])))
+        if known:
+            dupes.append((item, cid))
+        elif LOW_VALUE.search(item["headline"]):
+            noise.append((item, cid))
+        else:
+            to_process.append((item, cid))
+
+    skipped = max(0, len(to_process) - MAX_AI_CALLS_PER_RUN)
+    to_process = to_process[:MAX_AI_CALLS_PER_RUN]
+    print(f"{len(items)} fetched, {len(fresh)} new -> {len(to_process)} to AI, "
+          f"{len(dupes)} duplicates, {len(noise)} low-value (both free)"
+          + (f", {skipped} deferred to next run (cap {MAX_AI_CALLS_PER_RUN})" if skipped else ""))
+
+    def base_row(item, cid):
+        return {"url": item["url"], "url_hash": item["url_hash"], "cluster_id": cid,
+                "headline": item["headline"], "source_name": item["source"]["name"],
+                "source_url": item["url"], "image_url": item["image_url"],
+                "published_at": item["published_at"]}
+
+    for status, batch in (("duplicate", dupes), ("rejected", noise)):
+        for item, cid in batch:
+            try:
+                insert_story({**base_row(item, cid), "status": status}, companies_by_key)
+            except requests.RequestException as e:
+                print(f"{status.upper()} INSERT FAIL {item['url_hash'][:8]}: {e}")
+
+    # Concurrent AI; ai.py's shared throttle keeps the free tier happy.
+    processed = flagged = dropped = quota_blocked = 0
+    with ThreadPoolExecutor(max_workers=AI_CONCURRENCY) as pool:
+        futures = {pool.submit(process_story, item["source"]["name"],
+                               item["headline"], item["body"]): (item, cid)
+                   for item, cid in to_process}
+        for fut in as_completed(futures):
+            item, cid = futures[fut]
+            base = base_row(item, cid)
+            try:
+                card = fut.result()
+            except QuotaExhausted:
+                # Insert nothing: the url stays unseen, so a later run reprocesses
+                # it with the full article body instead of a headline-only retry.
+                quota_blocked += 1
+                continue
+            except AIError as e:
+                insert_story({**base, "status": "flagged", "raw_ai_error": str(e)},
+                             companies_by_key)
+                flagged += 1
+                continue
+            imp = card["impact"]
+            keep = card["is_india_relevant"] or (
+                card["category"] == "Geopolitics" and imp["score"] >= 6)
+            try:
+                insert_story({
+                    **base,
+                    "hook": card["hook"], "headline": card["headline_rewrite"],
+                    "summary": card["summary"],
+                    "impact_direction": imp["direction"], "impact_strength": imp["strength"],
+                    "impact_horizon": imp["horizon"], "impact_score": imp["score"],
+                    "confidence": card["confidence"], "category": card["category"],
+                    "sectors": card["sectors"],
+                    "status": "pending" if keep else "rejected",
+                }, companies_by_key, card)
+            except requests.RequestException as e:  # never lose the whole run to one row
+                print(f"INSERT FAIL {item['source']['name']}: {e}")
+                continue
+            processed += 1 if keep else 0
+            dropped += 0 if keep else 1
 
     if fetched_source_ids:
         ids = ",".join(str(i) for i in fetched_source_ids)
@@ -483,8 +568,9 @@ def main():
     healed = retry_flagged(process_story, AIError, companies_by_key)
     disabled = disable_dead_sources()
     approved = auto_approve()
-    print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged | "
-          f"editor: {releveled} releveled | alerts: {alerted} sent | "
+    print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
+          + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
+          + f" | editor: {releveled} releveled | alerts: {alerted} sent | "
           f"self-heal: {healed} recovered, {disabled} sources disabled, {approved} auto-approved")
 
 
