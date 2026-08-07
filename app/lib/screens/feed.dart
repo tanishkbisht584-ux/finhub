@@ -3,8 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../feed_cache.dart';
 import '../models.dart';
 import '../theme.dart';
+
+/// Whether the feed currently on screen came from the device cache.
+final servingCacheProvider = StateProvider<DateTime?>((ref) => null);
 
 final storiesProvider = FutureProvider<List<Story>>((ref) async {
   // Spec §3 feed ranking: recency + impact. Last 48h, featured pinned,
@@ -13,16 +17,27 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
       .toUtc()
       .subtract(const Duration(hours: 48))
       .toIso8601String();
-  final rows = await Supabase.instance.client
-      .from('stories')
-      .select()
-      .eq('status', 'approved')
-      .gte('published_at', since)
-      .order('is_featured', ascending: false)
-      .order('severity_level', ascending: true, nullsFirst: false)
-      .order('published_at', ascending: false)
-      .limit(50);
-  return rows.map(Story.fromJson).toList();
+  try {
+    final rows = await Supabase.instance.client
+        .from('stories')
+        .select()
+        .eq('status', 'approved')
+        .gte('published_at', since)
+        .order('is_featured', ascending: false)
+        .order('severity_level', ascending: true, nullsFirst: false)
+        .order('published_at', ascending: false)
+        .limit(50);
+    await FeedCache.save(rows.cast<Map<String, dynamic>>());
+    ref.read(servingCacheProvider.notifier).state = null;
+    return rows.map(Story.fromJson).toList();
+  } catch (_) {
+    // Offline, or Supabase having a moment. Yesterday's news beats an error
+    // screen; only surface the failure if we have nothing saved either.
+    final cached = await FeedCache.load();
+    if (cached == null || cached.isEmpty) rethrow;
+    ref.read(servingCacheProvider.notifier).state = await FeedCache.savedAt();
+    return cached.map(Story.fromJson).toList();
+  }
 });
 
 class FeedScreen extends ConsumerWidget {
@@ -31,21 +46,26 @@ class FeedScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final stories = ref.watch(storiesProvider);
+    final cachedAt = ref.watch(servingCacheProvider);
     return stories.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(
-          child: Text('Could not load feed\n$e', textAlign: TextAlign.center)),
+      error: (e, _) => _Offline(onRetry: () => ref.refresh(storiesProvider)),
       data: (list) => list.isEmpty
           ? const Center(child: Text('No stories yet — check back soon'))
-          : RefreshIndicator(
-              onRefresh: () => ref.refresh(storiesProvider.future),
-              child: PageView.builder(
-                scrollDirection: Axis.vertical,
-                itemCount: list.length,
-                onPageChanged: (i) => _logView(list[i].id),
-                itemBuilder: (context, i) => StoryCard(story: list[i]),
+          : Column(children: [
+              if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: () => ref.refresh(storiesProvider.future),
+                  child: PageView.builder(
+                    scrollDirection: Axis.vertical,
+                    itemCount: list.length,
+                    onPageChanged: (i) => _logView(list[i].id),
+                    itemBuilder: (context, i) => StoryCard(story: list[i]),
+                  ),
+                ),
               ),
-            ),
+            ]),
     );
   }
 
@@ -237,5 +257,59 @@ class _StoryCardState extends State<StoryCard>
               style: const TextStyle(
                   color: green, fontWeight: FontWeight.w600, fontSize: 14)),
         ),
+      );
+}
+
+
+/// Shown when the network failed and there is nothing cached to fall back on.
+class _Offline extends StatelessWidget {
+  const _Offline({required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.cloud_off, size: 40, color: inkDim),
+            const SizedBox(height: 14),
+            Text("Can't reach FinSwipe",
+                style: serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            Text('Check your connection — your saved stories still work.',
+                textAlign: TextAlign.center, style: mono.copyWith(fontSize: 12)),
+            const SizedBox(height: 20),
+            OutlinedButton(
+              onPressed: onRetry,
+              style: OutlinedButton.styleFrom(
+                  foregroundColor: ink, side: const BorderSide(color: border)),
+              child: const Text('Try again'),
+            ),
+          ]),
+        ),
+      );
+}
+
+/// Quiet line marking the feed as a saved copy, so nothing on screen is
+/// silently passed off as live.
+class _CacheBanner extends StatelessWidget {
+  const _CacheBanner({required this.savedAt});
+  final DateTime savedAt;
+
+  String get _age {
+    final m = DateTime.now().difference(savedAt).inMinutes;
+    if (m < 1) return 'just now';
+    if (m < 60) return '$m min ago';
+    final h = m ~/ 60;
+    return h < 24 ? '$h h ago' : '${h ~/ 24} d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        color: amber.withValues(alpha: 0.12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Text('Offline — showing stories saved $_age. Pull to retry.',
+            style: mono.copyWith(fontSize: 11, color: amber)),
       );
 }

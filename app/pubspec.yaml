@@ -1,7 +1,7 @@
 name: finswipe
 description: Understand what market news means in 15 seconds.
 publish_to: 'none'
-version: 0.3.0+3
+version: 0.4.0+4
 
 environment:
   sdk: ^3.6.0
@@ -12,6 +12,7 @@ dependencies:
   supabase_flutter: ^2.8.0
   flutter_riverpod: ^2.6.1
   url_launcher: ^6.3.1
+  shared_preferences: ^2.3.3
 
 dev_dependencies:
   flutter_test:
