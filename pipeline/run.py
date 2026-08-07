@@ -19,7 +19,7 @@ import requests
 # AI calls per run. Only genuinely new stories cost one — same-story items from
 # other outlets are stored as cluster duplicates for free, so this goes much
 # further than the old flat story cap it replaces.
-MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "20"))
+MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "40"))
 AI_CONCURRENCY = int(os.environ.get("AI_CONCURRENCY", "6"))
 AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
 TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
