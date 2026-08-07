@@ -36,7 +36,7 @@ tab_queue, tab_flagged, tab_health = st.tabs(["Review queue", "Flagged", "Source
 with tab_queue:
     rows = sb("GET", "stories?status=eq.pending&select=*"
                      "&order=impact_score.desc.nullslast,created_at.desc&limit=50")
-    st.caption(f"{len(rows)} pending — score < 7 auto-approves after 2 h; ≥ 8 single-source waits here")
+    st.caption(f"{len(rows)} pending — score < 8 auto-approves after 5 min; ≥ 8 single-source waits here")
     for s in rows:
         badge = f"L{s['severity_level']} · {s['impact_score']}/10 · {s['category']} · {s['confidence']}"
         with st.expander(f"[{badge}] {s['headline']}"):

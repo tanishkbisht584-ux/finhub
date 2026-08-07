@@ -6,6 +6,7 @@ import os
 import pathlib
 import re
 import time
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus, urlsplit, urlunsplit, parse_qsl, urlencode
@@ -15,6 +16,9 @@ import requests
 
 MAX_STORIES_PER_RUN = int(os.environ.get("MAX_STORIES_PER_RUN", "40"))
 AI_CALL_GAP_SECONDS = 5  # free-tier RPM throttle (spec §5)
+AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
+TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
+TRUSTED_AUTHORITY = 8       # ET/Mint/WSJ/BBC/Moneycontrol tier; below this never alerts solo
 FETCH_TIMEOUT = 20
 UA = {"User-Agent": "Mozilla/5.0 (FinSwipe pipeline; +private)"}
 
@@ -184,9 +188,18 @@ FETCHERS = {"nse": fetch_nse, "bse": fetch_bse}
 
 # ---------- alert engine (spec §7 machine gate) ----------
 
-def gate_passes(score, cluster_size, authority):
-    """Impact >= 8 AND (2+ independent sources OR primary source). Pure for tests."""
-    return score is not None and score >= 8 and (cluster_size >= 2 or authority >= 10)
+def gate_passes(score, cluster_size, authority, age_minutes=0):
+    """Impact >= 8 AND one of: 2+ independent sources, a primary source, or a
+    trusted outlet (authority >= 8) whose story is still uncorroborated after
+    TRUSTED_SOLO_MINUTES. The grace window is the speed/trust trade: corroboration
+    usually lands first and fires sooner; if it doesn't, a major outlet alone is
+    good enough after 5 min. Low-authority sources still never alert solo.
+    Pure for tests."""
+    if score is None or score < 8:
+        return False
+    return (cluster_size >= 2
+            or authority >= 10
+            or (authority >= TRUSTED_AUTHORITY and age_minutes >= TRUSTED_SOLO_MINUTES))
 
 
 def send_fcm(hook, headline, story_id):
@@ -215,26 +228,36 @@ def send_fcm(hook, headline, story_id):
 
 def alert_engine(authority_by_source):
     """Speed path: qualifying stories auto-approve + alert with no human in the loop.
-    Global cap 5/day; single-source non-primary high-impact stays in the admin queue."""
-    midnight = iso(datetime.now(timezone.utc).astimezone().replace(
+    The 5/day cap limits PUSHES, not publication — a story past the cap is still
+    approved so it reaches the feed, it just doesn't buzz anyone's phone.
+    Single-source non-primary high-impact stays in the admin queue until it is
+    either corroborated or old enough to clear gate_passes()."""
+    now = datetime.now(timezone.utc)
+    midnight = iso(now.astimezone().replace(
         hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
     sent_today = len(sb("GET", f"stories?select=id&alerted_at=gte.{midnight}"))
-    cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=6))
-    candidates = sb("GET", "stories?select=id,hook,headline,impact_score,cluster_id,source_name"
+    cutoff = iso(now - timedelta(hours=6))
+    candidates = sb("GET", "stories?select=id,hook,headline,impact_score,cluster_id,"
+                           "source_name,created_at"
                            f"&alerted_at=is.null&impact_score=gte.8&created_at=gte.{cutoff}"
                            "&status=in.(pending,approved)&order=impact_score.desc")
-    alerted = 0
+    alerted = published = 0
     for s in candidates:
-        if sent_today + alerted >= 5:
-            break
         cluster_size = len(sb("GET", f"stories?select=id&cluster_id=eq.{s['cluster_id']}"))
+        age_minutes = (now - parse_ts(s["created_at"])).total_seconds() / 60
         if not gate_passes(s["impact_score"], cluster_size,
-                           authority_by_source.get(s["source_name"], 5)):
+                           authority_by_source.get(s["source_name"], 5), age_minutes):
             continue
-        send_fcm(s["hook"] or s["headline"], s["headline"], s["id"])
-        sb("PATCH", f"stories?id=eq.{s['id']}", json={
-            "status": "approved", "alerted_at": datetime.now(timezone.utc).isoformat()})
-        alerted += 1
+        patch = {"status": "approved"}
+        if sent_today + alerted < 5:
+            send_fcm(s["hook"] or s["headline"], s["headline"], s["id"])
+            patch["alerted_at"] = now.isoformat()
+            alerted += 1
+        else:
+            published += 1  # capped: goes live silently, no push
+        sb("PATCH", f"stories?id=eq.{s['id']}", json=patch)
+    if published:
+        print(f"alert cap reached: {published} story(ies) published without a push")
     return alerted
 
 
@@ -269,6 +292,12 @@ def chief_editor(editor_pass):
 
 def iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_ts(s):
+    """Postgres timestamptz -> aware datetime. Naive input is treated as UTC."""
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def retry_flagged(process_story, AIError, companies_by_key):
@@ -313,10 +342,13 @@ def disable_dead_sources():
 
 
 def auto_approve():
-    """Spec §9: score < 7 auto-approves after 2h unreviewed; score >= 8 single-source
-    stays pending for the admin queue."""
-    cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=2))
-    rows = sb("PATCH", f"stories?status=eq.pending&impact_score=lt.7&created_at=lt.{cutoff}",
+    """Spec §9: score < 8 auto-approves after AUTO_APPROVE_MINUTES unreviewed;
+    score >= 8 is alert_engine's job.
+
+    Must stay < 8, not < 7: alert_engine only touches score >= 8, so a score-7
+    story matched neither rule and sat pending forever — and 7 is L2 'major'."""
+    cutoff = iso(datetime.now(timezone.utc) - timedelta(minutes=AUTO_APPROVE_MINUTES))
+    rows = sb("PATCH", f"stories?status=eq.pending&impact_score=lt.8&created_at=lt.{cutoff}",
               json={"status": "approved"}, headers={"Prefer": "return=representation"})
     return len(rows or [])
 
@@ -428,4 +460,16 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # LOOP_SECONDS unset -> one run and exit (GitHub Actions). Set it -> stay
+    # resident and poll, for an always-on host. main() is idempotent, so a
+    # crashed run costs nothing but the interval.
+    loop_seconds = int(os.environ.get("LOOP_SECONDS", "0"))
+    if not loop_seconds:
+        main()
+    else:
+        while True:
+            try:
+                main()
+            except Exception:
+                traceback.print_exc()  # never let one bad run kill the poller
+            time.sleep(loop_seconds)
