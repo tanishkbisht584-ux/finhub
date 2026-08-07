@@ -85,6 +85,31 @@ def test_independent_sources_ignores_same_newsroom():
     assert independent_sources(["SEBI"]) == 1
 
 
+def test_breaking_news_jumps_the_backlog():
+    """A story minutes old must reach the AI before a 300-item backlog, whatever
+    its source's authority — that ordering is the whole latency promise."""
+    from datetime import datetime, timedelta, timezone
+    from run import prioritized
+    now = datetime.now(timezone.utc)
+
+    def item(source, authority, minutes_old):
+        return {"source": {"name": source, "authority": authority},
+                "published_at": (now - timedelta(minutes=minutes_old)).isoformat()}
+
+    backlog = [item(f"Src{i}", 10, 600) for i in range(30)]
+    fresh_small = item("Tiny Outlet", 5, 2)     # 2 min old, lowest authority
+    fresh_older = item("Big Wire", 10, 9)       # 9 min old, highest authority
+    out = prioritized(backlog + [fresh_older, fresh_small])
+    assert out[0] is fresh_small and out[1] is fresh_older  # newest first
+    assert len(out) == 32                                   # nothing dropped
+
+
+def test_undated_items_never_counted_as_breaking():
+    from run import age_minutes
+    assert age_minutes({"published_at": None}) == float("inf")
+    assert age_minutes({"published_at": "not-a-date"}) == float("inf")
+
+
 def test_filing_noise_filter():
     from run import FILING_NOISE
     assert FILING_NOISE.search("Closure of Trading Window")

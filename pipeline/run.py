@@ -22,8 +22,13 @@ import requests
 MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "120"))
 AI_CONCURRENCY = int(os.environ.get("AI_CONCURRENCY", "6"))
 AI_PHASE_SECONDS = int(os.environ.get("AI_PHASE_SECONDS", "300"))  # leave room for alerts/approve before the job timeout
-DAILY_AI_BUDGET = int(os.environ.get("DAILY_AI_BUDGET", "2400"))  # under the ~3000 free ceiling, paced across the day
+# Sized against the measured pool: 4 Gemini keys x 4 models (~8000) + 4 Groq
+# keys x 3 models (12000 exact, from x-ratelimit headers). 16000 leaves the
+# Gemini estimate a wide error margin and ~4000/day spare for runtime Q&A (M5).
+DAILY_AI_BUDGET = int(os.environ.get("DAILY_AI_BUDGET", "16000"))
 AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
+FAST_LANE_SCORE = 8         # >= this publishes on arrival, no approval wait
+BREAKING_MINUTES = 15       # younger than this jumps the AI queue entirely
 TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
 TRUSTED_AUTHORITY = 8       # ET/Mint/WSJ/BBC/Moneycontrol tier; below this never alerts solo
 MAX_ALERTS_PER_DAY = 5      # pushes only; publication is never capped (spec §7)
@@ -91,19 +96,37 @@ LOW_VALUE = re.compile(
     r"|stocks? to (?:watch|buy)|trade spotlight|f&o ban", re.I)
 
 
+def age_minutes(item, now=None):
+    """Minutes since the outlet published it; unknown dates sort as ancient."""
+    ts = item.get("published_at")
+    if not ts:
+        return float("inf")
+    try:
+        return ((now or datetime.now(timezone.utc)) - parse_ts(ts)).total_seconds() / 60
+    except (ValueError, TypeError):
+        return float("inf")
+
+
 def prioritized(items):
-    """Interleave sources so the per-run cap can never starve one (the old
-    flat slice spent every run on the first 5 feeds and 21 sources never
-    published). Highest-authority source first in each round, newest first
-    within a source, so regulators and breaking news reach the AI soonest."""
+    """Order the AI queue: minutes-old news first, then a fair round-robin.
+
+    Round-robin alone fixed source starvation but still let a 300-item backlog
+    sit between a just-published market-mover and the AI. Anything younger than
+    BREAKING_MINUTES now jumps the whole queue, newest first, so breaking news
+    is in the first batch of the very next poll regardless of backlog depth.
+    The rest keeps the interleave: one per source per round, authority first."""
+    now = datetime.now(timezone.utc)
+    breaking = sorted((i for i in items if age_minutes(i, now) <= BREAKING_MINUTES),
+                      key=lambda i: age_minutes(i, now))
     by_source = {}
     for i in items:
-        by_source.setdefault(i["source"]["name"], []).append(i)
+        if age_minutes(i, now) > BREAKING_MINUTES:
+            by_source.setdefault(i["source"]["name"], []).append(i)
     for queue in by_source.values():
         queue.sort(key=lambda i: i["published_at"] or "", reverse=True)
     rounds = sorted(by_source.values(),
                     key=lambda q: -(q[0]["source"].get("authority") or 5))
-    return [i for tier in zip_longest(*rounds) for i in tier if i is not None]
+    return breaking + [i for tier in zip_longest(*rounds) for i in tier if i is not None]
 
 
 def assign_cluster(title, recent):
@@ -597,6 +620,13 @@ def main():
             imp = card["impact"]
             keep = card["is_india_relevant"] or (
                 card["category"] == "Geopolitics" and imp["score"] >= 6)
+            # Fast lane (owner's latency spec, 2026-08-08): a major story is
+            # visible the moment it is understood — no approval wait — because
+            # the cost of being 5 min late on a market-mover is worse than the
+            # cost of a rare bad card, which the admin can still reject.
+            # PUSHING is untouched: alert_engine still demands corroboration
+            # before anything buzzes a phone. Publish fast, alert carefully.
+            live_now = keep and imp["score"] >= FAST_LANE_SCORE
             try:
                 insert_story({
                     **base,
@@ -606,7 +636,7 @@ def main():
                     "impact_horizon": imp["horizon"], "impact_score": imp["score"],
                     "confidence": card["confidence"], "category": card["category"],
                     "sectors": card["sectors"],
-                    "status": "pending" if keep else "rejected",
+                    "status": ("approved" if live_now else "pending") if keep else "rejected",
                 }, companies_by_key, card)
             except requests.RequestException as e:  # never lose the whole run to one row
                 print(f"INSERT FAIL {item['source']['name']}: {e}")

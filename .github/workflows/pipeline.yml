@@ -41,5 +41,5 @@ jobs:
           # Stay resident ~5.5h polling every 90s, then exit; the queued run
           # (concurrency group, cancel-in-progress: false) takes over, so
           # coverage is continuous regardless of when the cron is honoured.
-          LOOP_SECONDS: '90'
+          LOOP_SECONDS: '45'
           LOOP_MAX_SECONDS: '19800'
