@@ -76,6 +76,15 @@ def test_alert_gate():
     assert not gate_passes(None, 3, 10)
 
 
+def test_independent_sources_ignores_same_newsroom():
+    from run import independent_sources
+    # one newsroom's two feeds must not look like corroboration
+    assert independent_sources(["ET Markets", "ET Top Stories"]) == 1
+    assert independent_sources(["ET Markets", "LiveMint Markets"]) == 2
+    assert independent_sources(["ET Markets", "ET IPO", "RBI Press"]) == 2
+    assert independent_sources(["SEBI"]) == 1
+
+
 def test_filing_noise_filter():
     from run import FILING_NOISE
     assert FILING_NOISE.search("Closure of Trading Window")

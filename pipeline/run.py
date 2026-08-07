@@ -260,6 +260,23 @@ def may_push(score, now, sent_today):
     return True
 
 
+# Several feeds share one newsroom, so counting rows in a cluster overstates
+# corroboration: ET Markets + ET Top Stories on the same story is ONE outlet
+# agreeing with itself, not two independent confirmations. Anything unlisted is
+# its own publisher. ponytail: a dict until it outgrows one screen, then a
+# `publisher` column on sources.
+PUBLISHER = {
+    "ET Top Stories": "Economic Times", "ET Markets": "Economic Times",
+    "ET Economy": "Economic Times", "ET IPO": "Economic Times",
+    "GNews Moneycontrol": "Moneycontrol",
+}
+
+
+def independent_sources(source_names):
+    """Distinct newsrooms behind a cluster — the number the alert gate means."""
+    return len({PUBLISHER.get(n, n) for n in source_names})
+
+
 def gate_passes(score, cluster_size, authority, age_minutes=0):
     """Impact >= 8 AND one of: 2+ independent sources, a primary source, or a
     trusted outlet (authority >= 8) whose story is still uncorroborated after
@@ -317,7 +334,9 @@ def alert_engine(authority_by_source):
                            "&status=in.(pending,approved)&order=impact_score.desc")
     alerted = published = 0
     for s in candidates:
-        cluster_size = len(sb("GET", f"stories?select=id&cluster_id=eq.{s['cluster_id']}"))
+        cluster_size = independent_sources(
+            r["source_name"] for r in
+            sb("GET", f"stories?select=source_name&cluster_id=eq.{s['cluster_id']}"))
         age_minutes = (now - parse_ts(s["created_at"])).total_seconds() / 60
         if not gate_passes(s["impact_score"], cluster_size,
                            authority_by_source.get(s["source_name"], 5), age_minutes):
