@@ -7,6 +7,10 @@ on:
     - cron: '0 */2 * * *'
   workflow_dispatch:
 
+# least privilege: the job only reads the repo; secrets are injected explicitly
+permissions:
+  contents: read
+
 jobs:
   run:
     runs-on: ubuntu-latest

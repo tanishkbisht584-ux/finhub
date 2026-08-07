@@ -1,11 +1,15 @@
 """FinSwipe admin panel (spec §9): review queue, flagged stories, source health.
 Run: streamlit run admin/app.py  ·  Deploy: Streamlit Community Cloud (free)."""
+import hmac
+
 import requests
 import streamlit as st
 
 st.set_page_config(page_title="FinSwipe Admin", layout="wide")
 
-if st.text_input("Admin password", type="password") != st.secrets["ADMIN_PASSWORD"]:
+# constant-time compare — prevents timing attacks on the password gate
+if not hmac.compare_digest(st.text_input("Admin password", type="password"),
+                           st.secrets["ADMIN_PASSWORD"]):
     st.stop()
 
 URL = st.secrets["SUPABASE_URL"].rstrip("/")
