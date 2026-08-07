@@ -7,12 +7,25 @@ class SignInScreen extends StatelessWidget {
   const SignInScreen({super.key});
 
   Future<void> _google(BuildContext context) async {
+    // signInWithOAuth returns false (no throw) when the browser launch fails,
+    // so a silent failure needs the fallback + explicit message below.
     try {
-      await Supabase.instance.client.auth.signInWithOAuth(
+      var ok = await Supabase.instance.client.auth.signInWithOAuth(
         OAuthProvider.google,
         redirectTo: 'finswipe://login-callback',
         authScreenLaunchMode: LaunchMode.externalApplication,
       );
+      if (!ok) {
+        ok = await Supabase.instance.client.auth.signInWithOAuth(
+          OAuthProvider.google,
+          redirectTo: 'finswipe://login-callback',
+          authScreenLaunchMode: LaunchMode.platformDefault,
+        );
+      }
+      if (!ok && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not open a browser for sign-in')));
+      }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
@@ -53,7 +66,7 @@ class SignInScreen extends StatelessWidget {
               child: const Text('Continue with Google'),
             ),
             const SizedBox(height: 32),
-            Text('Not investment advice · Terms · Privacy',
+            Text('Not investment advice · Terms · Privacy · v0.2.1',
                 textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11)),
           ],
         ),
