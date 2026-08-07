@@ -25,8 +25,8 @@ class FeedScreen extends ConsumerWidget {
     final stories = ref.watch(storiesProvider);
     return stories.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Could not load feed\n$e',
-          textAlign: TextAlign.center)),
+      error: (e, _) => Center(
+          child: Text('Could not load feed\n$e', textAlign: TextAlign.center)),
       data: (list) => list.isEmpty
           ? const Center(child: Text('No stories yet — check back soon'))
           : RefreshIndicator(
@@ -44,7 +44,6 @@ class FeedScreen extends ConsumerWidget {
   void _logView(int storyId) {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) return;
-    // fire-and-forget analytics event (spec §6: rec-engine training data)
     Supabase.instance.client
         .from('events')
         .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'})
@@ -67,80 +66,119 @@ class StoryCard extends StatelessWidget {
     }
   }
 
+  String get _horizon => switch (story.impactHorizon) {
+        'short_term' => 'SHORT',
+        'long_term' => 'LONG',
+        'both' => 'SHORT + LONG',
+        _ => '',
+      };
+
   @override
   Widget build(BuildContext context) {
-    final impact = impactColor(story.impactDirection);
-    return Container(
-      decoration: aurora(story.category),
-      padding: const EdgeInsets.fromLTRB(20, 60, 20, 90),
-      child: GlassCard(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                _chip(story.category ?? '—', Colors.white24),
-                const SizedBox(width: 8),
-                _chip('${story.impactScore ?? '?'}/10', impact.withValues(alpha: 0.25),
-                    textColor: impact),
-                if (story.severityLevel == 1) ...[
-                  const SizedBox(width: 8),
-                  _chip('L1', emberL1.withValues(alpha: 0.3), textColor: emberL1),
-                ],
-                if (story.confidence != null && story.confidence != 'high') ...[
-                  const SizedBox(width: 8),
-                  _chip(story.confidence!, Colors.white12),
-                ],
-              ]),
-              const SizedBox(height: 20),
-              if (story.hook != null)
-                Text(story.hook!,
-                    style: const TextStyle(
-                        fontSize: 28, fontWeight: FontWeight.w800, height: 1.15)),
-              const SizedBox(height: 12),
-              Text(story.headline,
-                  style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.white.withValues(alpha: 0.85))),
-              const SizedBox(height: 16),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Text(story.summary ?? '',
-                      style: TextStyle(
-                          fontSize: 15,
-                          height: 1.5,
-                          color: Colors.white.withValues(alpha: 0.75))),
+    final dir = directionColor(story.impactDirection);
+    return SafeArea(
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        decoration: BoxDecoration(
+          color: surface,
+          border: Border(left: BorderSide(color: dir, width: 3)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // IMPACT 9/10 · SHORT + LONG — monospace ledger line
+            Text.rich(TextSpan(children: [
+              TextSpan(
+                  text: 'IMPACT ${story.impactScore ?? '–'}/10',
+                  style: mono.copyWith(
+                      color: impactColor(story.impactScore),
+                      fontWeight: FontWeight.w700)),
+              if (_horizon.isNotEmpty)
+                TextSpan(text: '  ·  $_horizon', style: mono),
+            ])),
+            const SizedBox(height: 14),
+            if (story.hook != null)
+              Text(story.hook!,
+                  style: serif.copyWith(
+                      fontSize: 30, fontWeight: FontWeight.w700, height: 1.2)),
+            const SizedBox(height: 12),
+            Text(story.headline,
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600, height: 1.35)),
+            const SizedBox(height: 12),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(story.summary ?? '',
+                        style: TextStyle(
+                            fontSize: 15, height: 1.55, color: ink.withValues(alpha: 0.8))),
+                    if (story.sectors.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: story.sectors
+                            .map((s) => Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                      border: Border.all(color: border)),
+                                  child: Text(s,
+                                      style: mono.copyWith(fontSize: 12)),
+                                ))
+                            .toList(),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              Row(children: [
-                Expanded(
-                  child: InkWell(
-                    onTap: () => launchUrl(Uri.parse(story.sourceUrl),
-                        mode: LaunchMode.externalApplication),
-                    child: Text(story.sourceName,
-                        style: const TextStyle(
-                            decoration: TextDecoration.underline,
-                            color: Colors.white60)),
-                  ),
+            ),
+            const Divider(height: 20),
+            Row(children: [
+              Expanded(
+                child: Text.rich(
+                  TextSpan(children: [
+                    TextSpan(text: story.sourceName, style: mono.copyWith(fontSize: 12)),
+                    const TextSpan(text: '   '),
+                    TextSpan(
+                      text: 'Read original →',
+                      style: mono.copyWith(
+                          fontSize: 12,
+                          color: ink,
+                          decoration: TextDecoration.underline),
+                    ),
+                  ]),
                 ),
-                IconButton(
-                    onPressed: () => _save(context),
-                    icon: const Icon(Icons.bookmark_add_outlined)),
-              ]),
-            ],
-          ),
+              ),
+              if (story.confidence != null && story.confidence != 'high')
+                Text(story.confidence!, style: mono.copyWith(fontSize: 12)),
+            ]),
+            const SizedBox(height: 10),
+            Row(children: [
+              _action('Save', () => _save(context)),
+              _action('Source',
+                  () => launchUrl(Uri.parse(story.sourceUrl),
+                      mode: LaunchMode.externalApplication)),
+              const Spacer(),
+              Text('Not investment advice',
+                  style: mono.copyWith(fontSize: 11)),
+            ]),
+          ],
         ),
       ),
     );
   }
 
-  Widget _chip(String label, Color bg, {Color? textColor}) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-            color: bg, borderRadius: BorderRadius.circular(999)),
-        child: Text(label,
-            style: TextStyle(fontSize: 12, color: textColor ?? Colors.white70)),
+  Widget _action(String label, VoidCallback onTap) => Padding(
+        padding: const EdgeInsets.only(right: 18),
+        child: InkWell(
+          onTap: onTap,
+          child: Text(label,
+              style: const TextStyle(
+                  color: green, fontWeight: FontWeight.w600, fontSize: 14)),
+        ),
       );
 }

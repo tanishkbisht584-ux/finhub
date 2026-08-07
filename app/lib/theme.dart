@@ -1,72 +1,51 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
-/// Liquid glass (spec §8): category-tinted static aurora gradients, frosted
-/// cards, severity/impact accents riding on top.
+/// Minimal ledger (docs/mockups/finswipe-minimal-mockup.png): no blur, no
+/// aurora, no colour-by-category. Red/green only for market direction and
+/// on/off state. Numbers monospace, the hook serif — it alone carries weight.
 
-const categoryTints = <String, Color>{
-  'Markets': Color(0xFF1B2A4A),
-  'Economy': Color(0xFF1F3A2E),
-  'IPO': Color(0xFF3A2A1F),
-  'Global': Color(0xFF2A1F3A),
-  'Commodities': Color(0xFF3A331F),
-  'Corporate': Color(0xFF1F2F3A),
-  'Policy': Color(0xFF33203A),
-  'Geopolitics': Color(0xFF3A1F26),
-};
+const bg = Color(0xFF0E100F);
+const surface = Color(0xFF161917);
+const border = Color(0xFF272B28);
+const ink = Color(0xFFE8E6E3);
+const inkDim = Color(0xFF9BA09C);
+const green = Color(0xFF3ECF8E);
+const red = Color(0xFFE5484D);
+const amber = Color(0xFFE2B93B);
 
-const positive = Color(0xFF6EE7B7); // mint
-const negative = Color(0xFFFCA5A5); // coral
-const emberL1 = Color(0xFFF87171);
-
-Color impactColor(String? direction) => switch (direction) {
-      'positive' => positive,
-      'negative' => negative,
-      'mixed' => const Color(0xFFFCD34D),
-      _ => const Color(0xFF9CA3AF),
+Color directionColor(String? direction) => switch (direction) {
+      'positive' => green,
+      'negative' => red,
+      'mixed' => amber,
+      _ => inkDim,
     };
 
-/// Static aurora background — pre-computed gradient, never live blur.
-BoxDecoration aurora(String? category) {
-  final tint = categoryTints[category] ?? categoryTints['Markets']!;
-  return BoxDecoration(
-    gradient: LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [tint, const Color(0xFF0B0F1A), Color.lerp(tint, Colors.black, 0.5)!],
-    ),
-  );
-}
+/// High impact burns ember; the rest stays quiet.
+Color impactColor(int? score) => (score ?? 0) >= 8 ? red : inkDim;
 
-/// One of the at-most-two live blur surfaces per screen.
-class GlassCard extends StatelessWidget {
-  const GlassCard({super.key, required this.child});
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(24),
-            color: Colors.white.withValues(alpha: 0.08),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-          ),
-          child: child,
-        ),
-      ),
-    );
-  }
-}
+const serif = TextStyle(fontFamily: 'serif', color: ink);
+const mono = TextStyle(fontFamily: 'monospace', color: inkDim);
 
 final appTheme = ThemeData(
   brightness: Brightness.dark,
-  scaffoldBackgroundColor: const Color(0xFF0B0F1A),
-  colorScheme: ColorScheme.fromSeed(
-      seedColor: const Color(0xFF6366F1), brightness: Brightness.dark),
+  scaffoldBackgroundColor: bg,
+  colorScheme: const ColorScheme.dark(
+    surface: bg,
+    primary: green,
+    error: red,
+  ),
+  dividerColor: border,
   useMaterial3: true,
+  navigationBarTheme: NavigationBarThemeData(
+    backgroundColor: surface,
+    indicatorColor: green.withValues(alpha: 0.15),
+  ),
+  filledButtonTheme: FilledButtonThemeData(
+    style: FilledButton.styleFrom(
+      backgroundColor: green,
+      foregroundColor: const Color(0xFF0B2417),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      textStyle: const TextStyle(fontWeight: FontWeight.w600),
+    ),
+  ),
 );

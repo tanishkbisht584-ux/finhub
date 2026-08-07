@@ -24,32 +24,37 @@ class SignInScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: aurora('Markets'),
-        alignment: Alignment.center,
+      body: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('FinSwipe',
+            Text('FinSwipe',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 42, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 8),
-            Text('Understand market news in 15 seconds',
+                style: serif.copyWith(fontSize: 40, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            Text('Understand the market in fifteen\nseconds a day',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.7))),
+                style: serif.copyWith(
+                    fontSize: 15,
+                    fontStyle: FontStyle.italic,
+                    color: inkDim)),
             const SizedBox(height: 48),
-            FilledButton.icon(
+            OutlinedButton(
               onPressed: () => _google(context),
-              icon: const Icon(Icons.login),
-              label: const Text('Continue with Google'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: ink,
+                side: const BorderSide(color: border),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6)),
+              ),
+              child: const Text('Continue with Google'),
             ),
-            const SizedBox(height: 24),
-            Text('Not investment advice.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 12, color: Colors.white.withValues(alpha: 0.5))),
+            const SizedBox(height: 32),
+            Text('Not investment advice · Terms · Privacy',
+                textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11)),
           ],
         ),
       ),

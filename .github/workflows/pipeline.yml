@@ -1,10 +1,16 @@
 name: pipeline
 on:
   schedule:
-    # every 15 min Mon-Fri 09:00-16:00 IST (03:30-10:30 UTC)
-    - cron: '*/15 3-10 * * 1-5'
-    # every 2 h otherwise (overlap is fine — runs are idempotent)
-    - cron: '0 */2 * * *'
+    # Budget: private-repo free tier is 2000 Actions min/month; a run bills 2 min
+    # (measured median 69s, rounded up). Schedules below = ~648 runs ≈ 1300 min.
+    # Do NOT add a cron without re-checking this total. Crons must not overlap:
+    # overlapping runs are idempotent for data but get billed twice.
+    # every 20 min Mon-Fri 08:30-16:00 IST (03:00-10:59 UTC) — pre-open + trading
+    - cron: '*/20 3-10 * * 1-5'
+    # Mon-Fri evening/night IST (17:30, 20:30, 23:30, 02:30)
+    - cron: '0 12,15,18,21 * * 1-5'
+    # weekends, every 6 h
+    - cron: '0 */6 * * 6,0'
   workflow_dispatch:
 
 # least privilege: the job only reads the repo; secrets are injected explicitly
@@ -14,7 +20,8 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # caps a hung run's billed minutes; measured max is 290s
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
