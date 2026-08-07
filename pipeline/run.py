@@ -29,6 +29,8 @@ DAILY_AI_BUDGET = int(os.environ.get("DAILY_AI_BUDGET", "16000"))
 AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
 FAST_LANE_SCORE = 8         # >= this publishes on arrival, no approval wait
 BREAKING_MINUTES = 15       # younger than this jumps the AI queue entirely
+SILENT_SOURCE_DAYS = 3      # fetches fine but publishes nothing -> retire it
+REVIVE_AFTER_HOURS = 12     # ... and re-probe every retired source this often
 TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
 TRUSTED_AUTHORITY = 8       # ET/Mint/WSJ/BBC/Moneycontrol tier; below this never alerts solo
 MAX_ALERTS_PER_DAY = 5      # pushes only; publication is never capped (spec §7)
@@ -466,14 +468,69 @@ def retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key):
 
 
 def disable_dead_sources():
-    """A feed that hasn't succeeded in 3 days is dead — deactivate it so it stops
-    wasting run time; visible (and re-enablable) in the admin health tab."""
-    cutoff = iso(datetime.now(timezone.utc) - timedelta(days=3))
-    dead = sb("PATCH", f"sources?is_active=eq.true&last_fetched_at=lt.{cutoff}",
-              json={"is_active": False}, headers={"Prefer": "return=representation"})
-    for s in dead or []:
-        print(f"SELF-HEAL: disabled dead source {s['name']}")
-    return len(dead or [])
+    """Two ways a source dies, and only one used to be caught.
+
+    (a) It stops responding — last_fetched_at goes stale. Caught before.
+    (b) It answers HTTP 200 forever with frozen content. last_fetched_at keeps
+        updating, so it looked permanently healthy while contributing nothing.
+        This is exactly how Moneycontrol's RSS died (200 OK, frozen since Apr
+        2024) and we would never have noticed. Now a source that fetches fine
+        but has produced no story in SILENT_SOURCE_DAYS is retired too.
+
+    Nothing is deleted: a retired source is re-probed by revive_sources()."""
+    now = datetime.now(timezone.utc)
+    dead = sb("PATCH", f"sources?is_active=eq.true&last_fetched_at=lt.{iso(now - timedelta(days=3))}",
+              json={"is_active": False}, headers={"Prefer": "return=representation"}) or []
+    for s in dead:
+        print(f"SELF-HEAL: disabled unreachable source {s['name']}")
+
+    since = iso(now - timedelta(days=SILENT_SOURCE_DAYS))
+    producing = {r["source_name"] for r in
+                 sb("GET", f"stories?select=source_name&created_at=gte.{since}")}
+    for s in sb("GET", "sources?select=id,name,last_fetched_at&is_active=eq.true"):
+        # Only judge a source that has had a fair chance: seeded long enough ago
+        # that SILENT_SOURCE_DAYS of silence is evidence rather than newness.
+        if s["name"] in producing or not s["last_fetched_at"]:
+            continue
+        if parse_ts(s["last_fetched_at"]) < now - timedelta(days=SILENT_SOURCE_DAYS):
+            continue  # stale-fetch case, already handled above
+        first_seen = sb("GET", f"stories?select=created_at&source_name=eq."
+                               f"{quote_plus(s['name'])}&order=created_at.asc&limit=1")
+        if not first_seen or parse_ts(first_seen[0]["created_at"]) > now - timedelta(days=SILENT_SOURCE_DAYS):
+            continue  # too new to judge
+        sb("PATCH", f"sources?id=eq.{s['id']}", json={"is_active": False})
+        dead.append(s)
+        print(f"SELF-HEAL: retired silent source {s['name']} "
+              f"(fetches fine, no story in {SILENT_SOURCE_DAYS}d)")
+    return len(dead)
+
+
+def revive_sources():
+    """Re-probe retired sources so an outage is never permanent.
+
+    Disabling was previously one-way: a feed that had a bad week stayed off
+    forever and only a human could bring it back. Every REVIVE_AFTER_HOURS we
+    give each retired source one fetch; if it returns anything fresh, it rejoins
+    the rotation on its own. A failed probe leaves last_fetched_at untouched,
+    so the next attempt is naturally spaced rather than hammering a dead host."""
+    cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=REVIVE_AFTER_HOURS))
+    revived = 0
+    for s in sb("GET", "sources?select=*&is_active=eq.false"):
+        if s["last_fetched_at"] and s["last_fetched_at"] > cutoff:
+            continue  # probed recently enough
+        try:
+            items = FETCHERS.get(s["type"], fetch_items)(s)
+        except Exception as e:
+            print(f"REVIVE probe failed {s['name']}: {str(e)[:80]}")
+            continue
+        if not items:
+            continue  # reachable but still empty; stays retired
+        sb("PATCH", f"sources?id=eq.{s['id']}",
+           json={"is_active": True,
+                 "last_fetched_at": datetime.now(timezone.utc).isoformat()})
+        revived += 1
+        print(f"SELF-HEAL: revived {s['name']} — {len(items)} fresh items")
+    return revived
 
 
 def auto_approve():
@@ -653,11 +710,12 @@ def main():
     alerted = alert_engine({s["name"]: s["authority"] for s in sources})
     healed = retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key)
     disabled = disable_dead_sources()
+    revived = revive_sources()
     approved = auto_approve()
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
           + f" | editor: {releveled} releveled | alerts: {alerted} sent | "
-          f"self-heal: {healed} recovered, {disabled} sources disabled, {approved} auto-approved")
+          f"self-heal: {healed} recovered, {disabled} retired, {revived} revived, {approved} auto-approved")
     served = usage_report()
     if served:  # which lane actually carried the run — silent failover is visible
         print("AI served by: " + ", ".join(f"{m}={n}" for m, n in
