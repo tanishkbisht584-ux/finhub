@@ -93,23 +93,40 @@ def validate(card):
     return card
 
 
-def _groq(prompt):
-    """Free-tier failover (spec §5). Returns None when unconfigured or throttled,
-    so the caller can fall through to 'try again next run'."""
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
-        return None
-    r = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json={"model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-              "messages": [{"role": "user", "content": prompt}],
-              "response_format": {"type": "json_object"}, "temperature": 0.2},
-        timeout=60)
-    if r.status_code in (429, 503):
-        return None
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+# Free-tier failovers, tried in order after Gemini (spec §5). All are
+# OpenAI-compatible, so one function covers them; a provider is skipped when its
+# key is unset. Groq: ~1000 req/day, no card. OpenRouter: 50/day free, 1000/day
+# once you've ever bought $10 of credit — so it earns its place as depth, not
+# as the main lane. Models are overridable per provider via env.
+FALLBACKS = [
+    ("GROQ_API_KEY", "https://api.groq.com/openai/v1/chat/completions",
+     "GROQ_MODEL", "llama-3.3-70b-versatile"),
+    ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/chat/completions",
+     "OPENROUTER_MODEL", "google/gemma-4-31b-it:free"),
+]
+
+
+def _fallback_chat(prompt):
+    """Returns None when every configured provider is unset or throttled, so the
+    caller can fall through to 'try again next run'."""
+    for key_env, url, model_env, default_model in FALLBACKS:
+        key = os.environ.get(key_env)
+        if not key:
+            continue
+        try:
+            r = requests.post(
+                url, headers={"Authorization": f"Bearer {key}"},
+                json={"model": os.environ.get(model_env, default_model),
+                      "messages": [{"role": "user", "content": prompt}],
+                      "response_format": {"type": "json_object"}, "temperature": 0.2},
+                timeout=60)
+            if r.status_code in (429, 503):
+                continue  # this provider is tapped out; try the next one
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"]
+        except requests.RequestException:
+            continue  # a dead provider must never stall the pipeline
+    return None
 
 
 def _gemini(prompt):
@@ -132,10 +149,10 @@ def _gemini(prompt):
             continue
         r.raise_for_status()
         return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    text = _groq(prompt)
+    text = _fallback_chat(prompt)
     if text is not None:
         return text
-    raise QuotaExhausted(last or "all Gemini models rate-limited, no Groq key")
+    raise QuotaExhausted(last or "every provider rate-limited or unconfigured")
 
 
 def editor_pass(digest):
