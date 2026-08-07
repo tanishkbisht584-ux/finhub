@@ -1,27 +1,25 @@
 name: pipeline
 on:
   schedule:
-    # Budget: private-repo free tier is 2000 Actions min/month; a run bills 2 min
-    # (measured median 69s, rounded up). Schedules below = ~648 runs ≈ 1300 min.
-    # Do NOT add a cron without re-checking this total. Crons must not overlap:
-    # overlapping runs are idempotent for data but get billed twice.
-    # every 20 min Mon-Fri 08:30-16:00 IST (03:00-10:59 UTC) — pre-open + trading
-    - cron: '*/20 3-10 * * 1-5'
-    # Mon-Fri evening/night IST (17:30, 20:30, 23:30, 02:30)
-    - cron: '0 12,15,18,21 * * 1-5'
-    # weekends, every 6 h
-    - cron: '0 */6 * * 6,0'
+    # Public repo => unlimited free Actions minutes, so cadence is set by news
+    # latency, not by budget. GitHub's cron floor is 5 min and scheduled runs
+    # can lag a few minutes under load; the in-run loop below covers that gap.
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 # least privilege: the job only reads the repo; secrets are injected explicitly
 permissions:
   contents: read
 
+# A late run must never pile up behind a slow one.
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    # caps a hung run's billed minutes; measured max is 290s
-    timeout-minutes: 10
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,4 +32,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.5-flash-lite
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Poll for ~4 min inside the run, then exit before the next cron.
+          # Turns a 5-min cron into ~90-second freshness.
+          LOOP_SECONDS: '90'
+          LOOP_MAX_SECONDS: '240'

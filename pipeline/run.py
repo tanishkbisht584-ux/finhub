@@ -579,12 +579,19 @@ if __name__ == "__main__":
     # resident and poll, for an always-on host. main() is idempotent, so a
     # crashed run costs nothing but the interval.
     loop_seconds = int(os.environ.get("LOOP_SECONDS", "0"))
+    # LOOP_MAX_SECONDS bounds the process so a cron-launched poller exits before
+    # the next one starts; unset means run forever (always-on host).
+    deadline = int(os.environ.get("LOOP_MAX_SECONDS", "0"))
     if not loop_seconds:
         main()
     else:
+        started = time.monotonic()
         while True:
             try:
                 main()
             except Exception:
                 traceback.print_exc()  # never let one bad run kill the poller
+            if deadline and time.monotonic() - started + loop_seconds > deadline:
+                print("loop deadline reached; exiting for the next scheduled run")
+                break
             time.sleep(loop_seconds)
