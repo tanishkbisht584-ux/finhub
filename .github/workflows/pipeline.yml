@@ -33,6 +33,8 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # optional: set this secret to enable the OpenRouter failover
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # Poll for ~4 min inside the run, then exit before the next cron.
           # Turns a 5-min cron into ~90-second freshness.
           LOOP_SECONDS: '90'
