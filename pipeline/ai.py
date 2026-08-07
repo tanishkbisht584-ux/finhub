@@ -53,12 +53,17 @@ class QuotaExhausted(AIError):
     for a later run rather than flag it — nothing is wrong with the story."""
 
 
+def _split(env, default=""):
+    """Every key/model env is a comma-separated list; blanks and stray spaces are
+    the normal result of pasting keys in, so drop them rather than build a lane
+    that 401s on every call."""
+    return [v.strip() for v in os.environ.get(env, default).split(",") if v.strip()]
+
+
 # The free tier meters requests per MODEL (measured 2026-08-08: 500/day each),
 # so rotating on 429 multiplies daily capacity at zero cost. Order = preference.
-MODELS = [m.strip() for m in os.environ.get(
-    "GEMINI_MODELS",
-    "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.0-flash-lite,gemini-3.5-flash"
-).split(",") if m.strip()]
+GEMINI_MODELS = ("gemini-3.5-flash-lite,gemini-3.1-flash-lite,"
+                 "gemini-2.0-flash-lite,gemini-3.5-flash")
 
 _cooldown = {}      # lane -> monotonic deadline before we try it again
 _cooldown_lock = threading.Lock()
@@ -71,8 +76,10 @@ def _gemini_lanes():
     cooldown are all metered on. Ordered model-major: we exhaust the preferred
     model across every key before dropping to the next model, so a 429 costs us
     an account and not the answer quality."""
-    keys = [k.strip() for k in os.environ.get("GEMINI_API_KEY", "").split(",") if k.strip()]
-    return [(k, m, f"{m}#{i + 1}") for m in MODELS for i, k in enumerate(keys)]
+    keys = _split("GEMINI_API_KEY")
+    return [(k, m, f"{m}#{i}")
+            for m in _split("GEMINI_MODELS", GEMINI_MODELS)
+            for i, k in enumerate(keys, 1)]
 
 
 def _live_lanes():
@@ -134,7 +141,7 @@ def validate(card):
 # as the main lane. Models are overridable per provider via env.
 FALLBACKS = [
     ("GROQ_API_KEY", "https://api.groq.com/openai/v1/chat/completions",
-     "GROQ_MODEL", "llama-3.3-70b-versatile"),
+     "GROQ_MODEL", "llama-3.3-70b-versatile,openai/gpt-oss-120b,qwen/qwen3.6-27b"),
     # Deliberately NOT a google/* free model: those route to Google AI Studio's
     # shared pool, i.e. the same upstream our own Gemini key already exhausted.
     ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/chat/completions",
@@ -143,15 +150,15 @@ FALLBACKS = [
 
 
 def _fallback_lanes():
-    """Every configured (key, provider) pair, in preference order. Like Gemini,
-    each provider's key env takes a comma-separated list — quota is per account,
-    so a second Groq key is a second free 1000/day."""
+    """One lane per (key, model) pair, same as Gemini: these providers meter per
+    account AND per model, so both envs take comma-separated lists and the two
+    multiply. Model-major, so the preferred model is tried on every key first."""
     lanes = []
-    for key_env, url, model_env, default_model in FALLBACKS:
-        model = os.environ.get(model_env, default_model)
-        for i, key in enumerate(k.strip() for k in os.environ.get(key_env, "").split(",")):
-            if key:
-                lanes.append((key, url, model, f"{model}#{i + 1}"))
+    for key_env, url, model_env, default_models in FALLBACKS:
+        keys = _split(key_env)
+        for model in _split(model_env, default_models):
+            for i, key in enumerate(keys, 1):
+                lanes.append((key, url, model, f"{model}#{i}"))
     return lanes
 
 

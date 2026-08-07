@@ -96,7 +96,7 @@ def test_multi_key_lanes(monkeypatch):
     """N keys must fan out to N lanes per model, preferred model first across all
     keys — otherwise a second account buys daily volume but not quality."""
     import ai
-    monkeypatch.setattr(ai, "MODELS", ["flash-lite", "flash"])
+    monkeypatch.setenv("GEMINI_MODELS", "flash-lite,flash")
     monkeypatch.setenv("GEMINI_API_KEY", "k1, k2 ,k3")
     lanes = ai._gemini_lanes()
     assert [l[2] for l in lanes] == [
@@ -108,12 +108,14 @@ def test_multi_key_lanes(monkeypatch):
 
 
 def test_multi_key_fallback_lanes(monkeypatch):
+    """Groq meters per account AND per model, so keys x models must multiply."""
     import ai
     monkeypatch.setenv("GROQ_API_KEY", "g1,g2")
-    monkeypatch.setenv("GROQ_MODEL", "llama")
+    monkeypatch.setenv("GROQ_MODEL", "llama,qwen")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     lanes = ai._fallback_lanes()
-    assert [(l[0], l[3]) for l in lanes] == [("g1", "llama#1"), ("g2", "llama#2")]
+    assert [(l[0], l[3]) for l in lanes] == [
+        ("g1", "llama#1"), ("g2", "llama#2"), ("g1", "qwen#1"), ("g2", "qwen#2")]
 
 
 def test_validate_rejects_missing_field():

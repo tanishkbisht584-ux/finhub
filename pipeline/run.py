@@ -22,6 +22,7 @@ import requests
 MAX_AI_CALLS_PER_RUN = int(os.environ.get("MAX_AI_CALLS_PER_RUN", "120"))
 AI_CONCURRENCY = int(os.environ.get("AI_CONCURRENCY", "6"))
 AI_PHASE_SECONDS = int(os.environ.get("AI_PHASE_SECONDS", "300"))  # leave room for alerts/approve before the job timeout
+DAILY_AI_BUDGET = int(os.environ.get("DAILY_AI_BUDGET", "2400"))  # under the ~3000 free ceiling, paced across the day
 AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
 TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
 TRUSTED_AUTHORITY = 8       # ET/Mint/WSJ/BBC/Moneycontrol tier; below this never alerts solo
@@ -394,6 +395,22 @@ def parse_ts(s):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def remaining_budget_today():
+    """Free-tier calls left today, paced so the day doesn't get spent by dawn.
+    Counts non-duplicate rows since IST midnight — every one cost roughly a call
+    (duplicates and low-value filtering are free). Slight overcount is deliberate:
+    running out early is worse than pacing conservatively."""
+    midnight = iso(datetime.now(timezone.utc).astimezone(IST).replace(
+        hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
+    spent = len(sb("GET", f"stories?select=id&created_at=gte.{midnight}"
+                          "&status=neq.duplicate"))
+    left = max(0, DAILY_AI_BUDGET - spent)
+    if left == 0:
+        print(f"daily AI budget spent ({spent}/{DAILY_AI_BUDGET}); "
+              "fetching continues, processing resumes after IST midnight")
+    return left
+
+
 def retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key):
     """Re-run AI on recently flagged stories (headline-only — body isn't stored).
     Older than 24h we stop trying; admin sees them. Cap 5/run to protect quota."""
@@ -521,11 +538,16 @@ def main():
         else:
             to_process.append((item, cid))
 
-    skipped = max(0, len(to_process) - MAX_AI_CALLS_PER_RUN)
-    to_process = to_process[:MAX_AI_CALLS_PER_RUN]
+    # Two ceilings: this run's share, and what's left of today's free quota.
+    # The daily one only started mattering once the poller ran continuously —
+    # 3800 passes/day against a ~3000-call budget would spend the day by 02:00
+    # and leave the feed frozen until midnight.
+    cap = min(MAX_AI_CALLS_PER_RUN, remaining_budget_today())
+    skipped = max(0, len(to_process) - cap)
+    to_process = to_process[:cap]
     print(f"{len(items)} fetched, {len(fresh)} new -> {len(to_process)} to AI, "
           f"{len(dupes)} duplicates, {len(noise)} low-value (both free)"
-          + (f", {skipped} deferred to next run (cap {MAX_AI_CALLS_PER_RUN})" if skipped else ""))
+          + (f", {skipped} deferred to next run (cap {cap})" if skipped else ""))
 
     def base_row(item, cid):
         return {"url": item["url"], "url_hash": item["url_hash"], "cluster_id": cid,
