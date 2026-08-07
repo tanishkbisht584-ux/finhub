@@ -119,6 +119,152 @@ def fetch_items(source):
     return items
 
 
+# ---------- primary sources: NSE/BSE corporate announcements (spec M3) ----------
+
+FILING_NOISE = re.compile(
+    r"trading window|share certificate|duplicate share|loss of share|regulation 74"
+    r"|reg\. 74|esop|investor meet|analyst meet|newspaper publication|book closure",
+    re.I)
+
+
+def fetch_bse(source):
+    today = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d")
+    r = requests.get(
+        "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w",
+        params={"pageno": 1, "strCat": "-1", "strPrevDate": today, "strScrip": "",
+                "strSearch": "P", "strToDate": today, "strType": "C", "subcategory": "-1"},
+        headers={**UA, "Referer": "https://www.bseindia.com/"}, timeout=FETCH_TIMEOUT)
+    r.raise_for_status()
+    items = []
+    for a in r.json().get("Table", []):
+        subject = (a.get("NEWSSUB") or a.get("HEADLINE") or "").strip()
+        company = (a.get("SLONGNAME") or "").strip()
+        if not subject or FILING_NOISE.search(subject):
+            continue
+        url = a.get("NSURL") or (
+            f"https://www.bseindia.com/xml-data/corpfiling/AttachLive/{a['ATTACHMENTNAME']}"
+            if a.get("ATTACHMENTNAME") else None)
+        if not url:
+            continue
+        headline = f"{company}: {subject}" if company else subject
+        items.append({"source": source, "url": url, "url_hash": url_hash(url),
+                      "headline": headline[:500], "body": a.get("MORE", "") or subject,
+                      "image_url": None,
+                      "published_at": (a.get("NEWS_DT") or None) and a["NEWS_DT"] + "+05:30"})
+    return items
+
+
+def fetch_nse(source):
+    # NSE needs a cookie warm-up; its Akamai layer may still 403 datacenter IPs —
+    # if so this logs as a feed failure and self-heal/source-health make it visible.
+    s = requests.Session()
+    s.headers.update({**UA, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9",
+                      "Referer": "https://www.nseindia.com/"})
+    s.get("https://www.nseindia.com", timeout=FETCH_TIMEOUT)
+    r = s.get("https://www.nseindia.com/api/corporate-announcements?index=equities",
+              timeout=FETCH_TIMEOUT)
+    r.raise_for_status()
+    items = []
+    for a in r.json():
+        subject = (a.get("desc") or "").strip()
+        symbol = (a.get("symbol") or "").strip()
+        url = a.get("attchmntFile")
+        if not subject or not url or FILING_NOISE.search(subject):
+            continue
+        items.append({"source": source, "url": url, "url_hash": url_hash(url),
+                      "headline": f"{symbol}: {subject}"[:500],
+                      "body": a.get("attchmntText", "") or subject, "image_url": None,
+                      "published_at": (a.get("an_dt") or None) and
+                                      a["an_dt"].replace(" ", "T") + "+05:30"})
+    return items
+
+
+FETCHERS = {"nse": fetch_nse, "bse": fetch_bse}
+
+
+# ---------- alert engine (spec §7 machine gate) ----------
+
+def gate_passes(score, cluster_size, authority):
+    """Impact >= 8 AND (2+ independent sources OR primary source). Pure for tests."""
+    return score is not None and score >= 8 and (cluster_size >= 2 or authority >= 10)
+
+
+def send_fcm(hook, headline, story_id):
+    """Push to the 'alerts' FCM topic (the app subscribes in M4). No-op until
+    FIREBASE_SERVICE_ACCOUNT_JSON is configured."""
+    import json as _json
+    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if not sa_json:
+        print(f"ALERT (FCM not configured): {hook}")
+        return False
+    from google.oauth2 import service_account
+    import google.auth.transport.requests
+    creds = service_account.Credentials.from_service_account_info(
+        _json.loads(sa_json), scopes=["https://www.googleapis.com/auth/firebase.messaging"])
+    creds.refresh(google.auth.transport.requests.Request())
+    r = requests.post(
+        f"https://fcm.googleapis.com/v1/projects/{creds.project_id}/messages:send",
+        headers={"Authorization": f"Bearer {creds.token}"},
+        json={"message": {"topic": "alerts",
+                          "notification": {"title": hook, "body": headline},
+                          "data": {"story_id": str(story_id)}}},
+        timeout=30)
+    r.raise_for_status()
+    return True
+
+
+def alert_engine(authority_by_source):
+    """Speed path: qualifying stories auto-approve + alert with no human in the loop.
+    Global cap 5/day; single-source non-primary high-impact stays in the admin queue."""
+    midnight = iso(datetime.now(timezone.utc).astimezone().replace(
+        hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
+    sent_today = len(sb("GET", f"stories?select=id&alerted_at=gte.{midnight}"))
+    cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=6))
+    candidates = sb("GET", "stories?select=id,hook,headline,impact_score,cluster_id,source_name"
+                           f"&alerted_at=is.null&impact_score=gte.8&created_at=gte.{cutoff}"
+                           "&status=in.(pending,approved)&order=impact_score.desc")
+    alerted = 0
+    for s in candidates:
+        if sent_today + alerted >= 5:
+            break
+        cluster_size = len(sb("GET", f"stories?select=id&cluster_id=eq.{s['cluster_id']}"))
+        if not gate_passes(s["impact_score"], cluster_size,
+                           authority_by_source.get(s["source_name"], 5)):
+            continue
+        send_fcm(s["hook"] or s["headline"], s["headline"], s["id"])
+        sb("PATCH", f"stories?id=eq.{s['id']}", json={
+            "status": "approved", "alerted_at": datetime.now(timezone.utc).isoformat()})
+        alerted += 1
+    return alerted
+
+
+# ---------- chief editor (spec §5, one comparative call per run) ----------
+
+def chief_editor(editor_pass):
+    cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=3))
+    rows = sb("GET", "stories?select=id,headline,impact_score,category,cluster_id,source_name"
+                     f"&created_at=gte.{cutoff}&status=in.(pending,approved)&limit=100")
+    if len(rows) < 2:
+        return 0
+    counts = {}
+    for r in rows:
+        counts[r["cluster_id"]] = counts.get(r["cluster_id"], 0) + 1
+    auth = {s["name"]: s["authority"] for s in sb("GET", "sources?select=name,authority")}
+    digest = "\n".join(
+        f"{r['id']} | {r['impact_score']} | {r['category']} | {counts[r['cluster_id']]} | "
+        f"{auth.get(r['source_name'], 5)} | {r['headline']}" for r in rows)
+    out = editor_pass(digest)
+    if not out:
+        return 0
+    ids = {r["id"] for r in rows}
+    for rl in out["relevel"]:
+        if rl["id"] in ids:
+            sb("PATCH", f"stories?id=eq.{rl['id']}", json={"impact_score": rl["score"]})
+    if out["top_story_id"] in ids:
+        sb("PATCH", f"stories?id=eq.{out['top_story_id']}", json={"is_featured": True})
+    return len(out["relevel"])
+
+
 # ---------- self-healing (retry flagged, disable dead feeds, auto-approve) ----------
 
 def iso(dt):
@@ -201,7 +347,7 @@ def insert_story(row, companies_by_key, card=None):
 
 def main():
     load_env()
-    from ai import AIError, process_story  # after env load
+    from ai import AIError, editor_pass, process_story  # after env load
 
     sources = sb("GET", "sources?select=*&is_active=eq.true")
     companies_by_key = {}
@@ -219,7 +365,7 @@ def main():
     items, fetched_source_ids = [], []
     for s in sources:
         try:
-            items += fetch_items(s)
+            items += FETCHERS.get(s["type"], fetch_items)(s)
             fetched_source_ids.append(s["id"])
         except Exception as e:  # one dead feed never blocks the rest (spec §10)
             print(f"FEED FAIL {s['name']}: {e}")
@@ -271,10 +417,13 @@ def main():
         sb("PATCH", f"sources?id=in.({ids})",
            json={"last_fetched_at": datetime.now(timezone.utc).isoformat()})
 
+    releveled = chief_editor(editor_pass)
+    alerted = alert_engine({s["name"]: s["authority"] for s in sources})
     healed = retry_flagged(process_story, AIError, companies_by_key)
     disabled = disable_dead_sources()
     approved = auto_approve()
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged | "
+          f"editor: {releveled} releveled | alerts: {alerted} sent | "
           f"self-heal: {healed} recovered, {disabled} sources disabled, {approved} auto-approved")
 
 

@@ -7,6 +7,7 @@ import pathlib
 import requests
 
 PROMPT = (pathlib.Path(__file__).parent / "prompts" / "story_v1.txt").read_text(encoding="utf-8")
+EDITOR_PROMPT = (pathlib.Path(__file__).parent / "prompts" / "editor_v1.txt").read_text(encoding="utf-8")
 
 DIRECTIONS = {"positive", "negative", "mixed", "neutral"}
 HORIZONS = {"short_term", "long_term", "both"}
@@ -59,6 +60,21 @@ def _gemini(prompt):
     )
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def editor_pass(digest):
+    """Chief Editor (spec §5): one comparative call per run over a compact digest.
+    Returns {"relevel": [{"id", "score"}], "top_story_id"} or None on any failure —
+    the editor is advisory; a bad call must never block the run."""
+    try:
+        out = json.loads(_gemini(EDITOR_PROMPT.format(digest=digest)))
+        relevels = [r for r in out.get("relevel", [])
+                    if isinstance(r.get("id"), int) and isinstance(r.get("score"), int)
+                    and 1 <= r["score"] <= 10]
+        top = out.get("top_story_id")
+        return {"relevel": relevels, "top_story_id": top if isinstance(top, int) else None}
+    except (ValueError, KeyError, json.JSONDecodeError, requests.RequestException):
+        return None
 
 
 def process_story(source_name, headline, body):

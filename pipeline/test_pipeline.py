@@ -51,6 +51,22 @@ def test_validate_rejects_bad_cards(patch):
         validate({**CARD, **patch})
 
 
+def test_alert_gate():
+    from run import gate_passes
+    assert gate_passes(8, 2, 5)        # multi-source confirmed
+    assert gate_passes(9, 1, 10)       # primary source (RBI/exchange)
+    assert not gate_passes(8, 1, 8)    # single-source non-primary waits for admin
+    assert not gate_passes(7, 3, 10)   # below impact threshold
+    assert not gate_passes(None, 3, 10)
+
+
+def test_filing_noise_filter():
+    from run import FILING_NOISE
+    assert FILING_NOISE.search("Closure of Trading Window")
+    assert FILING_NOISE.search("Certificate under Regulation 74(5)")
+    assert not FILING_NOISE.search("Board approves acquisition of ABC Ltd")
+
+
 def test_validate_rejects_missing_field():
     bad = dict(CARD)
     del bad["hook"]
