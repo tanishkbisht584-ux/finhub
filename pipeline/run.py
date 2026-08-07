@@ -119,6 +119,62 @@ def fetch_items(source):
     return items
 
 
+# ---------- self-healing (retry flagged, disable dead feeds, auto-approve) ----------
+
+def iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def retry_flagged(process_story, AIError, companies_by_key):
+    """Re-run AI on recently flagged stories (headline-only — body isn't stored).
+    Older than 24h we stop trying; admin sees them. Cap 5/run to protect quota."""
+    cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=24))
+    rows = sb("GET", f"stories?select=id,headline,source_name&status=eq.flagged"
+                     f"&created_at=gte.{cutoff}&limit=5")
+    healed = 0
+    for row in rows:
+        try:
+            card = process_story(row["source_name"], row["headline"],
+                                 "(body unavailable — assess from the headline alone)")
+        except AIError as e:
+            sb("PATCH", f"stories?id=eq.{row['id']}", json={"raw_ai_error": str(e)})
+            continue
+        imp = card["impact"]
+        keep = card["is_india_relevant"] or (card["category"] == "Geopolitics" and imp["score"] >= 6)
+        sb("PATCH", f"stories?id=eq.{row['id']}", json={
+            "hook": card["hook"], "headline": card["headline_rewrite"],
+            "summary": card["summary"],
+            "impact_direction": imp["direction"], "impact_strength": imp["strength"],
+            "impact_horizon": imp["horizon"], "impact_score": imp["score"],
+            "confidence": card["confidence"], "category": card["category"],
+            "sectors": card["sectors"], "raw_ai_error": None,
+            "status": "pending" if keep else "rejected",
+        })
+        healed += 1
+        time.sleep(AI_CALL_GAP_SECONDS)
+    return healed
+
+
+def disable_dead_sources():
+    """A feed that hasn't succeeded in 3 days is dead — deactivate it so it stops
+    wasting run time; visible (and re-enablable) in the admin health tab."""
+    cutoff = iso(datetime.now(timezone.utc) - timedelta(days=3))
+    dead = sb("PATCH", f"sources?is_active=eq.true&last_fetched_at=lt.{cutoff}",
+              json={"is_active": False}, headers={"Prefer": "return=representation"})
+    for s in dead or []:
+        print(f"SELF-HEAL: disabled dead source {s['name']}")
+    return len(dead or [])
+
+
+def auto_approve():
+    """Spec §9: score < 7 auto-approves after 2h unreviewed; score >= 8 single-source
+    stays pending for the admin queue."""
+    cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=2))
+    rows = sb("PATCH", f"stories?status=eq.pending&impact_score=lt.7&created_at=lt.{cutoff}",
+              json={"status": "approved"}, headers={"Prefer": "return=representation"})
+    return len(rows or [])
+
+
 # ---------- main ----------
 
 def existing_hashes(hashes):
@@ -214,7 +270,12 @@ def main():
         ids = ",".join(str(i) for i in fetched_source_ids)
         sb("PATCH", f"sources?id=in.({ids})",
            json={"last_fetched_at": datetime.now(timezone.utc).isoformat()})
-    print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged")
+
+    healed = retry_flagged(process_story, AIError, companies_by_key)
+    disabled = disable_dead_sources()
+    approved = auto_approve()
+    print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged | "
+          f"self-heal: {healed} recovered, {disabled} sources disabled, {approved} auto-approved")
 
 
 if __name__ == "__main__":
