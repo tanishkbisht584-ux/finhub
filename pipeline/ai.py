@@ -101,8 +101,10 @@ def validate(card):
 FALLBACKS = [
     ("GROQ_API_KEY", "https://api.groq.com/openai/v1/chat/completions",
      "GROQ_MODEL", "llama-3.3-70b-versatile"),
+    # Deliberately NOT a google/* free model: those route to Google AI Studio's
+    # shared pool, i.e. the same upstream our own Gemini key already exhausted.
     ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/chat/completions",
-     "OPENROUTER_MODEL", "google/gemma-4-31b-it:free"),
+     "OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
 ]
 
 
