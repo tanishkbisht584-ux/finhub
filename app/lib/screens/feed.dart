@@ -7,11 +7,19 @@ import '../models.dart';
 import '../theme.dart';
 
 final storiesProvider = FutureProvider<List<Story>>((ref) async {
+  // Spec §3 feed ranking: recency + impact. Last 48h, featured pinned,
+  // severity first (L1 top, L4 minor sinks), newest within a level.
+  final since = DateTime.now()
+      .toUtc()
+      .subtract(const Duration(hours: 48))
+      .toIso8601String();
   final rows = await Supabase.instance.client
       .from('stories')
       .select()
       .eq('status', 'approved')
+      .gte('published_at', since)
       .order('is_featured', ascending: false)
+      .order('severity_level', ascending: true, nullsFirst: false)
       .order('published_at', ascending: false)
       .limit(50);
   return rows.map(Story.fromJson).toList();

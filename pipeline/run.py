@@ -19,6 +19,11 @@ AI_CALL_GAP_SECONDS = 5  # free-tier RPM throttle (spec §5)
 AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
 TRUSTED_SOLO_MINUTES = 5    # uncorroborated major story alerts anyway after this
 TRUSTED_AUTHORITY = 8       # ET/Mint/WSJ/BBC/Moneycontrol tier; below this never alerts solo
+MAX_ALERTS_PER_DAY = 5      # pushes only; publication is never capped (spec §7)
+QUIET_START_IST = 22        # no pushes 22:00-07:00 IST ...
+QUIET_END_IST = 7
+QUIET_PIERCE_SCORE = 9      # ... unless it's this big ("wake me if the market is crashing")
+IST = timezone(timedelta(hours=5, minutes=30))
 FETCH_TIMEOUT = 20
 UA = {"User-Agent": "Mozilla/5.0 (FinSwipe pipeline; +private)"}
 
@@ -107,9 +112,15 @@ def fetch_items(source):
     resp = requests.get(feed_url(source), headers=UA, timeout=FETCH_TIMEOUT)
     resp.raise_for_status()
     items = []
+    # RSS feeds sometimes resurface years-old links (seen: a 2019 ET story) —
+    # stale items burn AI quota and pollute the feed. No date = benefit of doubt.
+    stale = datetime.now(timezone.utc) - timedelta(hours=48)
     for e in feedparser.parse(resp.content).entries:
         link, title = e.get("link"), (e.get("title") or "").strip()
         if not link or not title:
+            continue
+        t = e.get("published_parsed") or e.get("updated_parsed")
+        if t and datetime(*t[:6], tzinfo=timezone.utc) < stale:
             continue
         items.append({
             "source": source,
@@ -188,6 +199,22 @@ FETCHERS = {"nse": fetch_nse, "bse": fetch_bse}
 
 # ---------- alert engine (spec §7 machine gate) ----------
 
+def in_quiet_hours(now):
+    """Spec §7: 22:00-07:00 IST. Window wraps midnight, hence the `or`."""
+    h = now.astimezone(IST).hour
+    return h >= QUIET_START_IST or h < QUIET_END_IST
+
+
+def may_push(score, now, sent_today):
+    """Whether this story may buzz a phone. Failing here never blocks publication —
+    the story still reaches the feed, it just stays silent. Pure for tests."""
+    if sent_today >= MAX_ALERTS_PER_DAY:
+        return False
+    if in_quiet_hours(now) and (score is None or score < QUIET_PIERCE_SCORE):
+        return False
+    return True
+
+
 def gate_passes(score, cluster_size, authority, age_minutes=0):
     """Impact >= 8 AND one of: 2+ independent sources, a primary source, or a
     trusted outlet (authority >= 8) whose story is still uncorroborated after
@@ -233,7 +260,9 @@ def alert_engine(authority_by_source):
     Single-source non-primary high-impact stays in the admin queue until it is
     either corroborated or old enough to clear gate_passes()."""
     now = datetime.now(timezone.utc)
-    midnight = iso(now.astimezone().replace(
+    # IST is explicit, never the host clock: this pipeline may run on a UTC VM,
+    # and "5 alerts per day" / "quiet hours" are promises about the user's day.
+    midnight = iso(now.astimezone(IST).replace(
         hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
     sent_today = len(sb("GET", f"stories?select=id&alerted_at=gte.{midnight}"))
     cutoff = iso(now - timedelta(hours=6))
@@ -249,15 +278,15 @@ def alert_engine(authority_by_source):
                            authority_by_source.get(s["source_name"], 5), age_minutes):
             continue
         patch = {"status": "approved"}
-        if sent_today + alerted < 5:
+        if may_push(s["impact_score"], now, sent_today + alerted):
             send_fcm(s["hook"] or s["headline"], s["headline"], s["id"])
             patch["alerted_at"] = now.isoformat()
             alerted += 1
         else:
-            published += 1  # capped: goes live silently, no push
+            published += 1  # capped or quiet hours: goes live silently, no push
         sb("PATCH", f"stories?id=eq.{s['id']}", json=patch)
     if published:
-        print(f"alert cap reached: {published} story(ies) published without a push")
+        print(f"{published} story(ies) published without a push (cap or quiet hours)")
     return alerted
 
 

@@ -22,6 +22,11 @@ Rules:
 - Facts only, never advice. Never invent tickers; leave nse_symbol as "" if unsure.
 - impact.score: 9-10 only for historic/market-moving events, 7-8 major, 4-6 notable, 1-3 minor.
 - is_india_relevant: false for stories with no plausible effect on Indian markets or economy.
+- General India news (politics, crime, sport, entertainment) with no clear market or
+  economy angle: score 1-2 so it sinks. FinSwipe is a markets app, not a news app.
+- Routine SME/micro-cap items (grey market premium updates, small IPO day counts,
+  tiny-cap 52-week highs): score 1-3. Reserve 4+ for stories a typical retail
+  investor would genuinely want explained.
 
 Source: {source_name}
 Headline: {headline}
