@@ -1,0 +1,26 @@
+name: pipeline
+on:
+  schedule:
+    # every 15 min Mon-Fri 09:00-16:00 IST (03:30-10:30 UTC)
+    - cron: '*/15 3-10 * * 1-5'
+    # every 2 h otherwise (overlap is fine — runs are idempotent)
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r pipeline/requirements.txt
+      - run: python pipeline/run.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.5-flash-lite
