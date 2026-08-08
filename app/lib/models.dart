@@ -30,3 +30,38 @@ class Story {
         category = j['category'],
         sectors = List<String>.from(j['sectors'] ?? const []);
 }
+
+class QaSource {
+  final String title;
+  final String url;
+  final String sourceName;
+  QaSource.fromJson(Map<String, dynamic> j)
+      : title = j['title'] ?? '',
+        url = j['url'] ?? '',
+        sourceName = j['source_name'] ?? '';
+}
+
+/// Q&A answer contract from the `qa` Edge Function. Every field defaults, so a
+/// truncated provider response degrades to a partial card instead of throwing.
+class QaAnswer {
+  final String whatsHappening;
+  final String why;
+  final String whoIsAffected;
+  final String whatToWatch;
+  final String confidence;
+  final List<QaSource> sources;
+  final List<String> followups;
+  final bool refused;
+
+  QaAnswer.fromJson(Map<String, dynamic> j)
+      : whatsHappening = j['whats_happening'] ?? '',
+        why = j['why'] ?? '',
+        whoIsAffected = j['who_is_affected'] ?? '',
+        whatToWatch = j['what_to_watch'] ?? '',
+        confidence = j['confidence'] ?? 'low',
+        sources = ((j['sources'] ?? const []) as List)
+            .map((s) => QaSource.fromJson(Map<String, dynamic>.from(s)))
+            .toList(),
+        followups = List<String>.from(j['followups'] ?? const []),
+        refused = j['refused'] == true;
+}

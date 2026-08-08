@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'screens/ask.dart';
 import 'screens/feed.dart';
 import 'screens/profile.dart';
 import 'screens/saved.dart';
@@ -77,13 +78,19 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       body: IndexedStack(
         index: _tab,
-        children: const [FeedScreen(), SavedScreen(), ProfileScreen()],
+        children: const [
+          FeedScreen(),
+          AskScreen(),
+          SavedScreen(),
+          ProfileScreen()
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.swipe_vertical), label: 'Feed'),
+          NavigationDestination(icon: Icon(Icons.search), label: 'Ask'),
           NavigationDestination(icon: Icon(Icons.bookmark_outline), label: 'Saved'),
           NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
         ],
