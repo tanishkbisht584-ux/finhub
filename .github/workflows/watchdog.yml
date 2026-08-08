@@ -1,0 +1,100 @@
+name: watchdog
+# End-to-end freshness monitor: watches the SYMPTOM (no fresh story reaching
+# the feed) so it catches any server-side freeze, known or unknown. Self-heals
+# by restarting the pipeline; alerts by opening a `watchdog` issue (GitHub
+# emails the owner). Stateless, so a cron-lagged run still catches a freeze.
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write   # restart the pipeline
+  issues: write    # raise the alarm
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Feed freshness check
+        shell: python
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          import json, os, sys, urllib.parse, urllib.request
+          from datetime import datetime, timedelta, timezone
+
+          INGEST_MAX_H = 3     # no new approved story for this long => frozen
+          FEED_TOP_MAX_H = 12  # nothing fresh in the feed's visible top => frozen
+
+          def call(url, hdrs, data=None, method=None):
+              req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+              with urllib.request.urlopen(req) as r:
+                  body = r.read()
+                  return json.loads(body) if body else None
+
+          sb_url = os.environ["SUPABASE_URL"] + "/rest/v1/"
+          key = os.environ["SUPABASE_SERVICE_KEY"]
+          sb_hdrs = {"apikey": key, "Authorization": "Bearer " + key}
+
+          now = datetime.now(timezone.utc)
+          def age_h(iso):
+              dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+              return (now - dt).total_seconds() / 3600
+
+          newest = call(sb_url + "stories?select=created_at&status=eq.approved"
+                        "&order=created_at.desc&limit=1", sb_hdrs)
+          ingest_age = age_h(newest[0]["created_at"]) if newest else 999
+
+          # the exact query the app runs, so ranking bugs are caught too
+          since = urllib.parse.quote((now - timedelta(hours=48)).isoformat())
+          top = call(sb_url + "stories?select=published_at&status=eq.approved"
+                     f"&published_at=gte.{since}"
+                     "&order=is_featured.desc,published_at.desc&limit=10", sb_hdrs)
+          top_age = min((age_h(r["published_at"]) for r in top), default=999)
+
+          problems = []
+          if ingest_age > INGEST_MAX_H:
+              problems.append(f"no story approved in {ingest_age:.1f}h "
+                              f"(limit {INGEST_MAX_H}h) — pipeline dead or gated")
+          if top_age > FEED_TOP_MAX_H:
+              problems.append(f"freshest story in the feed's top 10 is {top_age:.1f}h old "
+                              f"(limit {FEED_TOP_MAX_H}h) — ranking frozen")
+          if not problems:
+              print(f"healthy: last approval {ingest_age:.1f}h ago, "
+                    f"feed top {top_age:.1f}h old")
+              sys.exit(0)
+
+          gh = "https://api.github.com/repos/" + os.environ["REPO"]
+          gh_hdrs = {"Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                     "Accept": "application/vnd.github+json"}
+
+          # self-heal: if no pipeline run is queued or running, start one
+          runs = call(gh + "/actions/workflows/pipeline.yml/runs?per_page=10",
+                      gh_hdrs)["workflow_runs"]
+          if any(r["status"] in ("queued", "in_progress") for r in runs):
+              healed = ("A pipeline run was already active — the freeze is inside "
+                        "the run, not the schedule.")
+          else:
+              call(gh + "/actions/workflows/pipeline.yml/dispatches", gh_hdrs,
+                   data=json.dumps({"ref": "main"}).encode(), method="POST")
+              healed = "No pipeline run was active — dispatched a fresh one."
+
+          # alert: at most one open watchdog issue; GitHub emails the owner
+          if not call(gh + "/issues?labels=watchdog&state=open", gh_hdrs):
+              body = "\n".join(
+                  ["The feed looks frozen:", ""]
+                  + [f"- {p}" for p in problems]
+                  + ["", healed, "", "Raised automatically by watchdog.yml (hourly)."])
+              call(gh + "/issues", gh_hdrs,
+                   data=json.dumps({"title": "Watchdog: feed frozen",
+                                    "body": body,
+                                    "labels": ["watchdog"]}).encode(),
+                   method="POST")
+
+          print("FROZEN:", "; ".join(problems), "|", healed)
+          sys.exit(1)
