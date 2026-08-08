@@ -11,8 +11,9 @@ import '../theme.dart';
 final servingCacheProvider = StateProvider<DateTime?>((ref) => null);
 
 final storiesProvider = FutureProvider<List<Story>>((ref) async {
-  // Spec §3 feed ranking: recency + impact. Last 48h, featured pinned,
-  // severity first (L1 top, L4 minor sinks), newest within a level.
+  // Feed ranking: the single current featured story pinned, then newest
+  // first. Severity-first ordering froze the feed — 41 stale L1/L2 cards
+  // outranked every fresh L3/L4 story; impact is on the card instead.
   final since = DateTime.now()
       .toUtc()
       .subtract(const Duration(hours: 48))
@@ -24,7 +25,6 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
         .eq('status', 'approved')
         .gte('published_at', since)
         .order('is_featured', ascending: false)
-        .order('severity_level', ascending: true, nullsFirst: false)
         .order('published_at', ascending: false)
         .limit(50);
     await FeedCache.save(rows.cast<Map<String, dynamic>>());

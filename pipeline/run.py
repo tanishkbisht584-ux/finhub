@@ -404,6 +404,8 @@ def chief_editor(editor_pass):
         if rl["id"] in ids:
             sb("PATCH", f"stories?id=eq.{rl['id']}", json={"impact_score": rl["score"]})
     if out["top_story_id"] in ids:
+        # one featured at a time — stale pins were freezing the feed's top
+        sb("PATCH", "stories?is_featured=eq.true", json={"is_featured": False})
         sb("PATCH", f"stories?id=eq.{out['top_story_id']}", json={"is_featured": True})
     return len(out["relevel"])
 
