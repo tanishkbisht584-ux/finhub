@@ -1,5 +1,9 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -91,6 +95,7 @@ class _StoryCardState extends State<StoryCard>
     with SingleTickerProviderStateMixin {
   Story get story => widget.story;
   bool _saved = false;
+  final _shareKey = GlobalKey();
 
   late final AnimationController _burst = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 550));
@@ -121,6 +126,34 @@ class _StoryCardState extends State<StoryCard>
     }
   }
 
+  /// Every share is an ad (spec §8): send the rendered card, not just a link.
+  Future<void> _share() async {
+    try {
+      final boundary =
+          _shareKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 2.5);
+      final bytes = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+      await SharePlus.instance.share(ShareParams(
+        files: [
+          XFile.fromData(bytes.buffer.asUint8List(),
+              mimeType: 'image/png', name: 'finswipe_${story.id}.png')
+        ],
+        text: '${story.hook ?? story.headline}\n\nvia FinSwipe · ${story.sourceUrl}',
+      ));
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid != null) {
+        Supabase.instance.client
+            .from('events')
+            .insert({'user_id': uid, 'story_id': story.id, 'type': 'share'})
+            .then((_) {}, onError: (_) {});
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Could not share')));
+    }
+  }
+
   String get _horizon => switch (story.impactHorizon) {
         'short_term' => 'SHORT',
         'long_term' => 'LONG',
@@ -135,7 +168,7 @@ class _StoryCardState extends State<StoryCard>
       child: GestureDetector(
         onDoubleTap: () => _save(viaDoubleTap: true),
         child: Stack(alignment: Alignment.center, children: [
-          _card(dir),
+          RepaintBoundary(key: _shareKey, child: _card(dir)),
           // brief bookmark flash confirming the double tap registered
           FadeTransition(
             opacity: Tween<double>(begin: 1, end: 0).animate(
@@ -241,6 +274,7 @@ class _StoryCardState extends State<StoryCard>
               _action('Source',
                   () => launchUrl(Uri.parse(story.sourceUrl),
                       mode: LaunchMode.externalApplication)),
+              _action('Share', _share),
               const Spacer(),
               Text('double-tap to save',
                   style: mono.copyWith(fontSize: 11)),
