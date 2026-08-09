@@ -83,9 +83,36 @@ def url_hash(url):
 
 STOPWORDS = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "as", "at", "by", "is", "its", "with", "after", "amid"}
 
+# Filing and results scaffolding, ignored when deciding "same story?". Every
+# announcement carries it, so it drowns out the one token that actually
+# identifies the story — the company. "ABFRL: Outcome of Board Meeting" and
+# "JSWENERGY: Outcome of Board Meeting" shared 3 of their 4 words and merged;
+# 43 unrelated companies ended up in one cluster and 42 were dropped as
+# duplicates. Content words never go in here, only template words.
+BOILERPLATE = {
+    "outcome", "intimation", "disclosure", "disclosures", "submission",
+    "compliance", "certificate", "regulation", "regulations", "lodr",
+    "listing", "obligations", "requirements", "board", "meeting",
+    "announcement", "announcements", "filing", "filings", "update",
+    "results", "result", "highlights", "earnings", "call", "transcript",
+    "presentation", "quarter", "quarterly", "unaudited", "audited",
+    "financial", "financials", "consolidated", "standalone", "statement",
+    "statements", "q1", "q2", "q3", "q4", "fy",
+    "ltd", "limited", "inc", "corp", "corporation", "plc", "company",
+    "press", "release",
+    # IPO-process and currency scaffolding: "X raises Rs N crore from anchor
+    # investors ahead of IPO" is 8 template words around a 3-word identity, and
+    # merged 12 different issuers. Units and process words name no story.
+    "rs", "crore", "anchor", "investors", "allotment", "details",
+    "watch", "review",
+}
+
 
 def title_tokens(title):
-    return {w for w in re.findall(r"[a-z0-9]+", title.lower()) if w not in STOPWORDS}
+    """Words that identify WHICH story this is. Template words are excluded —
+    two filings that differ only by company name must not look alike."""
+    return {w for w in re.findall(r"[a-z0-9]+", title.lower())
+            if w not in STOPWORDS and w not in BOILERPLATE}
 
 
 # AI budget is ~500 calls/day/model; spending it on grey-market-premium updates
@@ -132,15 +159,38 @@ def prioritized(items):
 
 
 def assign_cluster(title, recent):
-    """recent: list of (cluster_id, token_set). Jaccard >= 0.5 joins the cluster.
-    ponytail: O(n) scan vs ~48h of stories (~200 rows) — fine; revisit with
-    embeddings/minhash only if volume grows 100x."""
+    """recent: list of (cluster_id, token_set), ONE entry per cluster — see
+    cluster_of(). Jaccard >= 0.5 joins the cluster.
+
+    ponytail: a corpus-frequency rule (ignore words common across the last 48h)
+    was tried here and removed — measured on a week of real headlines it either
+    changed nothing or, tuned low enough to bite, cost more true duplicates than
+    the false merges it split (59 -> 46 correctly merged pairs). BOILERPLATE
+    stays a list because the list demonstrably works and the clever version did
+    not. Revisit with embeddings only if volume grows 100x."""
     tokens = title_tokens(title)
     if tokens:
         for cid, other in recent:
             if other and len(tokens & other) / len(tokens | other) >= 0.5:
                 return cid
     return str(uuid.uuid4())
+
+
+def cluster_of(headline, recent):
+    """Assign `headline` to a cluster, recording a new one in `recent` in place.
+    Returns (cluster_id, already_seen).
+
+    `recent` holds one entry per cluster — its seed — and never every member.
+    Matching against every member made clusters grow by chain: A joins B, C
+    joins A, and the group drifts until its members share nothing. That is how
+    43 unrelated board-meeting filings became a single cluster with zero tokens
+    in common. Comparing against the seed alone keeps a cluster about the story
+    that started it."""
+    cid = assign_cluster(headline, recent)
+    known = any(cid == c for c, _ in recent)
+    if not known:
+        recent.append((cid, title_tokens(headline)))
+    return cid, known
 
 
 # ---------- fetch ----------
@@ -605,8 +655,14 @@ def main():
             companies_by_key[a.casefold()] = c["id"]
 
     since = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    recent = [(r["cluster_id"], title_tokens(r["headline"]))
-              for r in sb("GET", f"stories?select=cluster_id,headline&created_at=gte.{since}")]
+    # Oldest first, one entry per cluster: the seed decides what the cluster is
+    # about (see cluster_of). Loading every member is what let clusters chain.
+    recent, seen_clusters = [], set()
+    for r in sb("GET", f"stories?select=cluster_id,headline&created_at=gte.{since}"
+                       "&order=created_at.asc"):
+        if r["cluster_id"] not in seen_clusters:
+            seen_clusters.add(r["cluster_id"])
+            recent.append((r["cluster_id"], title_tokens(r["headline"])))
 
     items, fetched_source_ids = [], []
     for s in sources:
@@ -629,9 +685,7 @@ def main():
     # corroboration for the alert gate) and spend no AI call on it.
     to_process, dupes, noise = [], [], []
     for item in fresh:
-        cid = assign_cluster(item["headline"], recent)
-        known = any(cid == c for c, _ in recent)
-        recent.append((cid, title_tokens(item["headline"])))
+        cid, known = cluster_of(item["headline"], recent)
         if known:
             dupes.append((item, cid))
         elif LOW_VALUE.search(item["headline"]):

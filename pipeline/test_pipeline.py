@@ -22,6 +22,42 @@ def test_cluster_same_story_joins_different_story_does_not():
     assert assign_cluster("Infosys Q1 profit rises 11 percent", recent) != "cluster-1"
 
 
+@pytest.mark.parametrize("first,second", [
+    # Measured 2026-08-09: 43 different companies' board outcomes landed in ONE
+    # cluster, so 42 of them were dropped as duplicates and never reached the
+    # feed. The ticker is a single token and the template outvotes it.
+    ("ABFRL: Outcome of Board Meeting", "JSWENERGY: Outcome of Board Meeting"),
+    ("Infosys Q1 Results Highlights", "TCS Q1 Results Highlights"),
+    ("Tata Motors Board Meeting Intimation", "Wipro Board Meeting Intimation"),
+    ("Geo Group Q2 Earnings Call Highlights", "Etsy Q2 Earnings Call Highlights"),
+])
+def test_different_companies_never_merge_on_filing_boilerplate(first, second):
+    recent = [("cluster-1", title_tokens(first))]
+    assert assign_cluster(second, recent) != "cluster-1"
+
+
+def test_same_company_filing_still_dedupes():
+    """Stripping boilerplate must not break the real job: the SAME company's
+    filing arriving twice is still one story."""
+    recent = [("cluster-1", title_tokens("INDOFARM: Outcome of Board Meeting"))]
+    assert assign_cluster("INDOFARM: Outcome of Board Meeting", recent) == "cluster-1"
+
+
+def test_clusters_do_not_grow_by_chaining():
+    """A joins B and B joins C, but A and C are unrelated. Comparing each new
+    headline against every past member let clusters chain until they held
+    stories with no words in common at all (seen: a 43-member cluster whose
+    members shared zero tokens). Only the cluster's seed is a valid target."""
+    from run import cluster_of
+    recent = []
+    a, _ = cluster_of("Reliance Jio subscriber growth slows in June quarter", recent)
+    b, _ = cluster_of("Reliance Jio subscriber growth slows, Airtel gains share", recent)
+    assert b == a, "genuine follow-up must still join"
+    c, known = cluster_of("Airtel gains market share as tariffs rise", recent)
+    assert c != a, "must not chain into Jio's cluster via the middle story"
+    assert not known
+
+
 CARD = {
     "hook": "Oil just got scary",
     "headline_rewrite": "Crude spikes 8% after supply shock",
