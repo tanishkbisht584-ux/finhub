@@ -66,7 +66,7 @@ class SignInScreen extends StatelessWidget {
               child: const Text('Continue with Google'),
             ),
             const SizedBox(height: 32),
-            Text('Not investment advice · Terms · Privacy · v0.7.4',
+            Text('Not investment advice · Terms · Privacy · v0.7.5',
                 textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11)),
           ],
         ),
