@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -37,10 +39,10 @@ Future<void> _unsave(BuildContext context, WidgetRef ref, Story s) async {
   } finally {
     ref.invalidate(savedProvider); // keeps the feed's bookmark honest too
   }
-  // Clear first: removing several in a row queued the toasts, so each one
-  // waited its turn and the last sat on screen long after the action. 4s to undo, then gone.
+  // Clear first: removing several in a row queued the toasts, so each waited
+  // its turn and the last sat on screen long after the action.
   messenger.clearSnackBars();
-  messenger.showSnackBar(SnackBar(
+  final toast = messenger.showSnackBar(SnackBar(
     duration: const Duration(seconds: 4),
     content: const Text('Removed from saved'),
     action: SnackBarAction(
@@ -53,6 +55,10 @@ Future<void> _unsave(BuildContext context, WidgetRef ref, Story s) async {
       },
     ),
   ));
+  // `duration` alone is not enough: Flutter skips the dismiss timer entirely
+  // for a SnackBar that has an action while an accessibility service is
+  // running, so the undo sat on screen indefinitely. Own the timer.
+  Timer(const Duration(seconds: 4), toast.close);
 }
 
 /// Saved — a table, not a card wall (minimal mockup).
