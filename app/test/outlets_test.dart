@@ -88,7 +88,11 @@ void main() {
       (tester) async {
     await tester.pumpWidget(_wrap(_story(outlets: _threeOutlets)));
     await tester.tap(find.text('+2 more'));
-    await tester.pumpAndSettle();
+    // Not pumpAndSettle: the card keeps an animation alive, so settling never
+    // completes and the sheet's own frames get missed.
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
     expect(find.text('Reported by 3 outlets'), findsOneWidget);
     expect(find.text('FIRST'), findsOneWidget);
     for (final name in ['Business Standard', 'Mint Companies', 'ET Top Stories']) {
