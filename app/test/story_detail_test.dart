@@ -3,6 +3,7 @@
 import 'package:finswipe/models.dart';
 import 'package:finswipe/screens/feed.dart' show StoryCard;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Story _story(Map<String, dynamic> overrides) => Story.fromJson({
@@ -26,7 +27,9 @@ Story _story(Map<String, dynamic> overrides) => Story.fromJson({
 void main() {
   testWidgets('renders hook, headline and impact', (tester) async {
     await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: StoryCard(story: _story(const {})))));
+        ProviderScope(
+            child: MaterialApp(
+                home: Scaffold(body: StoryCard(story: _story(const {}))))));
     expect(find.text('Oil just got scary'), findsOneWidget);
     expect(find.textContaining('IMPACT 9/10'), findsOneWidget);
   });
@@ -43,7 +46,8 @@ void main() {
       'sectors': null,
     });
     await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: StoryCard(story: bare))));
+        ProviderScope(
+            child: MaterialApp(home: Scaffold(body: StoryCard(story: bare)))));
     expect(find.text('Bare headline'), findsOneWidget);
     expect(find.textContaining('IMPACT –/10'), findsOneWidget);
   });
