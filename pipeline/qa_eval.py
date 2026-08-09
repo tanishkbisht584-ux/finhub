@@ -5,6 +5,7 @@ Exit 0 only when >= 12/15 behave AND every unanswerable refuses — a single
 invented answer is a trust failure no overall score can offset."""
 import os
 import sys
+import time
 
 import requests
 
@@ -36,7 +37,11 @@ CASES = [
 
 def main(jwt):
     ok = invented = 0
-    for q, must_refuse in CASES:
+    for n, (q, must_refuse) in enumerate(CASES):
+        if n:
+            # pace like a human: 15 back-to-back questions trip the providers'
+            # per-minute token limits and measure throttling, not quality
+            time.sleep(10)
         try:
             r = requests.post(URL, json={"question": q},
                               headers={"Authorization": f"Bearer {jwt}"}, timeout=90)

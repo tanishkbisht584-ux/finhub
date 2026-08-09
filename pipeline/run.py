@@ -305,9 +305,6 @@ PUBLISHER = {
     # deliberately: a false alert costs more than one that waits out the 5-minute
     # trusted-solo window.
     "The Hindu Business": "BusinessLine",
-    "Business Standard": "Business Standard",
-    "BS Markets": "Business Standard", "BS Companies": "Business Standard",
-    "BS Economy": "Business Standard",
     "LiveMint Markets": "LiveMint", "LiveMint Money": "LiveMint",
     "LiveMint Companies": "LiveMint", "LiveMint Industry": "LiveMint",
     "LiveMint Economy": "LiveMint", "Mint Companies": "LiveMint",

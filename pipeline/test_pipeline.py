@@ -87,13 +87,12 @@ def test_independent_sources_ignores_same_newsroom():
     # an outlet reached BOTH directly and via its Google News proxy is still one.
     assert independent_sources(["BusinessLine Markets", "BusinessLine Economy",
                                 "Hindu BusinessLine"]) == 1
-    assert independent_sources(["BS Markets", "BS Economy", "Business Standard"]) == 1
     assert independent_sources(["LiveMint Money", "Mint Companies"]) == 1
     assert independent_sources(["RBI Press", "RBI Notifications", "RBI Speeches"]) == 1
     assert independent_sources(["ET Commodities", "ET Banking"]) == 1
     assert independent_sources(["Investing.com", "Investing Commodities"]) == 1
     # ...but genuinely different newsrooms must still count separately.
-    assert independent_sources(["BS Markets", "LiveMint Money", "ET Banking"]) == 3
+    assert independent_sources(["Business Standard", "LiveMint Money", "ET Banking"]) == 3
 
 
 def test_breaking_news_jumps_the_backlog():

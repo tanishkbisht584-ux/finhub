@@ -52,10 +52,11 @@ insert into sources (name, type, feed_url, authority) values
 ('BusinessLine Economy',  'rss', 'https://www.thehindubusinessline.com/economy/feeder/default.rss', 8),
 ('BusinessLine Companies','rss', 'https://www.thehindubusinessline.com/companies/feeder/default.rss', 8),
 ('The Hindu Business',    'rss', 'https://www.thehindu.com/business/feeder/default.rss', 7),
--- Business Standard direct (same: proxy no longer the only route)
-('BS Markets',   'rss', 'https://www.business-standard.com/rss/markets-106.rss', 8),
-('BS Companies', 'rss', 'https://www.business-standard.com/rss/companies-101.rss', 8),
-('BS Economy',   'rss', 'https://www.business-standard.com/rss/economy-102.rss', 8),
+-- Business Standard direct RSS is deliberately NOT here. The feeds answer fine
+-- from an Indian residential IP but never once fetched from the GitHub Actions
+-- runner — they block datacenter IPs, which is the real reason BS was on the
+-- Google News proxy to begin with. Don't "restore" them: probing from a laptop
+-- will keep saying they work.
 -- ET sections; ET Commodities alone roughly doubles the thinnest category
 ('ET Commodities', 'rss', 'https://economictimes.indiatimes.com/markets/commodities/rssfeeds/1977021501.cms', 8),
 ('ET Stocks News', 'rss', 'https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms', 8),
