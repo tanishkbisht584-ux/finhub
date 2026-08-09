@@ -26,7 +26,15 @@ const shareTargets = <ShareTarget>[
   ShareTarget('x', 'X', Icons.tag_rounded, Color(0xFFE8E6E3)),
   ShareTarget('copy', 'Copy', Icons.link_rounded, inkDim),
   ShareTarget('card', 'Card', Icons.image_rounded, green),
+  // Sits beside Card, the tile the palette opens on, so backing out is one
+  // short slide right rather than a hunt to the far end of the row.
+  ShareTarget('cancel', 'Cancel', Icons.close_rounded, red),
 ];
+
+/// Index the palette opens on: the rendered card, with Cancel one step right
+/// and every messaging target to the left.
+final int defaultShareTarget =
+    shareTargets.indexWhere((t) => t.id == 'card');
 
 String shareText(Story s) =>
     '${s.hook ?? s.headline}\n\nvia FinSwipe · ${s.sourceUrl}';
@@ -51,6 +59,8 @@ Future<String?> runShareTarget(
   }
 
   switch (id) {
+    case 'cancel':
+      return null; // deliberate no-op: the user backed out
     case 'whatsapp':
       await tryScheme('whatsapp://send?text=$encoded',
           'https://wa.me/?text=$encoded');
@@ -150,6 +160,81 @@ class SharePaletteRow extends StatelessWidget {
                             fontSize: 9.5, color: active ? t.tint : inkDim)),
                   ),
                 ]),
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+
+/// The bookmark's ribbon: same hold-and-slide idea as the share palette, but
+/// vertical and stacked above the card. Icon-only by design — a menu of one
+/// today, with room for shelves and filters later.
+const ribbonTargets = <ShareTarget>[
+  ShareTarget('cancel', 'Cancel', Icons.close_rounded, red),
+  ShareTarget('saved', 'Saved', Icons.bookmarks_rounded, green),
+];
+
+/// Opens on Saved, the tile nearest the thumb; sliding up reaches Cancel.
+final int defaultRibbonTarget =
+    ribbonTargets.indexWhere((t) => t.id == 'saved');
+
+class RibbonColumn extends StatelessWidget {
+  const RibbonColumn({
+    super.key,
+    required this.animation,
+    required this.activeIndex,
+    required this.tileSize,
+    required this.gap,
+  });
+
+  final Animation<double> animation;
+  final int? activeIndex;
+  final double tileSize;
+  final double gap;
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: animation,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(ribbonTargets.length, (i) {
+          final t = ribbonTargets[i];
+          final active = i == activeIndex;
+          // Unfurl from the bottom up, toward the thumb.
+          final start = 0.08 * (ribbonTargets.length - 1 - i);
+          final curve = CurvedAnimation(
+            parent: animation,
+            curve: Interval(start, (start + 0.7).clamp(0.0, 1.0),
+                curve: Curves.easeOutCubic),
+          );
+          return Padding(
+            padding: EdgeInsets.only(bottom: i == ribbonTargets.length - 1 ? 0 : gap),
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.7, end: 1).animate(curve),
+              child: AnimatedScale(
+                scale: active ? 1.18 : 1,
+                duration: const Duration(milliseconds: 140),
+                curve: Curves.easeOut,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  width: tileSize,
+                  height: tileSize,
+                  decoration: BoxDecoration(
+                    color: active
+                        ? t.tint.withValues(alpha: 0.18)
+                        : surface.withValues(alpha: 0.96),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                        color: active ? t.tint : border,
+                        width: active ? 1.5 : 1),
+                  ),
+                  child: Icon(t.icon, size: 22, color: active ? t.tint : inkDim),
+                ),
               ),
             ),
           );

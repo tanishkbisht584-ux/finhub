@@ -155,7 +155,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
   static const _stepPx = 84.0;
   int? _activeTarget;
   Offset? _pressOrigin;
-  static final _midTarget = shareTargets.length ~/ 2;
+  final _bookmarkKey = GlobalKey();
+  bool _holdIsRibbon = false;
+
 
   late final AnimationController _burst = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 550));
@@ -243,58 +245,41 @@ class _StoryCardState extends ConsumerState<StoryCard>
     }
   }
 
-  /// Icon-only ribbon off the bookmark. Deliberately a menu of one for now —
-  /// the shape is what matters, so shelves and filters can join later without
-  /// another bottom-bar slot.
-  Future<void> _openRibbon() async {
-    HapticFeedback.mediumImpact();
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final origin = box.localToGlobal(Offset.zero);
-    final choice = await showMenu<String>(
-      context: context,
-      color: surface,
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(28),
-          side: const BorderSide(color: border)),
-      constraints: const BoxConstraints(minWidth: 52, maxWidth: 52),
-      position: RelativeRect.fromLTRB(
-        origin.dx + box.size.width - 68,
-        origin.dy + box.size.height - 210,
-        16,
-        0,
-      ),
-      items: [
-        PopupMenuItem(
-          value: 'saved',
-          height: 48,
-          padding: EdgeInsets.zero,
-          child: const Center(
-              child: Icon(Icons.bookmarks_rounded, size: 21, color: green)),
-        ),
-      ],
-    );
-    if (choice == 'saved' && mounted) {
-      Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => Scaffold(
-                appBar: AppBar(
-                    backgroundColor: bg,
-                    surfaceTintColor: bg,
-                    elevation: 0,
-                    leading: const BackButton(color: ink)),
-                body: const SavedScreen(),
-              )));
-    }
+  /// Fires the ribbon's choice. Kept separate from _fire so the share
+  /// analytics event never counts a navigation.
+  void _fireRibbon(int index) {
+    if (ribbonTargets[index].id != 'saved') return; // cancel is a no-op
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => Scaffold(
+              appBar: AppBar(
+                  backgroundColor: bg,
+                  surfaceTintColor: bg,
+                  elevation: 0,
+                  leading: const BackButton(color: ink)),
+              body: const SavedScreen(),
+            )));
   }
 
   // ---- hold-and-slide share ----
 
+  bool _pressedBookmark(Offset global) {
+    final box = _bookmarkKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return false;
+    // A little forgiveness around a 44px target that sits under a thumb.
+    return ((box.localToGlobal(Offset.zero) & box.size).inflate(10))
+        .contains(global);
+  }
+
   void _openPalette(Offset origin) {
+    // One long-press recognizer decides both gestures by where it began.
+    // Two overlapping recognizers — card-wide for share, bookmark for the
+    // ribbon — were genuinely ambiguous, and the card's won every time, so
+    // holding the bookmark opened the share palette instead.
     HapticFeedback.mediumImpact();
+    _holdIsRibbon = _pressedBookmark(origin);
     _pressOrigin = origin;
-    // Start on the tile nearest the thumb, so the palette is live the moment
-    // it appears and a hold-then-release still does something predictable.
-    setState(() => _activeTarget = _midTarget);
+    setState(() => _activeTarget =
+        _holdIsRibbon ? defaultRibbonTarget : defaultShareTarget);
     _palette.forward();
   }
 
@@ -308,6 +293,17 @@ class _StoryCardState extends ConsumerState<StoryCard>
     final dx = globalPos.dx - _pressOrigin!.dx;
     final dy = globalPos.dy - _pressOrigin!.dy;
 
+    // The ribbon is the same gesture on the other axis: slide up to walk it.
+    if (_holdIsRibbon) {
+      final next = (defaultRibbonTarget + (dy / _stepPx).round())
+          .clamp(0, ribbonTargets.length - 1);
+      if (next != _activeTarget) {
+        HapticFeedback.selectionClick();
+        setState(() => _activeTarget = next);
+      }
+      return;
+    }
+
     // Drag well below the rail to cancel — the one deliberate escape hatch.
     if (dy > 130) {
       if (_activeTarget != null) setState(() => _activeTarget = null);
@@ -318,7 +314,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
     // begins mid-row and slides either way. Anchoring to one edge only worked
     // when the gesture always started at the same corner.
     final steps = (dx / _stepPx).round();
-    final next = (_midTarget + steps).clamp(0, shareTargets.length - 1);
+    final next =
+        (defaultShareTarget + steps).clamp(0, shareTargets.length - 1);
     if (next != _activeTarget) {
       HapticFeedback.selectionClick();
       setState(() => _activeTarget = next);
@@ -327,9 +324,16 @@ class _StoryCardState extends ConsumerState<StoryCard>
 
   Future<void> _closePalette({bool commit = false}) async {
     final chosen = _activeTarget;
+    final wasRibbon = _holdIsRibbon;
     await _palette.reverse();
     if (mounted) setState(() => _activeTarget = null);
-    if (commit && chosen != null) await _fire(shareTargets[chosen].id);
+    _holdIsRibbon = false;
+    if (!commit || chosen == null || !mounted) return;
+    if (wasRibbon) {
+      _fireRibbon(chosen);
+    } else {
+      await _fire(shareTargets[chosen].id);
+    }
   }
 
   String get _horizon => switch (story.impactHorizon) {
@@ -374,14 +378,27 @@ class _StoryCardState extends ConsumerState<StoryCard>
             right: 0,
             bottom: 104,
             child: IgnorePointer(
-              child: Center(
-                child: SharePaletteRow(
-                  animation: _palette,
-                  activeIndex: _activeTarget,
-                  tileSize: _tileSize,
-                  gap: _tileGap,
-                ),
-              ),
+              child: _holdIsRibbon
+                  ? Align(
+                      alignment: Alignment.centerRight,
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 26),
+                        child: RibbonColumn(
+                          animation: _palette,
+                          activeIndex: _activeTarget,
+                          tileSize: _tileSize,
+                          gap: _tileGap,
+                        ),
+                      ),
+                    )
+                  : Center(
+                      child: SharePaletteRow(
+                        animation: _palette,
+                        activeIndex: _activeTarget,
+                        tileSize: _tileSize,
+                        gap: _tileGap,
+                      ),
+                    ),
             ),
           ),
 
@@ -613,15 +630,11 @@ class _StoryCardState extends ConsumerState<StoryCard>
   /// for the system sheet, hold to slide straight to a destination.
   Widget _rail(bool isSaved) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        // Long-press the bookmark for the ribbon; tap still toggles.
-        onLongPress: _openRibbon,
-        child: _railButton(
-          icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-          tint: isSaved ? green : inkDim,
-          onTap: _toggleSave,
-        ),
+      _railButton(
+        key: _bookmarkKey,
+        icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+        tint: isSaved ? green : inkDim,
+        onTap: _toggleSave,
       ),
       const SizedBox(height: 4),
       _railButton(
@@ -633,16 +646,18 @@ class _StoryCardState extends ConsumerState<StoryCard>
   }
 
   Widget _railButton({
+    Key? key,
     required IconData icon,
     required Color tint,
     VoidCallback? onTap,
   }) {
-    return InkResponse(
-      onTap: onTap,
-      radius: 26,
-      child: SizedBox(
-        width: 44,
-        height: 44,
+    return SizedBox(
+      key: key,
+      width: 44,
+      height: 44,
+      child: InkResponse(
+        onTap: onTap,
+        radius: 26,
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 160),
           transitionBuilder: (child, a) =>

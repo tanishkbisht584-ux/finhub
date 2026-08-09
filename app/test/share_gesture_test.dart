@@ -6,27 +6,30 @@ import 'package:flutter_test/flutter_test.dart';
 /// thumb rests on the rail below it — so it is worth pinning down separately.
 int? select(double dx, double dy) {
   const stepPx = 84.0;
-  final mid = shareTargets.length ~/ 2;
   if (dy > 130) return null; // drag down to cancel
-  return (mid + (dx / stepPx).round()).clamp(0, shareTargets.length - 1);
+  return (defaultShareTarget + (dx / stepPx).round())
+      .clamp(0, shareTargets.length - 1);
 }
 
 void main() {
-  test('a still thumb keeps the middle target', () {
-    expect(select(0, 0), shareTargets.length ~/ 2);
+  test('opens on the card tile', () {
+    expect(shareTargets[defaultShareTarget].id, 'card');
+    expect(select(0, 0), defaultShareTarget);
   });
 
   test('small wobble does not change target', () {
     // Instagram-ish: roughly half a step of travel before anything moves.
-    expect(select(30, 0), shareTargets.length ~/ 2);
-    expect(select(-30, 0), shareTargets.length ~/ 2);
+    expect(select(30, 0), defaultShareTarget);
+    expect(select(-30, 0), defaultShareTarget);
   });
 
-  test('a deliberate slide walks one tile per step, both ways', () {
-    final mid = shareTargets.length ~/ 2;
-    expect(select(84, 0), mid + 1);
-    expect(select(-84, 0), mid - 1);
-    expect(select(168, 0), mid + 2);
+  test('one short slide right reaches Cancel', () {
+    expect(shareTargets[select(84, 0)!].id, 'cancel');
+  });
+
+  test('sliding left walks the messaging targets', () {
+    expect(shareTargets[select(-84, 0)!].id, 'copy');
+    expect(shareTargets[select(-168, 0)!].id, 'x');
   });
 
   test('slides past the ends clamp instead of falling off', () {
