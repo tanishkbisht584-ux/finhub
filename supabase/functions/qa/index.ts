@@ -79,7 +79,8 @@ async function chat(prompt: string): Promise<string | null> {
 
 function prompt(question: string, sources: Source[]): string {
   const listing = sources.map((s, i) => `[${i + 1}] ${s.title}\n${s.body}`).join("\n\n");
-  return `You explain Indian market news to retail investors. Answer ONLY from the numbered sources below. Never use outside knowledge. Never give investment advice (no buy/sell/hold language). If the sources do not clearly answer the question, set refused=true.
+  return `You explain Indian market news to retail investors. Answer ONLY from the numbered sources below. Never use outside knowledge. If the sources do not clearly answer the question, set refused=true.
+HARD RULE: if the question asks for investment advice, a recommendation, or a prediction (should I buy/sell, will it rise, price targets, which stock to pick), set refused=true no matter what the sources say. Describing news about a company is not permission to advise on it.
 
 Question: ${question}
 
@@ -91,14 +92,40 @@ Return JSON exactly:
 cited = source numbers you actually used. followups = 2 short related questions answerable from these sources.`;
 }
 
+// Question words that carry no search signal. websearch mode ANDs every term,
+// so "What did the RBI decide recently?" demanded decide AND recently in the
+// story text and matched nothing — 7 of 10 answerable eval questions refused
+// on a feed that demonstrably covered them.
+const FILLER = new Set([
+  "what", "which", "who", "whom", "whose", "why", "how", "when", "where",
+  "is", "are", "was", "were", "be", "being", "been", "am", "do", "does",
+  "did", "doing", "has", "have", "had", "will", "would", "can", "could",
+  "should", "shall", "may", "might", "the", "a", "an", "of", "to", "in",
+  "on", "for", "and", "or", "as", "at", "by", "with", "about", "against",
+  "any", "some", "this", "that", "these", "those", "there", "here", "it",
+  "its", "my", "me", "i", "we", "our", "you", "your", "they", "their",
+  "recently", "today", "yesterday", "week", "now", "right", "latest",
+  "currently", "going", "happening", "mean", "means", "decide", "decided",
+  "announced", "move", "moved", "doing",
+]);
+
+/** Question -> `a | b | c` tsquery. Strictly [a-z0-9] so to_tsquery can never
+ *  be handed syntax it throws on. */
+function tsQuery(question: string): string {
+  const words = question.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const terms = words.filter((w) => w.length > 1 && !FILLER.has(w));
+  return (terms.length ? terms : words).join(" | ");
+}
+
 async function tier1(question: string): Promise<Source[]> {
-  const since = new Date(Date.now() - 7 * 864e5).toISOString();
-  const { data } = await sb.from("stories")
-    .select("headline, summary, source_name, source_url")
-    .eq("status", "approved").gte("published_at", since)
-    .textSearch("fts", question, { type: "websearch", config: "english" })
-    .limit(5);
-  return (data ?? []).map((s) => ({
+  const tsq = tsQuery(question);
+  if (!tsq) return [];
+  // Ranked retrieval lives in Postgres (search_stories, migration 005):
+  // PostgREST cannot order by ts_rank, and without ranking the OR-match handed
+  // the model five stories that merely shared a common word — it then refused,
+  // correctly, and the whole feature looked broken.
+  const { data } = await sb.rpc("search_stories", { tsq, max_rows: 5 });
+  return (data ?? []).map((s: Record<string, string>) => ({
     title: s.headline,
     body: s.summary ?? "",
     source_name: s.source_name,
@@ -140,15 +167,25 @@ async function answer(question: string) {
       continue; // bad JSON -> try next tier
     }
     if (out.refused) continue; // tier 1 refusal -> try web
-    const cited: number[] = Array.isArray(out.cited) ? out.cited : [];
+    // Models (gpt-oss especially) often answer well but leave `cited` empty.
+    // The answer was generated ONLY from these sources, so attaching them is
+    // honest — an empty citation list on a real answer would break the
+    // "every claim sourced" promise the whole Q&A design rests on.
+    const cited: number[] = (Array.isArray(out.cited) ? out.cited : [])
+      .map(Number).filter((i: number) => Number.isInteger(i));
+    // Guard the resolved list, not just `cited.length`: models also cite
+    // numbers that don't exist ([4,5] for three sources), which filtered down
+    // to nothing and shipped a sourceless answer — the exact failure the
+    // citation contract is meant to prevent.
+    const resolved = cited.map((i) => sources[i - 1]).filter(Boolean);
+    const picked = resolved.length ? resolved : sources.slice(0, 3);
     return {
       whats_happening: String(out.whats_happening ?? ""),
       why: String(out.why ?? ""),
       who_is_affected: String(out.who_is_affected ?? ""),
       what_to_watch: String(out.what_to_watch ?? ""),
       confidence: ["high", "medium", "low"].includes(out.confidence) ? out.confidence : "low",
-      sources: cited.map((i) => sources[i - 1]).filter(Boolean)
-        .map(({ title, url, source_name }) => ({ title, url, source_name })),
+      sources: picked.map(({ title, url, source_name }) => ({ title, url, source_name })),
       followups: (Array.isArray(out.followups) ? out.followups : []).slice(0, 3).map(String),
       tier,
       refused: false,
