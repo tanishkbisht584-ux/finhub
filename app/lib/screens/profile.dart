@@ -17,14 +17,7 @@ class ProfileScreen extends StatelessWidget {
         padding: const EdgeInsets.all(24),
         children: [
           Row(children: [
-            Container(
-              width: 48,
-              height: 48,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(border: Border.all(color: border)),
-              child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
-                  style: serif.copyWith(fontSize: 22)),
-            ),
+            _photo(user, name),
             const SizedBox(width: 14),
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -55,6 +48,29 @@ class ProfileScreen extends StatelessWidget {
             style: mono.copyWith(fontSize: 11, height: 1.6),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Google picture when there is one, initial when there isn't — same rule as
+  /// the nav bar, so the two never disagree.
+  Widget _photo(User? user, String name) {
+    final meta = user?.userMetadata ?? const {};
+    final url = (meta['avatar_url'] ?? meta['picture']) as String?;
+    final initial = name.isEmpty ? '?' : name[0].toUpperCase();
+    final fallback = Container(
+      color: surface,
+      alignment: Alignment.center,
+      child: Text(initial, style: serif.copyWith(fontSize: 22)),
+    );
+    return ClipOval(
+      child: SizedBox(
+        width: 52,
+        height: 52,
+        child: url == null || url.isEmpty
+            ? fallback
+            : Image.network(url,
+                fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback),
       ),
     );
   }

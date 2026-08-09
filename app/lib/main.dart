@@ -5,7 +5,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/ask.dart';
 import 'screens/feed.dart';
 import 'screens/profile.dart';
-import 'screens/saved.dart';
 import 'screens/sign_in.dart';
 import 'theme.dart';
 
@@ -78,23 +77,60 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       body: IndexedStack(
         index: _tab,
-        children: const [
-          FeedScreen(),
-          AskScreen(),
-          SavedScreen(),
-          ProfileScreen()
-        ],
+        children: const [FeedScreen(), AskScreen(), ProfileScreen()],
       ),
+      // Three destinations, not four: Saved is a place you visit occasionally,
+      // not a peer of the feed. It now hangs off the bookmark on a card, where
+      // the thought "I want my saved ones" actually occurs.
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.swipe_vertical), label: 'Feed'),
-          NavigationDestination(icon: Icon(Icons.search), label: 'Ask'),
-          NavigationDestination(icon: Icon(Icons.bookmark_outline), label: 'Saved'),
-          NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
+        destinations: [
+          const NavigationDestination(
+              icon: Icon(Icons.newspaper_outlined),
+              selectedIcon: Icon(Icons.newspaper),
+              label: 'News'),
+          const NavigationDestination(
+              icon: Icon(Icons.search), label: 'Ask'),
+          NavigationDestination(icon: const _Avatar(), label: 'Profile'),
         ],
       ),
     );
   }
+}
+
+/// The signed-in user's Google picture, falling back to their initial when
+/// there is no photo or it fails to load — a broken image icon in the nav bar
+/// would look like the app itself is broken.
+class _Avatar extends StatelessWidget {
+  const _Avatar();
+
+  @override
+  Widget build(BuildContext context) {
+    final user = Supabase.instance.client.auth.currentUser;
+    final meta = user?.userMetadata ?? const {};
+    final url = (meta['avatar_url'] ?? meta['picture']) as String?;
+    final name = (meta['full_name'] ?? meta['name'] ?? user?.email ?? '?') as String;
+    final initial = name.isEmpty ? '?' : name[0].toUpperCase();
+
+    return ClipOval(
+      child: SizedBox(
+        width: 26,
+        height: 26,
+        child: url == null || url.isEmpty
+            ? _initialAvatar(initial)
+            : Image.network(url,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => _initialAvatar(initial)),
+      ),
+    );
+  }
+
+  Widget _initialAvatar(String initial) => Container(
+        color: surface,
+        alignment: Alignment.center,
+        child: Text(initial,
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w700, color: inkDim)),
+      );
 }

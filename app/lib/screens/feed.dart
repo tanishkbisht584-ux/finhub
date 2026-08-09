@@ -243,6 +243,50 @@ class _StoryCardState extends ConsumerState<StoryCard>
     }
   }
 
+  /// Icon-only ribbon off the bookmark. Deliberately a menu of one for now —
+  /// the shape is what matters, so shelves and filters can join later without
+  /// another bottom-bar slot.
+  Future<void> _openRibbon() async {
+    HapticFeedback.mediumImpact();
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final origin = box.localToGlobal(Offset.zero);
+    final choice = await showMenu<String>(
+      context: context,
+      color: surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: const BorderSide(color: border)),
+      constraints: const BoxConstraints(minWidth: 52, maxWidth: 52),
+      position: RelativeRect.fromLTRB(
+        origin.dx + box.size.width - 68,
+        origin.dy + box.size.height - 210,
+        16,
+        0,
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'saved',
+          height: 48,
+          padding: EdgeInsets.zero,
+          child: const Center(
+              child: Icon(Icons.bookmarks_rounded, size: 21, color: green)),
+        ),
+      ],
+    );
+    if (choice == 'saved' && mounted) {
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => Scaffold(
+                appBar: AppBar(
+                    backgroundColor: bg,
+                    surfaceTintColor: bg,
+                    elevation: 0,
+                    leading: const BackButton(color: ink)),
+                body: const SavedScreen(),
+              )));
+    }
+  }
+
   // ---- hold-and-slide share ----
 
   void _openPalette(Offset origin) {
@@ -569,10 +613,15 @@ class _StoryCardState extends ConsumerState<StoryCard>
   /// for the system sheet, hold to slide straight to a destination.
   Widget _rail(bool isSaved) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      _railButton(
-        icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-        tint: isSaved ? green : inkDim,
-        onTap: _toggleSave,
+      GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        // Long-press the bookmark for the ribbon; tap still toggles.
+        onLongPress: _openRibbon,
+        child: _railButton(
+          icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+          tint: isSaved ? green : inkDim,
+          onTap: _toggleSave,
+        ),
       ),
       const SizedBox(height: 4),
       _railButton(
