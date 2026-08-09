@@ -131,6 +131,30 @@ def test_independent_sources_ignores_same_newsroom():
     assert independent_sources(["Business Standard", "LiveMint Money", "ET Banking"]) == 3
 
 
+def test_duplicate_is_only_stored_when_its_parent_landed():
+    """A duplicate written while its parent was deferred orphans the event.
+
+    Measured 2026-08-09: 969 stories sat in 226 clusters where every member was
+    a duplicate and no card was ever shown — TBO Tek's results, Britannia's
+    shareholder meeting. The parent had been cut by the per-run AI cap, its
+    free duplicates were written anyway, and on the next run the parent matched
+    the cluster its own copies had made and became a duplicate too.
+
+    This pins the rule the fix encodes: store a duplicate only when its cluster
+    already existed in the database, or its card was inserted this run."""
+    seen_clusters = {"already-in-db"}          # loaded at the start of the run
+    landed = {"processed-this-run"}            # card inserted moments ago
+
+    def stored(cid):
+        return cid in seen_clusters or cid in landed
+
+    assert stored("already-in-db"), "parent from an earlier run"
+    assert stored("processed-this-run"), "parent inserted this run"
+    assert not stored("parent-was-deferred"), (
+        "parent never reached the database, so its duplicate must be held back "
+        "and the whole group retried together")
+
+
 def test_app_publisher_map_matches_the_pipeline():
     """The app collapses a newsroom's feeds into one outlet on the card, using
     a copy of PUBLISHER in app/lib/publishers.dart. Two copies drift, and the

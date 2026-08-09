@@ -751,12 +751,13 @@ def main():
                 # highest-authority primary sources the product exists to surface.
                 "published_at": item["published_at"] or datetime.now(timezone.utc).isoformat()}
 
-    for status, batch in (("duplicate", dupes), ("rejected", noise)):
-        for item, cid in batch:
-            try:
-                insert_story({**base_row(item, cid), "status": status}, companies_by_key)
-            except requests.RequestException as e:
-                print(f"{status.upper()} INSERT FAIL {item['url_hash'][:8]}: {e}")
+    # Low-value items each open their own cluster, so nothing depends on them.
+    for item, cid in noise:
+        try:
+            insert_story({**base_row(item, cid), "status": "rejected"}, companies_by_key)
+        except requests.RequestException as e:
+            print(f"REJECTED INSERT FAIL {item['url_hash'][:8]}: {e}")
+    # Duplicates wait for the AI phase — see the guard below.
 
     # Concurrent AI; ai.py's per-lane throttle keeps the free tier happy.
     # Hard wall-clock budget: when only one model lane is live the throttle caps
@@ -764,6 +765,7 @@ def main():
     # the run before alerts and auto-approve ever execute. Past the deadline the
     # remaining stories defer exactly like a quota block — nothing is lost.
     processed = flagged = dropped = quota_blocked = merged = 0
+    landed = set()   # clusters whose card actually reached the database this run
     deadline = time.monotonic() + AI_PHASE_SECONDS
 
     def process_within_budget(name, headline, body):
@@ -828,8 +830,35 @@ def main():
             except requests.RequestException as e:  # never lose the whole run to one row
                 print(f"INSERT FAIL {item['source']['name']}: {e}")
                 continue
+            landed.add(base["cluster_id"])
             processed += 1 if keep else 0
             dropped += 0 if keep else 1
+
+    # A duplicate is only meaningful next to the card it duplicates. Its parent
+    # may never have been stored — the per-run cap cuts the queue, quota runs
+    # out, the AI phase hits its deadline — and duplicates cost nothing, so they
+    # used to be written anyway. The parent then returned on the next run,
+    # matched the cluster its own copies had created, and was filed as a
+    # duplicate too: 969 stories sat in 226 clusters where every member was a
+    # duplicate and no card was ever shown, TBO Tek's results and Britannia's
+    # shareholder meeting among them.
+    #
+    # So hold them until the parent is known to have landed — either it was
+    # already in the database when this run started, or it was inserted above.
+    # Otherwise drop the duplicate unwritten: its url stays unseen, and the next
+    # run picks up the whole group together.
+    held = 0
+    for item, cid in dupes:
+        if cid not in seen_clusters and cid not in landed:
+            held += 1
+            continue
+        try:
+            insert_story({**base_row(item, cid), "status": "duplicate"}, companies_by_key)
+        except requests.RequestException as e:
+            print(f"DUPLICATE INSERT FAIL {item['url_hash'][:8]}: {e}")
+    if held:
+        print(f"{held} duplicates held back: their story was deferred, so the "
+              f"whole group waits for the next run")
 
     if fetched_source_ids:
         ids = ",".join(str(i) for i in fetched_source_ids)
