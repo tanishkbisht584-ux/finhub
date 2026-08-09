@@ -98,11 +98,17 @@ class _StoryCardState extends ConsumerState<StoryCard>
   Story get story => widget.story;
   bool _saved = false;
   final _shareKey = GlobalKey();
-  final _paletteKey = GlobalKey();
 
   static const _tileSize = 46.0;
   static const _tileGap = 10.0;
+  /// Travel per tile. Deliberately wider than the tiles themselves (56px):
+  /// stepping on tile width made the row flicker between targets on the
+  /// slightest thumb wobble. 84px gives a ~42px dead zone before the first
+  /// change, which is about what Instagram's reaction picker asks for.
+  static const _stepPx = 84.0;
   int? _activeTarget;
+  Offset? _pressOrigin;
+  static final _midTarget = shareTargets.length ~/ 2;
 
   late final AnimationController _burst = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 550));
@@ -179,24 +185,38 @@ class _StoryCardState extends ConsumerState<StoryCard>
 
   // ---- hold-and-slide share ----
 
-  void _openPalette() {
+  void _openPalette(Offset origin) {
     HapticFeedback.mediumImpact();
-    setState(() => _activeTarget = null);
+    _pressOrigin = origin;
+    // Start on the tile nearest the thumb, so the palette is live the moment
+    // it appears and a hold-then-release still does something predictable.
+    setState(() => _activeTarget = _midTarget);
     _palette.forward();
   }
 
-  /// Maps the thumb to a tile by measuring the palette's own box, so the
-  /// hit-testing stays correct whatever the screen width.
+  /// Selection is measured from where the thumb pressed, not from the palette's
+  /// box. Hit-testing against the row itself failed in the obvious way: the
+  /// thumb sits on the rail ~96px *below* the tiles, so it never fell inside
+  /// them and nothing ever highlighted. Distance travelled is what the gesture
+  /// is actually about, and it does not care where anything is laid out.
   void _trackThumb(Offset globalPos) {
-    final box = _paletteKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final local = box.globalToLocal(globalPos);
-    final slot = _tileSize + _tileGap;
-    final i = (local.dx / slot).floor();
-    final inRow = local.dy >= -36 && local.dy <= _tileSize + 36;
-    final next = (inRow && i >= 0 && i < shareTargets.length) ? i : null;
+    if (_pressOrigin == null) return;
+    final dx = globalPos.dx - _pressOrigin!.dx;
+    final dy = globalPos.dy - _pressOrigin!.dy;
+
+    // Drag well below the rail to cancel — the one deliberate escape hatch.
+    if (dy > 130) {
+      if (_activeTarget != null) setState(() => _activeTarget = null);
+      return;
+    }
+
+    // Symmetric walk: the hold can start anywhere on the card, so selection
+    // begins mid-row and slides either way. Anchoring to one edge only worked
+    // when the gesture always started at the same corner.
+    final steps = (dx / _stepPx).round();
+    final next = (_midTarget + steps).clamp(0, shareTargets.length - 1);
     if (next != _activeTarget) {
-      if (next != null) HapticFeedback.selectionClick();
+      HapticFeedback.selectionClick();
       setState(() => _activeTarget = next);
     }
   }
@@ -225,6 +245,12 @@ class _StoryCardState extends ConsumerState<StoryCard>
     return SafeArea(
       child: GestureDetector(
         onDoubleTap: () => _save(viaDoubleTap: true),
+        // Hold anywhere on the card, not just the small rail icon — the whole
+        // card is the target you already have your thumb on.
+        onLongPressStart: (d) => _openPalette(d.globalPosition),
+        onLongPressMoveUpdate: (d) => _trackThumb(d.globalPosition),
+        onLongPressEnd: (_) => _closePalette(commit: true),
+        onLongPressCancel: () => _closePalette(),
         child: Stack(alignment: Alignment.center, children: [
           RepaintBoundary(key: _shareKey, child: _card(dir, isSaved)),
 
@@ -237,17 +263,20 @@ class _StoryCardState extends ConsumerState<StoryCard>
             ),
           ),
 
-          // The palette floats clear of the rail it springs from.
+          // Centred above the rail: the hold starts anywhere, so the row
+          // cannot be anchored to the thumb.
           Positioned(
-            right: 28,
-            bottom: 96,
+            left: 0,
+            right: 0,
+            bottom: 104,
             child: IgnorePointer(
-              child: SharePaletteRow(
-                key: _paletteKey,
-                animation: _palette,
-                activeIndex: _activeTarget,
-                tileSize: _tileSize,
-                gap: _tileGap,
+              child: Center(
+                child: SharePaletteRow(
+                  animation: _palette,
+                  activeIndex: _activeTarget,
+                  tileSize: _tileSize,
+                  gap: _tileGap,
+                ),
               ),
             ),
           ),
@@ -400,17 +429,10 @@ class _StoryCardState extends ConsumerState<StoryCard>
         onTap: _save,
       ),
       const SizedBox(height: 4),
-      GestureDetector(
-        behavior: HitTestBehavior.opaque,
+      _railButton(
+        icon: Icons.ios_share_rounded,
+        tint: inkDim,
         onTap: () => _fire('card'),
-        onLongPressStart: (_) => _openPalette(),
-        onLongPressMoveUpdate: (d) => _trackThumb(d.globalPosition),
-        onLongPressEnd: (_) => _closePalette(commit: true),
-        onLongPressCancel: () => _closePalette(),
-        child: _railButton(
-          icon: Icons.ios_share_rounded,
-          tint: _palette.isDismissed ? inkDim : green,
-        ),
       ),
     ]);
   }
