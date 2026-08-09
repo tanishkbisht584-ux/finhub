@@ -152,11 +152,15 @@ class _StoryCardState extends ConsumerState<StoryCard>
 
   static const _tileSize = 46.0;
   static const _tileGap = 10.0;
-  /// Travel per tile. Deliberately wider than the tiles themselves (56px):
-  /// stepping on tile width made the row flicker between targets on the
-  /// slightest thumb wobble. 84px gives a ~42px dead zone before the first
-  /// change, which is about what Instagram's reaction picker asks for.
+  /// Travel per tile for the vertical ribbon: wide, because a stray flick
+  /// there navigates away.
   static const _stepPx = 84.0;
+
+  /// Travel per cell in the share grid, deliberately shorter. The grid is a
+  /// glide across nine targets rather than a walk along a row, so it wants to
+  /// be light under the thumb; the grid's own geometry stops a wobble
+  /// crossing a boundary, which is what the wider step was guarding against.
+  static const _gridStepPx = 52.0;
   int? _activeTarget;
   Offset? _pressOrigin;
   final _bookmarkKey = GlobalKey();
@@ -308,18 +312,20 @@ class _StoryCardState extends ConsumerState<StoryCard>
       return;
     }
 
-    // Drag well below the rail to cancel — the one deliberate escape hatch.
-    if (dy > 130) {
+    // Escape hatch, well past the grid's own reach so it cannot fire by
+    // accident now that a Cancel tile exists too.
+    if (dy > 240) {
       if (_activeTarget != null) setState(() => _activeTarget = null);
       return;
     }
 
-    // Symmetric walk: the hold can start anywhere on the card, so selection
-    // begins mid-row and slides either way. Anchoring to one edge only worked
-    // when the gesture always started at the same corner.
-    final steps = (dx / _stepPx).round();
-    final next =
-        (defaultShareTarget + steps).clamp(0, shareTargets.length - 1);
+    // Two axes, one cell each: the grid opens on its centre, so a target is
+    // never more than one short glide away in either direction.
+    const cols = shareGridColumns;
+    final rows = (shareTargets.length / cols).ceil();
+    final col = (1 + (dx / _gridStepPx).round()).clamp(0, cols - 1);
+    final row = (1 + (dy / _gridStepPx).round()).clamp(0, rows - 1);
+    final next = (row * cols + col).clamp(0, shareTargets.length - 1);
     if (next != _activeTarget) {
       HapticFeedback.selectionClick();
       setState(() => _activeTarget = next);
@@ -381,7 +387,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
           Positioned(
             left: 0,
             right: 0,
-            bottom: 104,
+            bottom: 128,
             child: IgnorePointer(
               child: _holdIsRibbon
                   ? Align(

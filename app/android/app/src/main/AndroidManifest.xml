@@ -71,6 +71,14 @@
             <data android:scheme="twitter"/>
         </intent>
         <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="fb-messenger"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="discord"/>
+        </intent>
+        <intent>
             <action android:name="android.intent.action.SEND"/>
             <data android:mimeType="*/*"/>
         </intent>
