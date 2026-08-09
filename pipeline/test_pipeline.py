@@ -131,6 +131,62 @@ def test_independent_sources_ignores_same_newsroom():
     assert independent_sources(["Business Standard", "LiveMint Money", "ET Banking"]) == 3
 
 
+def test_ai_rewrites_of_one_event_merge_into_one_card():
+    """Real pairs from the feed on 2026-08-09: two outlets, wording far enough
+    apart that the pre-AI check passed them both, identical once the AI had
+    rewritten them. Each was published as a separate card."""
+    from run import merge_target
+    for first, second in [
+        ("Commerce Minister Piyush Goyal clarifies India opposes a shared BRICS currency",
+         "Commerce Minister Piyush Goyal clarifies India opposes a shared BRICS currency"),
+        ("RBI denies Religare Enterprises' proposal to demerge business units",
+         "RBI denies Religare Enterprises' proposal to demerge its business units"),
+        ("US stocks rally as cooling labor market eases rate hike fears",
+         "US stocks climb as cooling labor market eases rate hike fears"),
+        ("Delhi High Court stays FSSAI order restricting Dabur 100 percent pure claim",
+         "Delhi High Court stays FSSAI directive restricting Dabur '100% pure' claim"),
+        ("Hindalco reports strong Q1 earnings despite bauxite supply concerns",
+         "Hindalco reports strong Q1 profit growth despite bauxite supply concerns"),
+    ]:
+        published = [("cluster-1", title_tokens(first))]
+        assert merge_target(second, published) == "cluster-1", second
+
+
+def test_merge_threshold_errs_towards_showing_a_duplicate():
+    """Pairs that ARE one event but score below the bar stay separate on
+    purpose. PFRDA's pension approval told two ways scores 0.60, under the
+    0.64 that two different companies' results reach, so it cannot be merged
+    without also merging those. Documented, not accidental."""
+    from run import merge_target
+    published = [("cluster-1", title_tokens(
+        "PFRDA adds four new players to the National Pension System"))]
+    assert merge_target(
+        "PFRDA Approves Four New Pension Funds for National Pension System",
+        published) is None
+
+
+def test_merge_leaves_genuinely_different_news_alone():
+    """The guard on the above: similar shape, different event. These must stay
+    separate cards or the merge is destroying news instead of tidying it."""
+    from run import merge_target
+    for first, second in [
+        # same company, different events
+        ("Hindalco reports strong Q1 earnings despite bauxite supply concerns",
+         "Hindalco announces Rs 8,000 crore expansion of its Odisha smelter"),
+        # same event shape, different companies
+        ("Infosys Q1 net profit rises 11 percent on strong deal wins",
+         "Wipro Q1 net profit rises 9 percent on strong deal wins"),
+        # same regulator, different rulings
+        ("RBI denies Religare Enterprises' proposal to demerge business units",
+         "RBI approves HDFC Bank's proposal to raise Tier-II capital"),
+        # opposite outcomes must never merge
+        ("Delhi High Court stays FSSAI order restricting Dabur's claim",
+         "Delhi High Court dismisses Dabur's plea against the FSSAI order"),
+    ]:
+        published = [("cluster-1", title_tokens(first))]
+        assert merge_target(second, published) is None, second
+
+
 def test_breaking_news_jumps_the_backlog():
     """A story minutes old must reach the AI before a 300-item backlog, whatever
     its source's authority — that ordering is the whole latency promise."""

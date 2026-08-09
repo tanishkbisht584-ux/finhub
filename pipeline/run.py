@@ -176,6 +176,38 @@ def assign_cluster(title, recent):
     return str(uuid.uuid4())
 
 
+SAME_STORY = 0.70  # on AI-written headlines, which share one house style
+
+
+def merge_target(rewritten, published):
+    """The cluster this card belongs to if another outlet already told this
+    story, else None. `published` is (cluster_id, tokens) per card already
+    written this window.
+
+    The pre-AI check compares the outlets' own wording, and two newsrooms
+    rarely word anything the same way — ET's "Goyal says India not backing
+    BRICS currency" and Mint's "No common BRICS currency: Piyush Goyal" share
+    barely a third of their words and both get processed. The AI then rewrites
+    both into one house style, at which point they are word-for-word identical.
+    Comparing after the rewrite is comparing meaning, because the model has
+    already done the interpreting. Measured on 48h of real cards: at 0.6 the
+    matches are genuine (same court stay, same pension approval, same results),
+    The bar sits above the 0.5 used on raw headlines, and is set from measured
+    pairs rather than taste. Same event scores 0.71-1.00 (one court stay told
+    twice, "rally" vs "climb"); different events of the same shape score up to
+    0.64 ("Infosys Q1 profit rises 11%" vs "Wipro Q1 profit rises 9%", which
+    share every word but the two company names). 0.70 is the gap between them.
+    The margin is thin, so it errs high: a missed merge shows a duplicate card,
+    a wrong merge deletes a real story."""
+    tokens = title_tokens(rewritten)
+    if not tokens:
+        return None
+    for cid, other in published:
+        if other and len(tokens & other) / len(tokens | other) >= SAME_STORY:
+            return cid
+    return None
+
+
 def cluster_of(headline, recent):
     """Assign `headline` to a cluster, recording a new one in `recent` in place.
     Returns (cluster_id, already_seen).
@@ -657,12 +689,16 @@ def main():
     since = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Oldest first, one entry per cluster: the seed decides what the cluster is
     # about (see cluster_of). Loading every member is what let clusters chain.
-    recent, seen_clusters = [], set()
-    for r in sb("GET", f"stories?select=cluster_id,headline&created_at=gte.{since}"
+    recent, seen_clusters, published = [], set(), []
+    for r in sb("GET", f"stories?select=cluster_id,headline,status&created_at=gte.{since}"
                        "&order=created_at.asc"):
         if r["cluster_id"] not in seen_clusters:
             seen_clusters.add(r["cluster_id"])
             recent.append((r["cluster_id"], title_tokens(r["headline"])))
+        # Cards that reached the feed: their `headline` is the AI's rewrite, so
+        # this is the only list where comparing like with like is possible.
+        if r["status"] in ("approved", "pending"):
+            published.append((r["cluster_id"], title_tokens(r["headline"])))
 
     items, fetched_source_ids = [], []
     for s in sources:
@@ -727,7 +763,7 @@ def main():
     # throughput at ~15/min, so a full cap could outlast the job timeout and kill
     # the run before alerts and auto-approve ever execute. Past the deadline the
     # remaining stories defer exactly like a quota block — nothing is lost.
-    processed = flagged = dropped = quota_blocked = 0
+    processed = flagged = dropped = quota_blocked = merged = 0
     deadline = time.monotonic() + AI_PHASE_SECONDS
 
     def process_within_budget(name, headline, body):
@@ -764,6 +800,19 @@ def main():
             # PUSHING is untouched: alert_engine still demands corroboration
             # before anything buzzes a phone. Publish fast, alert carefully.
             live_now = keep and imp["score"] >= FAST_LANE_SCORE
+            # Second dedupe, now that the AI has put both outlets' wording into
+            # one voice. The story is still stored — its outlet and link are
+            # what a card's "also reported by" list is built from — but it
+            # joins the existing cluster instead of becoming a second card for
+            # the same news. The AI call is already spent by here; this
+            # protects the feed, not the budget.
+            twin = merge_target(card["headline_rewrite"], published) if keep else None
+            if twin:
+                base = {**base, "cluster_id": twin}
+                merged += 1
+            elif keep:
+                published.append((base["cluster_id"],
+                                  title_tokens(card["headline_rewrite"])))
             try:
                 insert_story({
                     **base,
@@ -773,7 +822,8 @@ def main():
                     "impact_horizon": imp["horizon"], "impact_score": imp["score"],
                     "confidence": card["confidence"], "category": card["category"],
                     "sectors": card["sectors"],
-                    "status": ("approved" if live_now else "pending") if keep else "rejected",
+                    "status": "duplicate" if twin else (
+                        ("approved" if live_now else "pending") if keep else "rejected"),
                 }, companies_by_key, card)
             except requests.RequestException as e:  # never lose the whole run to one row
                 print(f"INSERT FAIL {item['source']['name']}: {e}")
@@ -793,6 +843,7 @@ def main():
     revived = revive_sources()
     approved = auto_approve()
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
+          + (f", {merged} merged into an existing story" if merged else "")
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
           + f" | editor: {releveled} releveled | alerts: {alerted} sent | "
           f"self-heal: {healed} recovered, {disabled} retired, {revived} revived, {approved} auto-approved")
