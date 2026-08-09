@@ -47,8 +47,16 @@ class SavedScreen extends ConsumerWidget {
               ),
             ),
             Expanded(
-              child: list.isEmpty
-                  ? const Center(child: Text('Nothing saved yet'))
+              // Pull-to-refresh needs a scrollable even when empty, so the
+              // "nothing saved" state is a list too — otherwise the one moment
+              // you most want to retry is the one moment you cannot.
+              child: RefreshIndicator(
+                onRefresh: () => ref.refresh(savedProvider.future),
+                child: list.isEmpty
+                  ? ListView(children: const [
+                      SizedBox(height: 120),
+                      Center(child: Text('Nothing saved yet')),
+                    ])
                   : ListView.separated(
                       itemCount: list.length,
                       separatorBuilder: (_, i) => const Divider(height: 1),
@@ -57,15 +65,19 @@ class SavedScreen extends ConsumerWidget {
                         return Dismissible(
                           key: ValueKey(s.id),
                           direction: DismissDirection.endToStart,
-                          onDismissed: (_) {
+                          onDismissed: (_) async {
                             final uid = Supabase
                                 .instance.client.auth.currentUser!.id;
-                            Supabase.instance.client
-                                .from('saves')
-                                .delete()
-                                .eq('user_id', uid)
-                                .eq('story_id', s.id)
-                                .then((_) {}, onError: (_) {});
+                            try {
+                              await Supabase.instance.client
+                                  .from('saves')
+                                  .delete()
+                                  .eq('user_id', uid)
+                                  .eq('story_id', s.id);
+                            } finally {
+                              // keeps the feed's bookmark icon honest too
+                              ref.invalidate(savedProvider);
+                            }
                           },
                           background: Container(
                               color: red.withValues(alpha: 0.2),
@@ -92,6 +104,7 @@ class SavedScreen extends ConsumerWidget {
                         );
                       },
                     ),
+              ),
             ),
           ],
         ),

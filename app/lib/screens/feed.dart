@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../feed_cache.dart';
 import '../models.dart';
 import '../share_palette.dart';
+import 'saved.dart';
 import '../theme.dart';
 
 /// Whether the feed currently on screen came from the device cache.
@@ -84,15 +85,15 @@ class FeedScreen extends ConsumerWidget {
   }
 }
 
-class StoryCard extends StatefulWidget {
+class StoryCard extends ConsumerStatefulWidget {
   const StoryCard({super.key, required this.story});
   final Story story;
 
   @override
-  State<StoryCard> createState() => _StoryCardState();
+  ConsumerState<StoryCard> createState() => _StoryCardState();
 }
 
-class _StoryCardState extends State<StoryCard>
+class _StoryCardState extends ConsumerState<StoryCard>
     with TickerProviderStateMixin {
   Story get story => widget.story;
   bool _saved = false;
@@ -128,6 +129,9 @@ class _StoryCardState extends State<StoryCard>
       await Supabase.instance.client
           .from('saves')
           .upsert({'user_id': user.id, 'story_id': story.id});
+      // The Saved tab reads its own provider; without this it kept serving the
+      // list it fetched on first open and a just-saved story never appeared.
+      ref.invalidate(savedProvider);
     } catch (e) {
       if (!mounted) return;
       setState(() => _saved = false); // never leave a lie on screen
@@ -214,11 +218,15 @@ class _StoryCardState extends State<StoryCard>
   @override
   Widget build(BuildContext context) {
     final dir = directionColor(story.impactDirection);
+    // The optimistic flag only knows about taps in this session; the saved list
+    // is the source of truth, so a story saved earlier still shows filled.
+    final known = ref.watch(savedProvider).valueOrNull;
+    final isSaved = _saved || (known?.any((s) => s.id == story.id) ?? false);
     return SafeArea(
       child: GestureDetector(
         onDoubleTap: () => _save(viaDoubleTap: true),
         child: Stack(alignment: Alignment.center, children: [
-          RepaintBoundary(key: _shareKey, child: _card(dir)),
+          RepaintBoundary(key: _shareKey, child: _card(dir, isSaved)),
 
           // Dim the card while the palette is up, so the targets read as a
           // layer above rather than more card furniture.
@@ -263,7 +271,7 @@ class _StoryCardState extends State<StoryCard>
     );
   }
 
-  Widget _card(Color dir) {
+  Widget _card(Color dir, bool isSaved) {
     return Container(
         margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         decoration: BoxDecoration(
@@ -328,7 +336,7 @@ class _StoryCardState extends State<StoryCard>
             // feed has trained thumbs to expect.
             Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
               Expanded(child: _attribution(dir)),
-              _rail(),
+              _rail(isSaved),
             ]),
           ],
         ));
@@ -384,11 +392,11 @@ class _StoryCardState extends State<StoryCard>
 
   /// Vertical action rail. Share is a single control with two gestures: tap
   /// for the system sheet, hold to slide straight to a destination.
-  Widget _rail() {
+  Widget _rail(bool isSaved) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
       _railButton(
-        icon: _saved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-        tint: _saved ? green : inkDim,
+        icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+        tint: isSaved ? green : inkDim,
         onTap: _save,
       ),
       const SizedBox(height: 4),
