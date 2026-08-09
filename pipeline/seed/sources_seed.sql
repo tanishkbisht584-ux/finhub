@@ -35,3 +35,45 @@ insert into sources (name, type, feed_url, authority) values
 ('CNBC-TV18',          'google_news_query', 'site:cnbctv18.com', 7),
 ('Mint Companies',     'google_news_query', 'site:livemint.com companies', 8),
 ('Reuters India',      'google_news_query', 'site:reuters.com india markets', 9);
+
+-- Added 2026-08-09: 26 feeds, each probed live before inclusion (>=3 items
+-- inside run.py's 48h freshness window at seed time). Chosen to fill the two
+-- thinnest categories (Commodities, Economy) and to reach outlets directly that
+-- were only available through the Google News proxy. Every name here is mapped
+-- in run.py's PUBLISHER dict — a newsroom's section feeds must not be mistaken
+-- for independent corroboration by the alert gate.
+insert into sources (name, type, feed_url, authority) values
+-- regulators / government primary
+('RBI Notifications',   'rss', 'https://www.rbi.org.in/notifications_rss.xml', 10),
+('RBI Speeches',        'rss', 'https://www.rbi.org.in/Speeches_rss.xml', 9),
+('PIB Finance Ministry','rss', 'https://www.pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3', 9),
+-- BusinessLine direct (was Google-News-only; native RSS is alive again)
+('BusinessLine Markets',  'rss', 'https://www.thehindubusinessline.com/markets/feeder/default.rss', 8),
+('BusinessLine Economy',  'rss', 'https://www.thehindubusinessline.com/economy/feeder/default.rss', 8),
+('BusinessLine Companies','rss', 'https://www.thehindubusinessline.com/companies/feeder/default.rss', 8),
+('The Hindu Business',    'rss', 'https://www.thehindu.com/business/feeder/default.rss', 7),
+-- Business Standard direct (same: proxy no longer the only route)
+('BS Markets',   'rss', 'https://www.business-standard.com/rss/markets-106.rss', 8),
+('BS Companies', 'rss', 'https://www.business-standard.com/rss/companies-101.rss', 8),
+('BS Economy',   'rss', 'https://www.business-standard.com/rss/economy-102.rss', 8),
+-- ET sections; ET Commodities alone roughly doubles the thinnest category
+('ET Commodities', 'rss', 'https://economictimes.indiatimes.com/markets/commodities/rssfeeds/1977021501.cms', 8),
+('ET Stocks News', 'rss', 'https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms', 8),
+('ET Banking',     'rss', 'https://economictimes.indiatimes.com/industry/banking/finance/rssfeeds/13358259.cms', 8),
+('ET MF',          'rss', 'https://economictimes.indiatimes.com/mf/rssfeeds/359241701.cms', 7),
+-- LiveMint sections
+('LiveMint Money',     'rss', 'https://www.livemint.com/rss/money', 8),
+('LiveMint Companies', 'rss', 'https://www.livemint.com/rss/companies', 8),
+('LiveMint Industry',  'rss', 'https://www.livemint.com/rss/industry', 7),
+('LiveMint Economy',   'rss', 'https://www.livemint.com/rss/economy', 8),
+-- commodities + macro depth
+('Investing Commodities', 'rss', 'https://www.investing.com/rss/news_11.rss', 6),
+('Investing Economy',     'rss', 'https://www.investing.com/rss/news_14.rss', 6),
+('Mining.com',            'rss', 'https://www.mining.com/feed/', 6),
+-- global / geopolitics, weighted to Asia where India relevance is highest
+('Nikkei Asia',        'rss', 'https://asia.nikkei.com/rss/feed/nar', 8),
+('Al Jazeera Economy', 'rss', 'https://www.aljazeera.com/xml/rss/all.xml', 7),
+('FT Companies',       'rss', 'https://www.ft.com/companies?format=rss', 8),
+('SCMP Business',      'rss', 'https://www.scmp.com/rss/92/feed', 7),
+-- startups
+('YourStory', 'rss', 'https://yourstory.com/feed', 6);

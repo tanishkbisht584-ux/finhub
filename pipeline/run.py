@@ -295,7 +295,25 @@ def may_push(score, now, sent_today):
 PUBLISHER = {
     "ET Top Stories": "Economic Times", "ET Markets": "Economic Times",
     "ET Economy": "Economic Times", "ET IPO": "Economic Times",
+    "ET Commodities": "Economic Times", "ET Stocks News": "Economic Times",
+    "ET Banking": "Economic Times", "ET MF": "Economic Times",
     "GNews Moneycontrol": "Moneycontrol",
+    # A section feed and its Google News proxy are the same newsroom twice over.
+    "Hindu BusinessLine": "BusinessLine", "BusinessLine Markets": "BusinessLine",
+    "BusinessLine Economy": "BusinessLine", "BusinessLine Companies": "BusinessLine",
+    # Same parent as BusinessLine (Kasturi & Sons) — separate desks, but grouped
+    # deliberately: a false alert costs more than one that waits out the 5-minute
+    # trusted-solo window.
+    "The Hindu Business": "BusinessLine",
+    "Business Standard": "Business Standard",
+    "BS Markets": "Business Standard", "BS Companies": "Business Standard",
+    "BS Economy": "Business Standard",
+    "LiveMint Markets": "LiveMint", "LiveMint Money": "LiveMint",
+    "LiveMint Companies": "LiveMint", "LiveMint Industry": "LiveMint",
+    "LiveMint Economy": "LiveMint", "Mint Companies": "LiveMint",
+    "RBI Press": "RBI", "RBI Notifications": "RBI", "RBI Speeches": "RBI",
+    "Investing.com": "Investing.com", "Investing Commodities": "Investing.com",
+    "Investing Economy": "Investing.com",
 }
 
 
