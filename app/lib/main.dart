@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'screens/ask.dart';
 import 'screens/feed.dart';
 import 'screens/profile.dart';
+import 'screens/saved.dart';
+import 'share_palette.dart';
 import 'screens/sign_in.dart';
 import 'theme.dart';
 
@@ -69,16 +72,88 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell>
+    with SingleTickerProviderStateMixin {
   int _tab = 0;
+
+  // Same hold-and-slide as the card's bookmark, hung off the News tab so the
+  // Saved panel has a way in that does not depend on finding a story first.
+  static const _tileSize = 46.0;
+  static const _tileGap = 10.0;
+  static const _stepPx = 84.0;
+  int? _active;
+  Offset? _origin;
+  late final AnimationController _ribbon = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 200));
+
+  @override
+  void dispose() {
+    _ribbon.dispose();
+    super.dispose();
+  }
+
+  void _open(Offset origin) {
+    HapticFeedback.mediumImpact();
+    _origin = origin;
+    setState(() => _active = defaultRibbonTarget);
+    _ribbon.forward();
+  }
+
+  void _track(Offset global) {
+    if (_origin == null) return;
+    final next = (defaultRibbonTarget + ((global.dy - _origin!.dy) / _stepPx).round())
+        .clamp(0, ribbonTargets.length - 1);
+    if (next != _active) {
+      HapticFeedback.selectionClick();
+      setState(() => _active = next);
+    }
+  }
+
+  Future<void> _close({bool commit = false}) async {
+    final chosen = _active;
+    await _ribbon.reverse();
+    if (!mounted) return;
+    setState(() => _active = null);
+    if (!commit || chosen == null) return;
+    if (ribbonTargets[chosen].id != 'saved') return;
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => Scaffold(
+              appBar: AppBar(
+                  backgroundColor: bg,
+                  surfaceTintColor: bg,
+                  elevation: 0,
+                  leading: const BackButton(color: ink)),
+              body: const SavedScreen(),
+            )));
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _tab,
-        children: const [FeedScreen(), AskScreen(), ProfileScreen()],
-      ),
+      body: Stack(children: [
+        IndexedStack(
+          index: _tab,
+          children: const [FeedScreen(), AskScreen(), ProfileScreen()],
+        ),
+        IgnorePointer(
+          child: FadeTransition(
+            opacity: Tween<double>(begin: 0, end: 0.55).animate(_ribbon),
+            child: Container(color: bg),
+          ),
+        ),
+        Positioned(
+          left: 22,
+          bottom: 12,
+          child: IgnorePointer(
+            child: RibbonColumn(
+              animation: _ribbon,
+              activeIndex: _active,
+              tileSize: _tileSize,
+              gap: _tileGap,
+            ),
+          ),
+        ),
+      ]),
       // Three destinations, not four: Saved is a place you visit occasionally,
       // not a peer of the feed. It now hangs off the bookmark on a card, where
       // the thought "I want my saved ones" actually occurs.
@@ -86,9 +161,17 @@ class _HomeShellState extends State<HomeShell> {
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
         destinations: [
-          const NavigationDestination(
-              icon: Icon(Icons.newspaper_outlined),
-              selectedIcon: Icon(Icons.newspaper),
+          NavigationDestination(
+              icon: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onLongPressStart: (d) => _open(d.globalPosition),
+                onLongPressMoveUpdate: (d) => _track(d.globalPosition),
+                onLongPressEnd: (_) => _close(commit: true),
+                onLongPressCancel: () => _close(),
+                child: Icon(_tab == 0
+                    ? Icons.newspaper
+                    : Icons.newspaper_outlined),
+              ),
               label: 'News'),
           const NavigationDestination(
               icon: Icon(Icons.search), label: 'Ask'),

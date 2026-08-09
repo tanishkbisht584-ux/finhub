@@ -37,6 +37,9 @@ Future<void> _unsave(BuildContext context, WidgetRef ref, Story s) async {
   } finally {
     ref.invalidate(savedProvider); // keeps the feed's bookmark honest too
   }
+  // Clear first: removing several in a row queued the toasts, so each one
+  // waited its turn and the last sat on screen long after the action. 4s to undo, then gone.
+  messenger.clearSnackBars();
   messenger.showSnackBar(SnackBar(
     duration: const Duration(seconds: 4),
     content: const Text('Removed from saved'),

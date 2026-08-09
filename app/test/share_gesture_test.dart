@@ -46,4 +46,23 @@ void main() {
     // is the whole point of holding anywhere on the card.
     expect(select(84, 0), select(84, 20));
   });
+
+  // The vertical ribbon (bookmark on a card, and the News tab) uses the same
+  // stepping on the other axis. Opens on Saved; sliding up reaches Cancel.
+  int ribbon(double dy) => (defaultRibbonTarget + (dy / 84.0).round())
+      .clamp(0, ribbonTargets.length - 1);
+
+  test('ribbon opens on Saved', () {
+    expect(ribbonTargets[ribbon(0)].id, 'saved');
+  });
+
+  test('sliding up the ribbon reaches Cancel', () {
+    expect(ribbonTargets[ribbon(-84)].id, 'cancel');
+  });
+
+  test('ribbon ignores a wobble and clamps at both ends', () {
+    expect(ribbonTargets[ribbon(-30)].id, 'saved');
+    expect(ribbonTargets[ribbon(-9999)].id, 'cancel');
+    expect(ribbonTargets[ribbon(9999)].id, 'saved');
+  });
 }
