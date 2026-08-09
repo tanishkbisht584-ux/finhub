@@ -318,7 +318,7 @@ def gate_passes(score, cluster_size, authority, age_minutes=0):
             or (authority >= TRUSTED_AUTHORITY and age_minutes >= TRUSTED_SOLO_MINUTES))
 
 
-def send_fcm(hook, headline, story_id):
+def send_fcm(hook, headline, story_id, score):
     """Push to the 'alerts' FCM topic (the app subscribes in M4). No-op until
     FIREBASE_SERVICE_ACCOUNT_JSON is configured."""
     import json as _json
@@ -336,7 +336,10 @@ def send_fcm(hook, headline, story_id):
         headers={"Authorization": f"Bearer {creds.token}"},
         json={"message": {"topic": "alerts",
                           "notification": {"title": hook, "body": headline},
-                          "data": {"story_id": str(story_id)}}},
+                          # hook + score ride along so the client can deep-link
+                          # and decide on L1 voice without a fetch (spec §7)
+                          "data": {"story_id": str(story_id), "hook": hook,
+                                   "impact_score": str(score)}}},
         timeout=30)
     r.raise_for_status()
     return True
@@ -370,7 +373,8 @@ def alert_engine(authority_by_source):
             continue
         patch = {"status": "approved"}
         if may_push(s["impact_score"], now, sent_today + alerted):
-            send_fcm(s["hook"] or s["headline"], s["headline"], s["id"])
+            send_fcm(s["hook"] or s["headline"], s["headline"], s["id"],
+                     s["impact_score"])
             patch["alerted_at"] = now.isoformat()
             alerted += 1
         else:
