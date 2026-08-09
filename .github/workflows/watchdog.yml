@@ -142,10 +142,14 @@ jobs:
                   + (["", "## Auto-healed", ""] + [f"- {h}" for h in healed]
                      if healed else [])
                   + ["", "_Raised automatically by watchdog.yml (hourly)._"])
+              # assign the owner: GitHub always emails an assignee, whereas issues
+              # in an unwatched repo notify nobody
               call(gh + "/issues", gh_hdrs,
                    data=json.dumps({"title": "Watchdog: pipeline needs attention",
                                     "body": body,
-                                    "labels": ["watchdog"]}).encode(),
+                                    "labels": ["watchdog"],
+                                    "assignees": [os.environ["REPO"].split("/")[0]]}
+                                   ).encode(),
                    method="POST")
 
           print("NEEDS ATTENTION:", " | ".join(needs_you))
