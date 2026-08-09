@@ -20,6 +20,38 @@ final savedProvider = FutureProvider<List<Story>>((ref) async {
       .toList();
 });
 
+/// Removing a save, with an undo — a mis-tap on a list you curated by hand
+/// should cost a tap to fix, not a hunt back through the feed.
+Future<void> _unsave(BuildContext context, WidgetRef ref, Story s) async {
+  final uid = Supabase.instance.client.auth.currentUser!.id;
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    await Supabase.instance.client
+        .from('saves')
+        .delete()
+        .eq('user_id', uid)
+        .eq('story_id', s.id);
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('Could not remove: $e')));
+    return;
+  } finally {
+    ref.invalidate(savedProvider); // keeps the feed's bookmark honest too
+  }
+  messenger.showSnackBar(SnackBar(
+    duration: const Duration(seconds: 4),
+    content: const Text('Removed from saved'),
+    action: SnackBarAction(
+      label: 'Undo',
+      onPressed: () async {
+        await Supabase.instance.client
+            .from('saves')
+            .upsert({'user_id': uid, 'story_id': s.id});
+        ref.invalidate(savedProvider);
+      },
+    ),
+  ));
+}
+
 /// Saved — a table, not a card wall (minimal mockup).
 class SavedScreen extends ConsumerWidget {
   const SavedScreen({super.key});
@@ -65,20 +97,7 @@ class SavedScreen extends ConsumerWidget {
                         return Dismissible(
                           key: ValueKey(s.id),
                           direction: DismissDirection.endToStart,
-                          onDismissed: (_) async {
-                            final uid = Supabase
-                                .instance.client.auth.currentUser!.id;
-                            try {
-                              await Supabase.instance.client
-                                  .from('saves')
-                                  .delete()
-                                  .eq('user_id', uid)
-                                  .eq('story_id', s.id);
-                            } finally {
-                              // keeps the feed's bookmark icon honest too
-                              ref.invalidate(savedProvider);
-                            }
-                          },
+                          onDismissed: (_) => _unsave(context, ref, s),
                           background: Container(
                               color: red.withValues(alpha: 0.2),
                               alignment: Alignment.centerRight,
@@ -98,6 +117,14 @@ class SavedScreen extends ConsumerWidget {
                                   text: '  ${s.sourceName}',
                                   style: mono.copyWith(fontSize: 12)),
                             ])),
+                            // Swipe-to-remove is invisible until you try it;
+                            // a filled bookmark you can tap off is not.
+                            trailing: IconButton(
+                              icon: const Icon(Icons.bookmark_rounded,
+                                  color: green, size: 20),
+                              tooltip: 'Remove from saved',
+                              onPressed: () => _unsave(context, ref, s),
+                            ),
                             onTap: () => launchUrl(Uri.parse(s.sourceUrl),
                                 mode: LaunchMode.externalApplication),
                           ),

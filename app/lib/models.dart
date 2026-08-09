@@ -1,3 +1,17 @@
+/// One outlet that carried this story. The pipeline keeps every outlet's row
+/// in the cluster, so a card can credit all of them instead of the pipeline
+/// silently picking one and discarding the rest.
+class Outlet {
+  final String name;
+  final String url;
+  final DateTime? publishedAt;
+
+  Outlet.fromJson(Map<String, dynamic> j)
+      : name = j['source_name'] ?? '',
+        url = j['source_url'] ?? '',
+        publishedAt = DateTime.tryParse(j['published_at'] ?? '');
+}
+
 class Story {
   final int id;
   final String? hook;
@@ -14,6 +28,11 @@ class Story {
   final String? category;
   final List<String> sectors;
 
+  /// Every outlet that ran this story, earliest first — so the card can credit
+  /// whoever broke it rather than whichever copy the pipeline happened to
+  /// process. Empty when no other outlet carried it.
+  final List<Outlet> outlets;
+
   Story.fromJson(Map<String, dynamic> j)
       : id = j['id'],
         hook = j['hook'],
@@ -28,7 +47,13 @@ class Story {
         sourceName = j['source_name'],
         sourceUrl = j['source_url'],
         category = j['category'],
-        sectors = List<String>.from(j['sectors'] ?? const []);
+        sectors = List<String>.from(j['sectors'] ?? const []),
+        // Attached by the feed query and carried into the offline cache, so a
+        // cached card keeps its outlet list too.
+        outlets = [
+          for (final o in (j['outlets'] as List? ?? const []))
+            Outlet.fromJson(Map<String, dynamic>.from(o))
+        ];
 }
 
 class QaSource {

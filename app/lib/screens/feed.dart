@@ -33,9 +33,10 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
         .order('is_featured', ascending: false)
         .order('published_at', ascending: false)
         .limit(50);
-    await FeedCache.save(rows.cast<Map<String, dynamic>>());
+    final withOutlets = await _attachOutlets(rows.cast<Map<String, dynamic>>());
+    await FeedCache.save(withOutlets);
     ref.read(servingCacheProvider.notifier).state = null;
-    return rows.map(Story.fromJson).toList();
+    return withOutlets.map(Story.fromJson).toList();
   } catch (_) {
     // Offline, or Supabase having a moment. Yesterday's news beats an error
     // screen; only surface the failure if we have nothing saved either.
@@ -45,6 +46,49 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
     return cached.map(Story.fromJson).toList();
   }
 });
+
+/// Attach every outlet that carried each story, earliest first.
+///
+/// The pipeline files same-event stories under one cluster_id and publishes
+/// only the first as a card; the rest are kept as `duplicate` rows holding
+/// their outlet and link. One extra query turns that discarded corroboration
+/// into the card's "also reported by" list — six outlets agreeing is a trust
+/// signal, and the reader gets a choice of where to read it.
+///
+/// One query for the whole page, never per card: 50 cards each fetching their
+/// own outlets is 50 round trips on a phone network.
+Future<List<Map<String, dynamic>>> _attachOutlets(
+    List<Map<String, dynamic>> rows) async {
+  final clusterIds =
+      rows.map((r) => r['cluster_id']).whereType<String>().toSet().toList();
+  if (clusterIds.isEmpty) return rows;
+  try {
+    final members = await Supabase.instance.client
+        .from('stories')
+        .select('cluster_id,source_name,source_url,published_at')
+        .inFilter('cluster_id', clusterIds);
+    final byCluster = <String, List<Map<String, dynamic>>>{};
+    for (final m in members.cast<Map<String, dynamic>>()) {
+      (byCluster[m['cluster_id'] as String] ??= []).add(m);
+    }
+    for (final row in rows) {
+      final group = byCluster[row['cluster_id']] ?? const [];
+      // One entry per newsroom: a publisher's section feeds carrying the same
+      // story are one outlet, not three, and listing them thrice would fake
+      // the corroboration the list is meant to convey.
+      final seen = <String>{};
+      final outlets = [
+        for (final m in group)
+          if (seen.add((m['source_name'] ?? '') as String)) m
+      ]..sort((a, b) =>
+          ((a['published_at'] ?? '') as String).compareTo((b['published_at'] ?? '') as String));
+      row['outlets'] = outlets;
+    }
+  } catch (_) {
+    // Attribution is a bonus, never a reason to lose the feed.
+  }
+  return rows;
+}
 
 class FeedScreen extends ConsumerWidget {
   const FeedScreen({super.key});
@@ -96,7 +140,10 @@ class StoryCard extends ConsumerStatefulWidget {
 class _StoryCardState extends ConsumerState<StoryCard>
     with TickerProviderStateMixin {
   Story get story => widget.story;
-  bool _saved = false;
+  /// This session's optimistic intent; null means "trust the saved list".
+  /// A plain bool could only ever express saving — there was no way to say
+  /// "I just unsaved this" without the server list overriding it back.
+  bool? _pendingSave;
   final _shareKey = GlobalKey();
 
   static const _tileSize = 46.0;
@@ -122,27 +169,40 @@ class _StoryCardState extends ConsumerState<StoryCard>
     super.dispose();
   }
 
-  /// Optimistic: the icon fills the instant you tap, and only reverts if the
-  /// write actually fails. Waiting on a network round-trip before showing any
-  /// feedback is what made saving feel broken — the tap looked ignored.
-  Future<void> _save({bool viaDoubleTap = false}) async {
+  bool _isSavedNow() {
+    final known = ref.read(savedProvider).valueOrNull;
+    return _pendingSave ?? (known?.any((s) => s.id == story.id) ?? false);
+  }
+
+  /// Toggles. Optimistic in both directions: the icon flips the instant you
+  /// tap and only reverts if the write actually fails. Waiting on a network
+  /// round-trip before showing anything is what made saving feel broken.
+  Future<void> _toggleSave({bool viaDoubleTap = false}) async {
     final user = Supabase.instance.client.auth.currentUser;
-    if (user == null || _saved) return;
-    setState(() => _saved = true);
+    if (user == null) return;
+    final was = _isSavedNow();
+    // Double-tap only ever saves — the gesture people already know should
+    // never take something away by accident.
+    if (viaDoubleTap && was) return;
+
+    setState(() => _pendingSave = !was);
     HapticFeedback.selectionClick();
-    if (viaDoubleTap) _burst.forward(from: 0);
+    if (!was && viaDoubleTap) _burst.forward(from: 0);
     try {
-      await Supabase.instance.client
-          .from('saves')
-          .upsert({'user_id': user.id, 'story_id': story.id});
+      final saves = Supabase.instance.client.from('saves');
+      if (was) {
+        await saves.delete().eq('user_id', user.id).eq('story_id', story.id);
+      } else {
+        await saves.upsert({'user_id': user.id, 'story_id': story.id});
+      }
       // The Saved tab reads its own provider; without this it kept serving the
-      // list it fetched on first open and a just-saved story never appeared.
+      // list it fetched on first open and the change never appeared there.
       ref.invalidate(savedProvider);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _saved = false); // never leave a lie on screen
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not save: $e')));
+      setState(() => _pendingSave = was); // never leave a lie on screen
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Could not ${was ? 'remove' : 'save'}: $e')));
     }
   }
 
@@ -241,10 +301,10 @@ class _StoryCardState extends ConsumerState<StoryCard>
     // The optimistic flag only knows about taps in this session; the saved list
     // is the source of truth, so a story saved earlier still shows filled.
     final known = ref.watch(savedProvider).valueOrNull;
-    final isSaved = _saved || (known?.any((s) => s.id == story.id) ?? false);
+    final isSaved = _pendingSave ?? (known?.any((s) => s.id == story.id) ?? false);
     return SafeArea(
       child: GestureDetector(
-        onDoubleTap: () => _save(viaDoubleTap: true),
+        onDoubleTap: () => _toggleSave(viaDoubleTap: true),
         // Hold anywhere on the card, not just the small rail icon — the whole
         // card is the target you already have your thumb on.
         onLongPressStart: (d) => _openPalette(d.globalPosition),
@@ -372,51 +432,137 @@ class _StoryCardState extends ConsumerState<StoryCard>
   }
 
   /// Outlet identity, styled like a handle: monogram, name, and the link out.
+  ///
+  /// Credit goes to whoever published FIRST, not to whichever copy the
+  /// pipeline happened to process — being first is the thing worth crediting.
+  /// Everyone else who ran it sits behind "+N more".
   Widget _attribution(Color dir) {
-    final name = story.sourceName;
-    return InkWell(
-      onTap: () => launchUrl(Uri.parse(story.sourceUrl),
-          mode: LaunchMode.externalApplication),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: dir.withValues(alpha: 0.14),
-            border: Border.all(color: dir.withValues(alpha: 0.5)),
+    final scoop = story.outlets.isNotEmpty ? story.outlets.first : null;
+    final name = scoop?.name ?? story.sourceName;
+    final url = scoop?.url ?? story.sourceUrl;
+    final others = story.outlets.length - 1;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      InkWell(
+        onTap: () =>
+            launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: dir.withValues(alpha: 0.14),
+              border: Border.all(color: dir.withValues(alpha: 0.5)),
+            ),
+            child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
+                style: serif.copyWith(
+                    fontSize: 15, fontWeight: FontWeight.w700, color: dir)),
           ),
-          child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
-              style: serif.copyWith(
-                  fontSize: 15, fontWeight: FontWeight.w700, color: dir)),
-        ),
-        const SizedBox(width: 9),
-        Flexible(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600, height: 1.2)),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('Read original', style: mono.copyWith(fontSize: 10.5)),
-                const SizedBox(width: 3),
-                Icon(Icons.north_east_rounded, size: 10, color: inkDim),
-                if (story.confidence != null && story.confidence != 'high') ...[
-                  const SizedBox(width: 8),
-                  Text('· ${story.confidence}',
-                      style: mono.copyWith(fontSize: 10.5, color: amber)),
-                ],
-              ]),
-            ],
+          const SizedBox(width: 9),
+          Flexible(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600, height: 1.2)),
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text('Read original', style: mono.copyWith(fontSize: 10.5)),
+                  const SizedBox(width: 3),
+                  Icon(Icons.north_east_rounded, size: 10, color: inkDim),
+                  if (story.confidence != null &&
+                      story.confidence != 'high') ...[
+                    const SizedBox(width: 8),
+                    Text('· ${story.confidence}',
+                        style: mono.copyWith(fontSize: 10.5, color: amber)),
+                  ],
+                ]),
+              ],
+            ),
+          ),
+        ]),
+      ),
+      if (others > 0)
+        InkWell(
+          onTap: _showOutlets,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 2, 6),
+            child: Text('+$others more',
+                style: mono.copyWith(
+                    fontSize: 10.5,
+                    color: dir,
+                    fontWeight: FontWeight.w600)),
           ),
         ),
-      ]),
+    ]);
+  }
+
+  /// Every outlet that ran this story, earliest first. Reading the same event
+  /// in several papers is the point — so each row opens that outlet directly.
+  void _showOutlets() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
+            child: Row(children: [
+              Text('Reported by ${story.outlets.length} outlets',
+                  style: serif.copyWith(
+                      fontSize: 16, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Earliest first', style: mono.copyWith(fontSize: 10.5)),
+            ),
+          ),
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: story.outlets.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final o = story.outlets[i];
+                return ListTile(
+                  dense: true,
+                  leading: Text(i == 0 ? 'FIRST' : '${i + 1}',
+                      style: mono.copyWith(
+                          fontSize: 10, color: i == 0 ? green : inkDim)),
+                  title: Text(o.name,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  subtitle: o.publishedAt == null
+                      ? null
+                      : Text(_when(o.publishedAt!),
+                          style: mono.copyWith(fontSize: 10.5)),
+                  trailing:
+                      Icon(Icons.north_east_rounded, size: 14, color: inkDim),
+                  onTap: () => launchUrl(Uri.parse(o.url),
+                      mode: LaunchMode.externalApplication),
+                );
+              },
+            ),
+          ),
+        ]),
+      ),
     );
+  }
+
+  String _when(DateTime t) {
+    final d = DateTime.now().toUtc().difference(t.toUtc());
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
   }
 
   /// Vertical action rail. Share is a single control with two gestures: tap
@@ -426,7 +572,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
       _railButton(
         icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
         tint: isSaved ? green : inkDim,
-        onTap: _save,
+        onTap: _toggleSave,
       ),
       const SizedBox(height: 4),
       _railButton(
