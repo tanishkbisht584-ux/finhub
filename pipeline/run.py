@@ -635,7 +635,12 @@ def main():
         return {"url": item["url"], "url_hash": item["url_hash"], "cluster_id": cid,
                 "headline": item["headline"], "source_name": item["source"]["name"],
                 "source_url": item["url"], "image_url": item["image_url"],
-                "published_at": item["published_at"]}
+                # No usable date from the source => stamp ingestion time. The app
+                # filters the feed on published_at, and NULL fails that filter, so
+                # an undated story was silently invisible forever — which had
+                # swallowed every BSE filing and most SEBI/RBI releases, i.e. the
+                # highest-authority primary sources the product exists to surface.
+                "published_at": item["published_at"] or datetime.now(timezone.utc).isoformat()}
 
     for status, batch in (("duplicate", dupes), ("rejected", noise)):
         for item, cid in batch:
