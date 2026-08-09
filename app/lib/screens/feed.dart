@@ -352,9 +352,10 @@ class _StoryCardState extends ConsumerState<StoryCard>
     final isSaved = _pendingSave ?? (known?.any((s) => s.id == story.id) ?? false);
     return SafeArea(
       child: GestureDetector(
+        // Plain detector on purpose: LongPressGestureRecognizer already allows
+        // unlimited drift before it accepts, so a hand-rolled one bought
+        // nothing. Widget tests cover this gesture inside the real feed tree.
         onDoubleTap: () => _toggleSave(viaDoubleTap: true),
-        // Hold anywhere on the card, not just the small rail icon — the whole
-        // card is the target you already have your thumb on.
         onLongPressStart: (d) => _openPalette(d.globalPosition),
         onLongPressMoveUpdate: (d) => _trackThumb(d.globalPosition),
         onLongPressEnd: (_) => _closePalette(commit: true),

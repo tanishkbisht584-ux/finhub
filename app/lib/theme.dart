@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+/// Build stamp, injected with --dart-define=APP_VERSION at build time.
+const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
+
 /// Minimal ledger (docs/mockups/finswipe-minimal-mockup.png): no blur, no
 /// aurora, no colour-by-category. Red/green only for market direction and
 /// on/off state. Numbers monospace, the hook serif — it alone carries weight.

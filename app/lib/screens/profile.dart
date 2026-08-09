@@ -47,6 +47,11 @@ class ProfileScreen extends StatelessWidget {
             'Consult a SEBI-registered advisor before investing.',
             style: mono.copyWith(fontSize: 11, height: 1.6),
           ),
+          const SizedBox(height: 14),
+          // The sign-in screen's version marker is invisible once you are
+          // signed in, which is exactly when "which build am I on?" matters.
+          Text('FinSwipe $appVersion',
+              style: mono.copyWith(fontSize: 11, color: inkDim)),
         ],
       ),
     );
