@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../feed_cache.dart';
 import '../models.dart';
+import '../publishers.dart';
 import '../share_palette.dart';
 import 'saved.dart';
 import '../theme.dart';
@@ -73,15 +74,18 @@ Future<List<Map<String, dynamic>>> _attachOutlets(
     }
     for (final row in rows) {
       final group = byCluster[row['cluster_id']] ?? const [];
-      // One entry per newsroom: a publisher's section feeds carrying the same
-      // story are one outlet, not three, and listing them thrice would fake
-      // the corroboration the list is meant to convey.
+      // One entry per NEWSROOM, not per feed. LiveMint arrives as both its own
+      // section feed and a Google News proxy ("Mint Companies"); showing both
+      // claims two outlets agree when it is one paper twice — the opposite of
+      // what this list is for. Sorted first so the survivor of each newsroom is
+      // its earliest telling, which is also the one the byline credits.
       final seen = <String>{};
       final outlets = [
-        for (final m in group)
-          if (seen.add((m['source_name'] ?? '') as String)) m
-      ]..sort((a, b) =>
-          ((a['published_at'] ?? '') as String).compareTo((b['published_at'] ?? '') as String));
+        for (final m in ([...group]..sort((a, b) =>
+            ((a['published_at'] ?? '') as String)
+                .compareTo((b['published_at'] ?? '') as String))))
+          if (seen.add(publisher((m['source_name'] ?? '') as String))) m
+      ];
       row['outlets'] = outlets;
     }
   } catch (_) {

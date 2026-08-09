@@ -131,6 +131,29 @@ def test_independent_sources_ignores_same_newsroom():
     assert independent_sources(["Business Standard", "LiveMint Money", "ET Banking"]) == 3
 
 
+def test_app_publisher_map_matches_the_pipeline():
+    """The app collapses a newsroom's feeds into one outlet on the card, using
+    a copy of PUBLISHER in app/lib/publishers.dart. Two copies drift, and the
+    drift is invisible: a new ET feed would quietly appear as an extra outlet
+    'confirming' a story ET already ran. Cheaper to fail here than to ship a
+    card that overstates its corroboration."""
+    import pathlib
+    import re
+    from run import PUBLISHER
+    dart = (pathlib.Path(__file__).parent.parent
+            / "app" / "lib" / "publishers.dart")
+    if not dart.exists():
+        pytest.skip("app not checked out alongside the pipeline")
+    body = dart.read_text(encoding="utf-8").split("publisherOf", 1)[1]
+    body = body.split("};", 1)[0]
+    copy = dict(re.findall(r"'([^']+)':\s*'([^']+)'", body))
+    assert copy == PUBLISHER, (
+        "publishers.dart is out of sync with run.py:\n"
+        f"  only in run.py:        {sorted(set(PUBLISHER) - set(copy))}\n"
+        f"  only in publishers.dart: {sorted(set(copy) - set(PUBLISHER))}\n"
+        f"  disagree: {sorted(k for k in set(copy) & set(PUBLISHER) if copy[k] != PUBLISHER[k])}")
+
+
 def test_ai_rewrites_of_one_event_merge_into_one_card():
     """Real pairs from the feed on 2026-08-09: two outlets, wording far enough
     apart that the pre-AI check passed them both, identical once the AI had

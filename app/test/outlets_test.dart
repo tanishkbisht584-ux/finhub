@@ -3,6 +3,7 @@
 // under a shared cluster and keeps every outlet's link; this is the render
 // side of that.
 import 'package:finswipe/models.dart';
+import 'package:finswipe/publishers.dart';
 import 'package:finswipe/screens/feed.dart' show StoryCard;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -50,6 +51,19 @@ Widget _wrap(Story s) => ProviderScope(
     child: MaterialApp(home: Scaffold(body: StoryCard(story: s))));
 
 void main() {
+  test('one newsroom reached two ways is one outlet', () {
+    // Seen live on 2026-08-09: an IDFC First Bank card offered "+1 more" whose
+    // second outlet was Mint reached through Google News — the same paper
+    // twice, dressed up as corroboration.
+    expect(publisher('LiveMint Companies'), publisher('Mint Companies'));
+    expect(publisher('ET Markets'), publisher('ET Banking'));
+    expect(publisher('BusinessLine Markets'), publisher('Hindu BusinessLine'));
+    // ...and genuinely different papers stay apart.
+    expect(publisher('Reuters India') == publisher('Business Standard'), isFalse);
+    // An unknown feed is its own newsroom rather than vanishing into a default.
+    expect(publisher('Some New Feed'), 'Some New Feed');
+  });
+
   test('outlets parse in the order given, with their publish times', () {
     final s = _story(outlets: _threeOutlets);
     expect(s.outlets.map((o) => o.name).toList(),
