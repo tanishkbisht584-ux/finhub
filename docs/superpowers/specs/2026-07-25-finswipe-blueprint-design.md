@@ -262,10 +262,10 @@ One call, not eight chained steps: cheaper, and impact/summary stay coherent. `c
 
 Push via FCM (free), sent by the pipeline the moment a qualifying story lands.
 
-**Machine gate (speed without false alarms):** impact score ≥ 8 auto-alerts instantly **if** the story is (a) confirmed by 2+ independent sources (cluster size ≥ 2) **or** (b) from a primary source (exchange filing, RBI/SEBI release). Single-source high-impact stories wait in the admin queue instead.
+**Machine gate (speed without false alarms):** impact score ≥ 8 auto-alerts instantly **if** the story is (a) confirmed by 2+ independent sources (cluster size ≥ 2) **or** (b) from a primary source (exchange filing, RBI/SEBI release). Otherwise a **5-minute grace window**: a still-uncorroborated story from a trusted outlet (authority ≥ 8 — ET, Mint, Moneycontrol, WSJ, BBC) alerts anyway once it is 5 minutes old. Corroboration usually arrives first and fires sooner; the window caps the wait. Sources below authority 8 never alert solo, at any age.
 
 **Rules:**
-- Global market-movers: max 5/day.
+- Global market-movers: max 5/day. The cap limits **pushes, not publication** — a qualifying story past the cap is still approved into the feed, it just doesn't buzz a phone.
 - Personalized: impact ≥ 6 touching a followed stock/sector → alert, max 5/day per user.
 - Quiet hours 22:00–07:00 IST; pierced only by impact ≥ 9 ("wake me if the market is crashing").
 - Every alert deep-links to its story card: open → understand → done. That flow *is* the 15-second metric.
@@ -297,7 +297,7 @@ Push via FCM (free), sent by the pipeline the moment a qualifying story lands.
 
 ## 9. Admin Panel (Streamlit, free hosting)
 
-Review queue (AI output beside source article; approve/reject/edit) · auto-approve: score < 7 auto-approves after 2 h unreviewed; single-source score ≥ 8 held for approval (multi-source/primary auto-flows, §7) · feature/pin · cluster merge/split · flagged stories · source health · manual alert send · kill switches (pipeline, auto-approve, alerts).
+Review queue (AI output beside source article; approve/reject/edit) · auto-approve: score < 8 auto-approves after 10 min unreviewed; single-source score ≥ 8 held for approval (multi-source/primary auto-flows, §7) — the two thresholds must stay equal (auto-approve `< N`, alert gate `>= N`) or scores in the gap sit pending forever · feature/pin · cluster merge/split · flagged stories · source health · manual alert send · kill switches (pipeline, auto-approve, alerts).
 
 ---
 
@@ -359,3 +359,69 @@ Gate between 2→4: if *you* don't want to read your own feed every morning, fix
 | SEBI/regulatory | No advice language (prompt-enforced + evals), visible disclaimers |
 | Scope creep (charts, brokers, portfolios…) | §2 non-goals list; roadmap gates features behind validated Time-to-Understanding |
 | Solo-founder burnout | Auto-approve + machine-gated alerts keep the app alive unattended; every milestone ships something usable |
+
+---
+
+## 14. Locked Stack (₹0 running cost)
+
+Every entry below is free-tier forever at MVP volume. Anything not listed here is **not** in the stack — adding one requires a written trigger (§14.3).
+
+### 14.1 The list
+
+| Layer | Choice | Free-tier reality | Why this one |
+|---|---|---|---|
+| Language (pipeline) | Python 3.11 | — | Feed parsing + AI SDKs are Python-native |
+| Scheduler / CI / secrets | GitHub Actions cron | 2,000 min/mo private | Runner + scheduler + secret store + failure email in one file; no server to pay for |
+| Feed fetch | `feedparser` + `httpx` | — | Tolerates malformed RSS; httpx gives per-request timeouts so one dead feed can't stall a run |
+| Dedupe / cluster | `rapidfuzz` | — | C-speed title clustering on ~100 rows; no model, no index, no GPU |
+| Article extraction | `trafilatura` | — | One call, best-in-class boilerplate removal; runs only on thin RSS items |
+| Validation | `pydantic` v2 | — | The JSON contract *is* the anti-hallucination gate (§5) |
+| Story AI | Gemini 2.5 Flash-Lite, structured output | ~1,000 req/day | One call → summary + impact + entities + category, coherent; chained models cost GPU and agree less |
+| Q&A AI | Gemini Flash → **Groq Llama 3.3 70B** on quota error | ~1,000/day each | ~2,000 Q&A/day at ₹0; Groq is also faster, so failover is invisible |
+| Q&A web tier 2 | **Tavily** | 1,000 credits/mo | Returns extracted content — skips a scrape+clean pass Brave would force |
+| Database / Auth / Storage / Realtime / API | **Supabase** | 500 MB DB, 1 GB storage, 50k MAU | One free service replaces six; this collapse is the reason running cost is ₹0 |
+| Search | Postgres FTS (`tsvector` + GIN) | included | Indexes 7 days of your own stories — fits in page cache; a search cluster would index less data for money |
+| Queue | `stories.status` column | included | 100 stories/day needs neither replay nor partitioning |
+| Q&A runtime | Supabase Edge Function (Deno) | 500k invocations/mo | Only runtime AI path; no container, no cold-start bill |
+| Share preview page | Supabase Edge Function returning HTML + OG tags | same quota | Per-story OG tags rule out a static site; reuses the existing DB client |
+| Admin panel | Streamlit on Community Cloud | free public app | Review queue for one user; a real frontend is days of work for an audience of 1 |
+| Push | FCM | unlimited | Only path to Android push; payload carries story id for the deep link |
+| Deep links | **Android App Links** (`assetlinks.json` + intent filter) | free | Firebase Dynamic Links shut down Aug 2025 — App Links are a manifest entry with nothing to deprecate |
+| App | Flutter + Riverpod + `supabase_flutter` | — | One codebase; `AsyncValue` maps 1:1 to card loading/error states |
+| Feed UI | `PageView.builder` | — | Full-screen snap scrolling is its default behavior |
+| Images | `cached_network_image` | — | Disk cache + placeholder; critical on Indian mobile data |
+| Voice (L1) | `flutter_tts` | free | On-device synthesis — no audio generation, hosting, or latency |
+| Routing | `go_router` | — | Alert/share deep links are routes |
+| Share image | `screenshot` + `share_plus` | — | Renders the existing card widget to PNG (~15 lines) |
+| Prices | Yahoo Finance (delayed) | free | Isolated module; degrades gracefully (§10) |
+| Product analytics | PostHog | 1M events/mo | Time-to-Understanding is a custom event, not a GA4 metric |
+| Crash / error | Sentry | 5k errors/mo | Flutter + Edge Function + pipeline errors in one project |
+| Tests | `pytest` + `flutter_test` | — | Golden-set eval is the only guard against silent quality drift |
+
+Only non-zero line item in the whole product: **₹2,600 one-time** Play Store developer account.
+
+### 14.2 Optimization levers — all free, all high-leverage
+
+**Pipeline (protects AI quota = protects the ₹0)**
+- Supabase project region **ap-south-1 (Mumbai)** — lowest RTT for every Indian user; a dropdown at project creation, unfixable later without a migration.
+- `url_hash` unique index checked **before** any AI call — an exact duplicate must never cost a request.
+- `cluster_id` near-dupes stored as `status='duplicate'`, never AI-processed (§6).
+- `severity_level` as a generated column — derived by Postgres, never recomputed in app or pipeline.
+- `qa_cache` 15-min TTL — a cache hit costs 0 ms and 0 quota during exactly the traffic spike that would exhaust the day.
+
+**Database**
+- Indexes that matter: `stories(status, published_at desc)` for the feed, GIN on the stored `tsvector` for search/Q&A tier 1, `story_companies(company_id)` for the stock page.
+- Stored generated `tsvector` column, not `to_tsvector()` at query time — the index does the work once at write.
+- Prune `events` > 90 d and archive `stories` > 6 mo (§6) — keeps the free 500 MB from becoming a paid tier.
+
+**App (budget Android is the target device)**
+- Select only the columns a screen renders — bytes over 3G are the real latency, not query time.
+- `memCacheWidth` on `cached_network_image` sized to the card — decoding a 2000px image into a 400px slot is the #1 OOM cause on low-RAM devices.
+- `RepaintBoundary` around the glass card; **max two live blur surfaces per screen**; aurora backgrounds as pre-rendered static gradients (§8) — blur is the single most expensive thing in this design.
+- `const` constructors throughout the card tree so PageView swipes don't rebuild static chrome.
+- Build with `--split-per-abi` and R8 shrinking — smaller APK converts better on budget devices and cheap data.
+- Bundle only the font weights actually used.
+
+### 14.3 Trigger to add anything else
+
+Write the trigger before adding the tool. Current standing triggers: Redis when Supabase p95 is measurably the bottleneck · a queue when one cron run can't finish inside its interval · a search service past ~1M stories · a paid model when free quota is chronically exhausted (budget reserve, §12) · Supabase Pro when the 500 MB or 50k MAU line is actually crossed.
