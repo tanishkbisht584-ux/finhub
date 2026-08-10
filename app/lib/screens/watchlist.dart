@@ -18,6 +18,7 @@ class WatchlistScreen extends StatefulWidget {
 class _WatchlistScreenState extends State<WatchlistScreen> {
   List<Company>? _companies; // null = loading
   List<Story> _stories = const [];
+  Object? _error;
 
   @override
   void initState() {
@@ -29,16 +30,29 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     final sb = Supabase.instance.client;
     final uid = sb.auth.currentUser?.id;
     if (uid == null) return setState(() => _companies = const []);
+    List<int> ids;
     try {
       final follows = await sb.from('follows')
           .select('target_id')
           .eq('user_id', uid)
           .eq('target_type', 'company');
-      final ids = [for (final f in follows) int.parse(f['target_id'])];
+      ids = [for (final f in follows) int.parse(f['target_id'])];
       if (ids.isEmpty) return setState(() => _companies = const []);
       final companies = await sb.from('companies')
           .select('id,name,nse_symbol')
           .inFilter('id', ids);
+      if (!mounted) return;
+      setState(() => _companies = [
+            for (final c in companies)
+              Company.fromJson(Map<String, dynamic>.from(c))
+          ]);
+    } catch (e) {
+      // Companies never loaded — nothing to show behind the error, so the
+      // empty-state branch in build() must not be allowed to claim this.
+      if (mounted) setState(() => _error = e);
+      return;
+    }
+    try {
       final links = await sb.from('story_companies')
           .select('story_id')
           .inFilter('company_id', ids)
@@ -54,17 +68,13 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
               .order('published_at', ascending: false)
               .limit(30);
       if (!mounted) return;
-      setState(() {
-        _companies = [
-          for (final c in companies)
-            Company.fromJson(Map<String, dynamic>.from(c))
-        ];
-        _stories = [
-          for (final s in stories) Story.fromJson(Map<String, dynamic>.from(s))
-        ];
-      });
-    } catch (_) {
-      if (mounted) setState(() => _companies ??= const []);
+      setState(() => _stories = [
+            for (final s in stories) Story.fromJson(Map<String, dynamic>.from(s))
+          ]);
+    } catch (e) {
+      // Companies already rendered; only the feed half failed — keep them
+      // on screen and say so, instead of pretending there's nothing here.
+      if (mounted) setState(() => _error = e);
     }
   }
 
@@ -72,6 +82,16 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
   Widget build(BuildContext context) {
     final companies = _companies;
     if (companies == null) {
+      if (_error != null) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Text('Could not load watchlist\n$_error',
+                textAlign: TextAlign.center,
+                style: mono.copyWith(fontSize: 13, height: 1.6)),
+          ),
+        );
+      }
       return const Center(child: CircularProgressIndicator());
     }
     if (companies.isEmpty) {
@@ -104,7 +124,13 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
           ],
         ),
         const Divider(height: 32),
-        if (_stories.isEmpty)
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text('Could not load stories\n$_error',
+                style: mono.copyWith(fontSize: 13)),
+          )
+        else if (_stories.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text('No stories on your companies yet',
