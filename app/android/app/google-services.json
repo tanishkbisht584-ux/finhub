@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "597917695200",
+    "project_id": "finswipe-f0265",
+    "storage_bucket": "finswipe-f0265.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:597917695200:android:8d7690ec391ed52fbd2485",
+        "android_client_info": {
+          "package_name": "com.finswipe.finswipe"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBCkjTcE09cqgrz2UqgRjRjuwhA-IVCN9g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

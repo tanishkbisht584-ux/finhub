@@ -1,6 +1,9 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'screens/ask.dart';
@@ -8,6 +11,7 @@ import 'screens/feed.dart';
 import 'screens/interests.dart';
 import 'screens/profile.dart';
 import 'screens/saved.dart';
+import 'screens/story_detail.dart';
 import 'screens/watchlist.dart';
 import 'share_palette.dart';
 import 'screens/sign_in.dart';
@@ -17,9 +21,66 @@ import 'theme.dart';
 const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const supabasePublishableKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY');
 
+final navigatorKey = GlobalKey<NavigatorState>();
+
+void _openStory(RemoteMessage m) {
+  final id = int.tryParse(m.data['story_id'] ?? '');
+  if (id == null) return;
+  final uid = Supabase.instance.client.auth.currentUser?.id;
+  if (uid != null) {
+    Supabase.instance.client.from('events')
+        .insert({'user_id': uid, 'story_id': id, 'type': 'alert_open'})
+        .then((_) {}, onError: (_) {});
+  }
+  navigatorKey.currentState
+      ?.push(MaterialPageRoute(builder: (_) => StoryDetailScreen(storyId: id)));
+}
+
+/// L1 voice (spec §7): a foreground push with impact >= 9 speaks the hook —
+/// ~3 s of on-device TTS, gated on the profile toggle, on by default.
+Future<void> _maybeSpeak(RemoteMessage m) async {
+  final score = int.tryParse(m.data['impact_score'] ?? '') ?? 0;
+  final hook = m.data['hook'] ?? '';
+  if (score < 9 || hook.isEmpty) return;
+  final uid = Supabase.instance.client.auth.currentUser?.id;
+  if (uid != null) {
+    try {
+      final row = await Supabase.instance.client.from('profiles')
+          .select('alert_settings').eq('id', uid).maybeSingle();
+      if (row?['alert_settings']?['voice_l1'] == false) return;
+    } catch (_) {}  // can't read the toggle -> default on (it's L1-rare)
+  }
+  await FlutterTts().speak(hook);
+}
+
+/// The pipeline needs the device token to send personalized alerts.
+Future<void> _saveFcmToken() async {
+  final uid = Supabase.instance.client.auth.currentUser?.id;
+  if (uid == null) return;
+  try {
+    final token = await FirebaseMessaging.instance.getToken();
+    if (token != null) {
+      await Supabase.instance.client.from('profiles')
+          .update({'fcm_token': token}).eq('id', uid);
+    }
+  } catch (_) {}  // no Firebase on this build/device — personalized just stays off
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Supabase.initialize(url: supabaseUrl, publishableKey: supabasePublishableKey);
+  try {
+    await Firebase.initializeApp();
+    await FirebaseMessaging.instance.requestPermission();
+    await FirebaseMessaging.instance.subscribeToTopic('alerts');
+    FirebaseMessaging.onMessageOpenedApp.listen(_openStory);
+    final initial = await FirebaseMessaging.instance.getInitialMessage();
+    if (initial != null) _openStory(initial);
+    FirebaseMessaging.onMessage.listen(_maybeSpeak);
+    FirebaseMessaging.instance.onTokenRefresh.listen((_) => _saveFcmToken());
+  } catch (_) {
+    // no google-services / Play Services: app works, alerts don't arrive
+  }
   runApp(const ProviderScope(child: FinSwipeApp()));
 }
 
@@ -29,6 +90,7 @@ class FinSwipeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'FinSwipe',
       theme: appTheme,
       debugShowCheckedModeBanner: false,
@@ -87,6 +149,7 @@ class _AuthGateState extends State<AuthGate> {
         }
         _ensureProfile(session.user);
         _checkInterests(session.user);
+        _saveFcmToken();
         if (_needsInterests == null) {
           return const Scaffold(
               body: Center(child: CircularProgressIndicator()));
