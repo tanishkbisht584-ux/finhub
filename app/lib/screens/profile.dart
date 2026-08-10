@@ -7,7 +7,7 @@ import '../theme.dart';
 /// notably the pipeline's `pa` per-user counters living in the same jsonb —
 /// untouched.
 Map<String, dynamic> mergedAlertSettings(
-        Map current, String key, bool value) =>
+        Map<String, dynamic> current, String key, bool value) =>
     {...current, key: value};
 
 class ProfileScreen extends StatelessWidget {
@@ -36,7 +36,7 @@ class ProfileScreen extends StatelessWidget {
           Text('ALERTS', style: mono.copyWith(fontSize: 12, letterSpacing: 1.2)),
           const SizedBox(height: 8),
           const Divider(height: 1),
-          if (user != null) _AlertSettings(userId: user.id),
+          if (user != null) AlertSettingsSection(userId: user.id),
           const SizedBox(height: 32),
           Text('APP', style: mono.copyWith(fontSize: 12, letterSpacing: 1.2)),
           const SizedBox(height: 8),
@@ -96,21 +96,43 @@ class ProfileScreen extends StatelessWidget {
 /// Two alert toggles, backed by `profiles.alert_settings` jsonb. Loads once
 /// on mount rather than per-build — a FutureBuilder here would refetch on
 /// every rebuild the ListView triggers above it.
-class _AlertSettings extends StatefulWidget {
-  const _AlertSettings({required this.userId});
+///
+/// One `_current` map lives on this widget's state, not on the individual
+/// toggles: two toggles each holding their own copy of the settings map go
+/// stale the moment the *other* one writes, so the second flip merges from
+/// an outdated map and silently reverts the first flip on the server.
+class AlertSettingsSection extends StatefulWidget {
+  const AlertSettingsSection({
+    super.key,
+    required this.userId,
+    this.initial,
+    this.writer,
+  });
   final String userId;
 
+  /// Test seam: when set, skips the Supabase fetch and seeds `_current`
+  /// with this map directly.
+  final Map<String, dynamic>? initial;
+
+  /// Test seam: when set, replaces the Supabase `profiles.update` write —
+  /// lets a widget test assert on the merged map without a live client.
+  final Future<void> Function(Map<String, dynamic> merged)? writer;
+
   @override
-  State<_AlertSettings> createState() => _AlertSettingsState();
+  State<AlertSettingsSection> createState() => AlertSettingsSectionState();
 }
 
-class _AlertSettingsState extends State<_AlertSettings> {
+class AlertSettingsSectionState extends State<AlertSettingsSection> {
   late Future<Map<String, dynamic>> _load;
+  Map<String, dynamic> _current = {};
 
   @override
   void initState() {
     super.initState();
-    _load = _fetch();
+    _load = widget.initial != null ? Future.value(widget.initial) : _fetch();
+    _load.then((v) {
+      if (mounted) setState(() => _current = v);
+    });
   }
 
   Future<Map<String, dynamic>> _fetch() async {
@@ -122,12 +144,42 @@ class _AlertSettingsState extends State<_AlertSettings> {
     return (row?['alert_settings'] as Map?)?.cast<String, dynamic>() ?? {};
   }
 
+  Future<void> _write(Map<String, dynamic> merged) {
+    if (widget.writer != null) return widget.writer!(merged);
+    return Supabase.instance.client
+        .from('profiles')
+        .update({'alert_settings': merged}).eq('id', widget.userId);
+  }
+
+  /// Both alerts default ON when the key is absent from the jsonb.
+  bool _value(String key) => (_current[key] as bool?) ?? true;
+
+  Future<void> _toggle(String key, bool v) async {
+    final was = _current;
+    final merged = mergedAlertSettings(_current, key, v);
+    setState(() => _current = merged);
+    try {
+      await _write(merged);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _current = was); // never leave a lie on screen
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update alert: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Map<String, dynamic>>(
       future: _load,
       builder: (context, snapshot) {
-        final settings = snapshot.data ?? const {};
+        if (snapshot.hasError) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text('Could not load alert settings.',
+                style: mono.copyWith(fontSize: 12, color: red)),
+          );
+        }
         if (!snapshot.hasData) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
@@ -139,70 +191,24 @@ class _AlertSettingsState extends State<_AlertSettings> {
           );
         }
         return Column(children: [
-          _AlertToggle(
-            title: 'Read the biggest stories aloud',
-            settingsKey: 'voice_l1',
-            settings: settings,
-            userId: widget.userId,
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Read the biggest stories aloud',
+                style: serif.copyWith(fontSize: 15)),
+            value: _value('voice_l1'),
+            activeThumbColor: green,
+            onChanged: (v) => _toggle('voice_l1', v),
           ),
-          _AlertToggle(
-            title: 'Alerts for my watchlist',
-            settingsKey: 'personalized',
-            settings: settings,
-            userId: widget.userId,
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Alerts for my watchlist',
+                style: serif.copyWith(fontSize: 15)),
+            value: _value('personalized'),
+            activeThumbColor: green,
+            onChanged: (v) => _toggle('personalized', v),
           ),
         ]);
       },
-    );
-  }
-}
-
-class _AlertToggle extends StatefulWidget {
-  const _AlertToggle({
-    required this.title,
-    required this.settingsKey,
-    required this.settings,
-    required this.userId,
-  });
-
-  final String title;
-  final String settingsKey;
-  final Map<String, dynamic> settings;
-  final String userId;
-
-  @override
-  State<_AlertToggle> createState() => _AlertToggleState();
-}
-
-class _AlertToggleState extends State<_AlertToggle> {
-  late Map<String, dynamic> _current = widget.settings;
-  // Both alerts default ON when the key is absent from the jsonb.
-  bool get _value => (_current[widget.settingsKey] as bool?) ?? true;
-
-  Future<void> _toggle(bool v) async {
-    final was = _current;
-    final merged = mergedAlertSettings(_current, widget.settingsKey, v);
-    setState(() => _current = merged);
-    try {
-      await Supabase.instance.client
-          .from('profiles')
-          .update({'alert_settings': merged}).eq('id', widget.userId);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _current = was); // never leave a lie on screen
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not update alert: $e')));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SwitchListTile(
-      contentPadding: EdgeInsets.zero,
-      title: Text(widget.title, style: serif.copyWith(fontSize: 15)),
-      value: _value,
-      activeThumbColor: green,
-      onChanged: _toggle,
     );
   }
 }
