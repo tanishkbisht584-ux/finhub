@@ -44,8 +44,8 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
-  /// null = unknown yet; checked once per app start. Errors count as "has
-  /// interests" — a flaky network must never re-run onboarding.
+  /// null = unknown yet; checked once per signed-in session. Errors count as
+  /// "has interests" — a flaky network must never re-run onboarding.
   bool? _needsInterests;
 
   /// saves/events carry a foreign key to profiles, so without this row every
@@ -81,7 +81,10 @@ class _AuthGateState extends State<AuthGate> {
       stream: Supabase.instance.client.auth.onAuthStateChange,
       builder: (context, snapshot) {
         final session = Supabase.instance.client.auth.currentSession;
-        if (session == null) return const SignInScreen();
+        if (session == null) {
+          _needsInterests = null;
+          return const SignInScreen();
+        }
         _ensureProfile(session.user);
         _checkInterests(session.user);
         if (_needsInterests == null) {
