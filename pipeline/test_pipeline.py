@@ -45,12 +45,15 @@ def test_same_company_filing_still_dedupes():
 
 
 def test_display_name_strips_legal_suffix():
-    """The NSE master lists registrar names ('MAHINDRA & MAHINDRA LIMITED');
-    chips and headers want what people actually say."""
-    assert display_name("MAHINDRA & MAHINDRA LIMITED") == "Mahindra & Mahindra"
+    """The NSE master is already properly cased ('HDFC Bank Limited', "Dr.
+    Reddy's Laboratories Limited"); display_name must pass that casing
+    through untouched and only strip the legal suffix. Re-casing with
+    .title() corrupted 541 names (e.g. "Dr. Reddy'S Laboratories")."""
+    assert display_name("HDFC Bank Limited") == "HDFC Bank"
+    assert display_name("Dr. Reddy's Laboratories Limited") == "Dr. Reddy's Laboratories"
     assert display_name("Poly Medicure Ltd") == "Poly Medicure"
-    # no trailing "Limited"/"Ltd" -> unchanged apart from title-casing
-    assert display_name("INFOSYS") == "Infosys"
+    # no trailing "Limited"/"Ltd" -> unchanged
+    assert display_name("INFOSYS") == "INFOSYS"
 
 
 def test_clusters_do_not_grow_by_chaining():

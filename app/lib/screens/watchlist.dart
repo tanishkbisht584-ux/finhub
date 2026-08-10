@@ -57,6 +57,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
       final links = await sb.from('story_companies')
           .select('story_id')
           .inFilter('company_id', ids)
+          .order('story_id', ascending: false)
           .limit(200);
       final storyIds =
           {for (final l in links) l['story_id']}.toList();

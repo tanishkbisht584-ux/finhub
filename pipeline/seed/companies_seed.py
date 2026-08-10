@@ -26,9 +26,12 @@ LEGAL_TAIL = re.compile(r"\s+(limited|ltd\.?)$", re.I)
 
 
 def display_name(legal):
-    """'MAHINDRA & MAHINDRA LIMITED' -> 'Mahindra & Mahindra' — chips and the
-    stock page header want the name people say, not the registrar's."""
-    return LEGAL_TAIL.sub("", legal.strip()).title()
+    """'HDFC Bank Limited' -> 'HDFC Bank' — chips and the stock page header
+    want the name people say, not the registrar's. The NSE master is already
+    properly cased ("Dr. Reddy's Laboratories Limited"); re-casing with
+    .title() corrupted it ("Dr. Reddy'S Laboratories"), so this only strips
+    the legal suffix and leaves the rest exactly as NSE wrote it."""
+    return LEGAL_TAIL.sub("", legal.strip())
 
 
 def main():

@@ -13,6 +13,7 @@ import '../publishers.dart';
 import '../share_palette.dart';
 import 'saved.dart';
 import 'stock.dart';
+import 'watchlist.dart';
 import '../theme.dart';
 
 /// Whether the feed currently on screen came from the device cache.
@@ -282,7 +283,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
   /// Fires the ribbon's choice. Kept separate from _fire so the share
   /// analytics event never counts a navigation.
   void _fireRibbon(int index) {
-    if (ribbonTargets[index].id != 'saved') return; // cancel is a no-op
+    final id = ribbonTargets[index].id;
+    if (id != 'saved' && id != 'watchlist') return; // cancel is a no-op
     Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => Scaffold(
               appBar: AppBar(
@@ -290,7 +292,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
                   surfaceTintColor: bg,
                   elevation: 0,
                   leading: const BackButton(color: ink)),
-              body: const SavedScreen(),
+              body: id == 'saved' ? const SavedScreen() : const WatchlistScreen(),
             )));
   }
 

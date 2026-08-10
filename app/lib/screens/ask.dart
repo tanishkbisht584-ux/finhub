@@ -67,11 +67,24 @@ class _AskScreenState extends State<AskScreen> {
             .from('companies')
             .select('id,name,nse_symbol')
             .or('nse_symbol.ilike.$term,name.ilike.$term%')
-            .limit(2);
-        if (rows.length == 1 && mounted) {
+            .limit(5);
+        // A prefix match can hit siblings (RELIANCE -> 6 rows, ITC -> 2,
+        // Tata Motors -> 2 post-demerger), so an exact match on symbol or
+        // name wins over the old "unique prefix" rule when there is one.
+        final lower = term.toLowerCase();
+        final exact = [
+          for (final r in rows)
+            if ((r['nse_symbol'] as String?)?.toLowerCase() == lower ||
+                (r['name'] as String?)?.toLowerCase() == lower)
+              r
+        ];
+        final match = exact.length == 1
+            ? exact.single
+            : (rows.length == 1 ? rows.single : null);
+        if (match != null && mounted) {
           Navigator.of(context).push(MaterialPageRoute(
               builder: (_) =>
-                  StockScreen(company: Company.fromJson(rows.single))));
+                  StockScreen(company: Company.fromJson(match))));
           return;
         }
       } catch (_) {
