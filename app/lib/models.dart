@@ -33,6 +33,10 @@ class Story {
   /// process. Empty when no other outlet carried it.
   final List<Outlet> outlets;
 
+  /// Companies the pipeline tagged on this story — attached by the feed query
+  /// (one batched query per page, like outlets) and cached with the card.
+  final List<Company> companies;
+
   Story.fromJson(Map<String, dynamic> j)
       : id = j['id'],
         hook = j['hook'],
@@ -53,6 +57,10 @@ class Story {
         outlets = [
           for (final o in (j['outlets'] as List? ?? const []))
             Outlet.fromJson(Map<String, dynamic>.from(o))
+        ],
+        companies = [
+          for (final c in (j['companies'] as List? ?? const []))
+            Company.fromJson(Map<String, dynamic>.from(c))
         ];
 }
 

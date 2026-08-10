@@ -12,6 +12,7 @@ import '../models.dart';
 import '../publishers.dart';
 import '../share_palette.dart';
 import 'saved.dart';
+import 'stock.dart';
 import '../theme.dart';
 
 /// Whether the feed currently on screen came from the device cache.
@@ -35,9 +36,10 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
         .order('published_at', ascending: false)
         .limit(50);
     final withOutlets = await _attachOutlets(rows.cast<Map<String, dynamic>>());
-    await FeedCache.save(withOutlets);
+    final withCompanies = await _attachCompanies(withOutlets);
+    await FeedCache.save(withCompanies);
     ref.read(servingCacheProvider.notifier).state = null;
-    return withOutlets.map(Story.fromJson).toList();
+    return withCompanies.map(Story.fromJson).toList();
   } catch (_) {
     // Offline, or Supabase having a moment. Yesterday's news beats an error
     // screen; only surface the failure if we have nothing saved either.
@@ -90,6 +92,30 @@ Future<List<Map<String, dynamic>>> _attachOutlets(
     }
   } catch (_) {
     // Attribution is a bonus, never a reason to lose the feed.
+  }
+  return rows;
+}
+
+/// Attach tagged companies to each row — one query for the whole page.
+Future<List<Map<String, dynamic>>> _attachCompanies(
+    List<Map<String, dynamic>> rows) async {
+  final ids = [for (final r in rows) r['id']];
+  if (ids.isEmpty) return rows;
+  try {
+    final links = await Supabase.instance.client
+        .from('story_companies')
+        .select('story_id, companies(id,name,nse_symbol)')
+        .inFilter('story_id', ids);
+    final byStory = <int, List<Map<String, dynamic>>>{};
+    for (final l in links.cast<Map<String, dynamic>>()) {
+      (byStory[l['story_id'] as int] ??= [])
+          .add(Map<String, dynamic>.from(l['companies']));
+    }
+    for (final row in rows) {
+      row['companies'] = byStory[row['id']] ?? const [];
+    }
+  } catch (_) {
+    // Chips are a bonus, never a reason to lose the feed.
   }
   return rows;
 }
@@ -471,6 +497,31 @@ class _StoryCardState extends ConsumerState<StoryCard>
                     Text(story.summary ?? '',
                         style: TextStyle(
                             fontSize: 15, height: 1.55, color: ink.withValues(alpha: 0.8))),
+                    if (story.companies.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: story.companies
+                            .map((c) => GestureDetector(
+                                  onTap: () => Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                          builder: (_) =>
+                                              StockScreen(company: c))),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                        color: surface,
+                                        border: Border.all(color: border)),
+                                    child: Text('\$${c.nseSymbol}',
+                                        style: mono.copyWith(
+                                            fontSize: 12, color: ink)),
+                                  ),
+                                ))
+                            .toList(),
+                      ),
+                    ],
                     if (story.sectors.isNotEmpty) ...[
                       const SizedBox(height: 14),
                       Wrap(
