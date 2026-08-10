@@ -90,3 +90,38 @@ class QaAnswer {
         followups = List<String>.from(j['followups'] ?? const []),
         refused = j['refused'] == true;
 }
+
+class Company {
+  final int id;
+  final String name;
+  final String nseSymbol;
+  Company.fromJson(Map<String, dynamic> j)
+      : id = j['id'],
+        name = j['name'] ?? '',
+        nseSymbol = j['nse_symbol'] ?? '';
+}
+
+/// Parsed from Yahoo's keyless /v8/finance/chart/ endpoint. Deliberately only
+/// what that one endpoint carries: price, previous close, 52-wk range, closes
+/// for the sparkline. ponytail: market cap and P/E live behind Yahoo's
+/// crumb-gated quoteSummary — add a scraping dance only if beta users ask.
+class Quote {
+  final double price;
+  final double prevClose;
+  final double high52;
+  final double low52;
+  final List<double> closes;
+
+  Quote.fromChartJson(Map<String, dynamic> j)
+      : this._(Map<String, dynamic>.from(j['chart']['result'][0]));
+
+  Quote._(Map<String, dynamic> r)
+      : price = (r['meta']['regularMarketPrice'] as num).toDouble(),
+        prevClose = (r['meta']['chartPreviousClose'] as num).toDouble(),
+        high52 = (r['meta']['fiftyTwoWeekHigh'] as num?)?.toDouble() ?? 0,
+        low52 = (r['meta']['fiftyTwoWeekLow'] as num?)?.toDouble() ?? 0,
+        closes = [
+          for (final c in (r['indicators']['quote'][0]['close'] as List? ?? const []))
+            if (c != null) (c as num).toDouble()
+        ];
+}
