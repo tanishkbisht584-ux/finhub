@@ -463,6 +463,126 @@ def send_fcm(hook, headline, story_id, score):
     return True
 
 
+def send_fcm_token(token, hook, headline, story_id, score):
+    """Direct-to-device variant of send_fcm for personalized alerts."""
+    import json as _json
+    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if not sa_json:
+        print(f"PERSONAL ALERT (FCM not configured): {hook}")
+        return False
+    from google.oauth2 import service_account
+    import google.auth.transport.requests
+    creds = service_account.Credentials.from_service_account_info(
+        _json.loads(sa_json), scopes=["https://www.googleapis.com/auth/firebase.messaging"])
+    creds.refresh(google.auth.transport.requests.Request())
+    r = requests.post(
+        f"https://fcm.googleapis.com/v1/projects/{creds.project_id}/messages:send",
+        headers={"Authorization": f"Bearer {creds.token}"},
+        json={"message": {"token": token,
+                          "notification": {"title": hook, "body": headline},
+                          "data": {"story_id": str(story_id), "hook": hook,
+                                   "impact_score": str(score)}}},
+        timeout=30)
+    # 404/400 = dead token (app uninstalled): clear it so we stop trying
+    return r.ok
+
+
+def personal_matches(story, follows_by_user, companies_of):
+    """Users whose follows this story touches. follows_by_user: {user_id:
+    [(target_type, target_id)]}; companies_of(story_id) -> set of company-id
+    strings. Pure so the matching rules are testable without a database."""
+    cats = {story.get("category")} - {None}
+    secs = set(story.get("sectors") or [])
+    comps = None  # lazy: most stories touch no follower at all
+    hit = set()
+    for uid, follows in follows_by_user.items():
+        for ttype, tid in follows:
+            if ttype == "category" and tid in cats:
+                hit.add(uid); break
+            if ttype == "sector" and tid in secs:
+                hit.add(uid); break
+            if ttype == "company":
+                if comps is None:
+                    comps = companies_of(story["id"])
+                if tid in comps:
+                    hit.add(uid); break
+    return hit
+
+
+PERSONAL_CAP_PER_DAY = 5     # spec §7
+PERSONAL_MIN_SCORE = 6
+
+
+def personal_alert_engine(now=None):
+    """Spec §7 personalized alerts: impact >= 6 touching a followed
+    company/sector/category -> direct push, max 5/day/user, quiet hours
+    pierced only by >= 9. Per-user state in profiles.alert_settings.pa
+    (ponytail: jsonb counter+cursor; a real sends table when DDL access
+    returns / beta grows). Globally-alerted stories are excluded — the topic
+    push already reached everyone."""
+    now = now or datetime.now(timezone.utc)
+    profiles = sb("GET", "profiles?select=id,fcm_token,alert_settings"
+                         "&fcm_token=not.is.null")
+    profiles = [p for p in profiles
+                if (p.get("alert_settings") or {}).get("personalized", True)]
+    if not profiles:
+        return 0
+    all_follows = sb("GET", "follows?select=user_id,target_type,target_id")
+    follows_by_user = {}
+    for f in all_follows:
+        follows_by_user.setdefault(f["user_id"], []).append(
+            (f["target_type"], f["target_id"]))
+    if not follows_by_user:
+        return 0
+
+    today = now.astimezone(IST).strftime("%Y-%m-%d")
+    cutoff = iso(now - timedelta(hours=6))
+    stories = sb("GET", "stories?select=id,hook,headline,impact_score,category,sectors"
+                        f"&created_at=gte.{cutoff}&impact_score=gte.{PERSONAL_MIN_SCORE}"
+                        "&alerted_at=is.null&status=in.(pending,approved)"
+                        "&order=id.asc")
+    if not stories:
+        return 0
+
+    link_cache = {}
+    def companies_of(sid):
+        if sid not in link_cache:
+            link_cache[sid] = {str(r["company_id"]) for r in
+                               sb("GET", f"story_companies?select=company_id&story_id=eq.{sid}")}
+        return link_cache[sid]
+
+    sent = 0
+    quiet = in_quiet_hours(now)
+    for p in profiles:
+        uid = p["id"]
+        if uid not in follows_by_user:
+            continue
+        settings = p.get("alert_settings") or {}
+        pa = settings.get("pa") or {}
+        n_today = pa.get("n", 0) if pa.get("d") == today else 0
+        cursor = pa.get("cur", 0)
+        new_cursor = cursor
+        for s in stories:
+            if s["id"] <= cursor:
+                continue
+            new_cursor = max(new_cursor, s["id"])
+            if n_today >= PERSONAL_CAP_PER_DAY:
+                continue  # cursor still advances: stale news never buzzes later
+            if quiet and (s["impact_score"] or 0) < 9:
+                continue
+            if uid not in personal_matches(s, {uid: follows_by_user[uid]}, companies_of):
+                continue
+            if send_fcm_token(p["fcm_token"], s["hook"] or s["headline"],
+                              s["headline"], s["id"], s["impact_score"]):
+                n_today += 1
+                sent += 1
+        if new_cursor != cursor or n_today != (pa.get("n", 0) if pa.get("d") == today else 0):
+            sb("PATCH", f"profiles?id=eq.{uid}",
+               json={"alert_settings": {**settings,
+                     "pa": {"d": today, "n": n_today, "cur": new_cursor}}})
+    return sent
+
+
 def alert_engine(authority_by_source):
     """Speed path: qualifying stories auto-approve + alert with no human in the loop.
     The 5/day cap limits PUSHES, not publication — a story past the cap is still
@@ -888,6 +1008,7 @@ def main():
 
     releveled = chief_editor(editor_pass)
     alerted = alert_engine({s["name"]: s["authority"] for s in sources})
+    personal = personal_alert_engine()
     healed = retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key)
     disabled = disable_dead_sources()
     revived = revive_sources()
@@ -895,7 +1016,7 @@ def main():
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
           + (f", {merged} merged into an existing story" if merged else "")
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
-          + f" | editor: {releveled} releveled | alerts: {alerted} sent | "
+          + f" | editor: {releveled} releveled | alerts: {alerted} sent, {personal} personal alerts | "
           f"self-heal: {healed} recovered, {disabled} retired, {revived} revived, {approved} auto-approved")
     served = usage_report()
     if served:  # which lane actually carried the run — silent failover is visible

@@ -38,6 +38,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           # optional: set this secret to enable the OpenRouter failover
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # turns send_fcm from a printed no-op into real pushes (M7)
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           # Stay resident ~5.5h polling every 90s, then exit; the queued run
           # (concurrency group, cancel-in-progress: false) takes over, so
           # coverage is continuous regardless of when the cron is honoured.

@@ -339,3 +339,23 @@ def test_sb_pages_past_postgrest_1000_row_cap(monkeypatch):
     rows = run.sb("GET", "stories?select=i")
     assert len(rows) == total          # nothing silently dropped
     assert len(calls) == 3             # 1000 + 1000 + 300
+
+
+def test_personal_matches_company_sector_category():
+    from run import personal_matches
+    story = {"id": 10, "impact_score": 6, "category": "Markets",
+             "sectors": ["Energy", "Banking"]}
+    follows_by_user = {
+        "u-company":  [("company", "42")],
+        "u-sector":   [("sector", "Banking")],
+        "u-category": [("category", "Markets")],
+        "u-miss":     [("company", "7"), ("sector", "IT"), ("category", "IPO")],
+    }
+    hits = personal_matches(story, follows_by_user, companies_of=lambda sid: {"42"})
+    assert hits == {"u-company", "u-sector", "u-category"}
+
+
+def test_personal_matches_empty_follows():
+    from run import personal_matches
+    assert personal_matches({"id": 1, "category": None, "sectors": None},
+                            {}, companies_of=lambda sid: set()) == set()
