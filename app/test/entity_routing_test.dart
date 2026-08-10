@@ -19,4 +19,11 @@ void main() {
       expect(looksLikeQuestion(q), isFalse, reason: q);
     }
   });
+
+  test('a term carrying PostgREST filter syntax is rejected, not routed', () {
+    for (final q in ['Tata,id.gt.0', 'Tata(', 'Tata)']) {
+      expect(safeEntityTerm(q), isNull, reason: q);
+    }
+    expect(safeEntityTerm('Tata Motors'), 'Tata Motors');
+  });
 }

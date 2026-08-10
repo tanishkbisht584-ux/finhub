@@ -29,6 +29,16 @@ bool looksLikeQuestion(String q) {
   return q.contains('?') || words.any(_questionWords.contains);
 }
 
+/// Guards the PostgREST `.or()` filter from injection: `,` `(` `)` are
+/// syntax there, and a raw term carrying one (e.g. `Tata,id.gt.0`) would
+/// splice extra filter conditions. No legitimate ticker/company name
+/// contains these, so a term that does just skips routing (falls through
+/// to Q&A, which takes any text safely as a JSON body).
+String? safeEntityTerm(String q) {
+  final term = q.trim();
+  return term.contains(RegExp(r'[,()]')) ? null : term;
+}
+
 class AskScreen extends StatefulWidget {
   const AskScreen({super.key});
   @override
@@ -50,9 +60,9 @@ class _AskScreenState extends State<AskScreen> {
   Future<void> _ask(String question) async {
     if (question.trim().isEmpty || _loading) return;
     _controller.text = question;
-    if (!looksLikeQuestion(question)) {
+    final term = looksLikeQuestion(question) ? null : safeEntityTerm(question);
+    if (term != null) {
       try {
-        final term = question.trim();
         final rows = await Supabase.instance.client
             .from('companies')
             .select('id,name,nse_symbol')
@@ -60,9 +70,8 @@ class _AskScreenState extends State<AskScreen> {
             .limit(2);
         if (rows.length == 1 && mounted) {
           Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => StockScreen(
-                  company: Company.fromJson(
-                      Map<String, dynamic>.from(rows.single)))));
+              builder: (_) =>
+                  StockScreen(company: Company.fromJson(rows.single))));
           return;
         }
       } catch (_) {
