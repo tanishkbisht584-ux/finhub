@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models.dart';
 import '../theme.dart';
+import 'stock.dart';
 
 const _suggested = [
   'Why is the NIFTY moving today?',
@@ -11,6 +12,22 @@ const _suggested = [
   'Which sectors are hot this week?',
   'What are FIIs doing right now?',
 ];
+
+/// Spec §8 screen 3 — one box, two behaviors. A question goes to Q&A; a bare
+/// entity ("Tata Motors") goes to the stock page. Interrogatives and length
+/// separate them: nobody types a seven-word company name, and nobody asks a
+/// question without a question word — and when this guess is wrong, Q&A
+/// answers the entity query with sources anyway, so a miss costs nothing.
+const _questionWords = {
+  'why', 'what', 'how', 'when', 'where', 'who', 'which', 'is', 'are', 'was',
+  'will', 'should', 'can', 'could', 'does', 'did', 'do', 'explain', 'tell',
+};
+
+bool looksLikeQuestion(String q) {
+  final words = q.trim().toLowerCase().split(RegExp(r'\s+'));
+  if (words.length > 4) return true;
+  return q.contains('?') || words.any(_questionWords.contains);
+}
 
 class AskScreen extends StatefulWidget {
   const AskScreen({super.key});
@@ -33,6 +50,25 @@ class _AskScreenState extends State<AskScreen> {
   Future<void> _ask(String question) async {
     if (question.trim().isEmpty || _loading) return;
     _controller.text = question;
+    if (!looksLikeQuestion(question)) {
+      try {
+        final term = question.trim();
+        final rows = await Supabase.instance.client
+            .from('companies')
+            .select('id,name,nse_symbol')
+            .or('nse_symbol.ilike.$term,name.ilike.$term%')
+            .limit(2);
+        if (rows.length == 1 && mounted) {
+          Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => StockScreen(
+                  company: Company.fromJson(
+                      Map<String, dynamic>.from(rows.single)))));
+          return;
+        }
+      } catch (_) {
+        // company lookup down -> just ask; Q&A handles entities with sources
+      }
+    }
     setState(() {
       _loading = true;
       _error = null;
