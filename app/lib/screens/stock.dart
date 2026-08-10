@@ -50,6 +50,7 @@ class _StockScreenState extends State<StockScreen> {
     sb.from('story_companies')
         .select('story_id')
         .eq('company_id', widget.company.id)
+        .order('story_id', ascending: false)
         .limit(100)
         .then((links) async {
       final ids = [for (final l in links) l['story_id']];
