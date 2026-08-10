@@ -3,6 +3,7 @@ import pytest
 
 from ai import validate
 from run import assign_cluster, canonical_url, title_tokens, url_hash
+from seed.companies_seed import display_name
 
 
 def test_url_hash_strips_tracking_and_normalizes():
@@ -41,6 +42,15 @@ def test_same_company_filing_still_dedupes():
     filing arriving twice is still one story."""
     recent = [("cluster-1", title_tokens("INDOFARM: Outcome of Board Meeting"))]
     assert assign_cluster("INDOFARM: Outcome of Board Meeting", recent) == "cluster-1"
+
+
+def test_display_name_strips_legal_suffix():
+    """The NSE master lists registrar names ('MAHINDRA & MAHINDRA LIMITED');
+    chips and headers want what people actually say."""
+    assert display_name("MAHINDRA & MAHINDRA LIMITED") == "Mahindra & Mahindra"
+    assert display_name("Poly Medicure Ltd") == "Poly Medicure"
+    # no trailing "Limited"/"Ltd" -> unchanged apart from title-casing
+    assert display_name("INFOSYS") == "Infosys"
 
 
 def test_clusters_do_not_grow_by_chaining():
