@@ -464,12 +464,14 @@ def send_fcm(hook, headline, story_id, score):
 
 
 def send_fcm_token(token, hook, headline, story_id, score):
-    """Direct-to-device variant of send_fcm for personalized alerts."""
+    """Direct-to-device variant of send_fcm for personalized alerts. Returns
+    "sent" | "dead" | "fail" — the caller clears "dead" tokens and only
+    counts "sent" against the daily cap."""
     import json as _json
     sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
     if not sa_json:
         print(f"PERSONAL ALERT (FCM not configured): {hook}")
-        return False
+        return "fail"
     from google.oauth2 import service_account
     import google.auth.transport.requests
     creds = service_account.Credentials.from_service_account_info(
@@ -483,8 +485,10 @@ def send_fcm_token(token, hook, headline, story_id, score):
                           "data": {"story_id": str(story_id), "hook": hook,
                                    "impact_score": str(score)}}},
         timeout=30)
-    # 404/400 = dead token (app uninstalled): clear it so we stop trying
-    return r.ok
+    if r.ok:
+        return "sent"
+    # 404/400 = dead token (app uninstalled/unregistered): caller clears it
+    return "dead" if r.status_code in (400, 404) else "fail"
 
 
 def personal_matches(story, follows_by_user, companies_of):
@@ -557,29 +561,39 @@ def personal_alert_engine(now=None):
         uid = p["id"]
         if uid not in follows_by_user:
             continue
-        settings = p.get("alert_settings") or {}
-        pa = settings.get("pa") or {}
-        n_today = pa.get("n", 0) if pa.get("d") == today else 0
-        cursor = pa.get("cur", 0)
-        new_cursor = cursor
-        for s in stories:
-            if s["id"] <= cursor:
-                continue
-            new_cursor = max(new_cursor, s["id"])
-            if n_today >= PERSONAL_CAP_PER_DAY:
-                continue  # cursor still advances: stale news never buzzes later
-            if quiet and (s["impact_score"] or 0) < 9:
-                continue
-            if uid not in personal_matches(s, {uid: follows_by_user[uid]}, companies_of):
-                continue
-            if send_fcm_token(p["fcm_token"], s["hook"] or s["headline"],
-                              s["headline"], s["id"], s["impact_score"]):
-                n_today += 1
-                sent += 1
-        if new_cursor != cursor or n_today != (pa.get("n", 0) if pa.get("d") == today else 0):
-            sb("PATCH", f"profiles?id=eq.{uid}",
-               json={"alert_settings": {**settings,
-                     "pa": {"d": today, "n": n_today, "cur": new_cursor}}})
+        try:
+            settings = p.get("alert_settings") or {}
+            pa = settings.get("pa") or {}
+            n_today = pa.get("n", 0) if pa.get("d") == today else 0
+            cursor = pa.get("cur", 0)
+            new_cursor = cursor
+            for s in stories:
+                if s["id"] <= cursor:
+                    continue
+                new_cursor = max(new_cursor, s["id"])
+                if n_today >= PERSONAL_CAP_PER_DAY:
+                    continue  # cursor still advances: stale news never buzzes later
+                if quiet and (s["impact_score"] or 0) < QUIET_PIERCE_SCORE:
+                    continue
+                if uid not in personal_matches(s, {uid: follows_by_user[uid]}, companies_of):
+                    continue
+                result = send_fcm_token(p["fcm_token"], s["hook"] or s["headline"],
+                                        s["headline"], s["id"], s["impact_score"])
+                if result == "sent":
+                    n_today += 1
+                    sent += 1
+                elif result == "dead":
+                    sb("PATCH", f"profiles?id=eq.{uid}", json={"fcm_token": None})
+                    break  # token's gone: no point trying it against later stories
+            if new_cursor != cursor or n_today != (pa.get("n", 0) if pa.get("d") == today else 0):
+                sb("PATCH", f"profiles?id=eq.{uid}",
+                   json={"alert_settings": {**settings,
+                         "pa": {"d": today, "n": n_today, "cur": new_cursor}}})
+        except Exception as e:
+            # one bad user (dead creds, malformed token, transient network blip)
+            # never stops the rest of the run's pushes
+            print(f"PERSONAL ALERT failed for user {uid}: {str(e)[:80]}")
+            continue
     return sent
 
 
