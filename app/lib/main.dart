@@ -36,6 +36,8 @@ void _openStory(RemoteMessage m) {
       ?.push(MaterialPageRoute(builder: (_) => StoryDetailScreen(storyId: id)));
 }
 
+final _tts = FlutterTts();
+
 /// L1 voice (spec §7): a foreground push with impact >= 9 speaks the hook —
 /// ~3 s of on-device TTS, gated on the profile toggle, on by default.
 Future<void> _maybeSpeak(RemoteMessage m) async {
@@ -50,11 +52,17 @@ Future<void> _maybeSpeak(RemoteMessage m) async {
       if (row?['alert_settings']?['voice_l1'] == false) return;
     } catch (_) {}  // can't read the toggle -> default on (it's L1-rare)
   }
-  await FlutterTts().speak(hook);
+  await _tts.speak(hook);
 }
+
+// Set once the token's been pushed so AuthGate's per-rebuild call is a no-op
+// after the first success — token refreshes go through the onTokenRefresh
+// listener instead, not through this flag.
+bool _fcmTokenSaved = false;
 
 /// The pipeline needs the device token to send personalized alerts.
 Future<void> _saveFcmToken() async {
+  if (_fcmTokenSaved) return;
   final uid = Supabase.instance.client.auth.currentUser?.id;
   if (uid == null) return;
   try {
@@ -62,6 +70,7 @@ Future<void> _saveFcmToken() async {
     if (token != null) {
       await Supabase.instance.client.from('profiles')
           .update({'fcm_token': token}).eq('id', uid);
+      _fcmTokenSaved = true;
     }
   } catch (_) {}  // no Firebase on this build/device — personalized just stays off
 }
@@ -69,19 +78,24 @@ Future<void> _saveFcmToken() async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Supabase.initialize(url: supabaseUrl, publishableKey: supabasePublishableKey);
+  RemoteMessage? initial;
   try {
     await Firebase.initializeApp();
     await FirebaseMessaging.instance.requestPermission();
     await FirebaseMessaging.instance.subscribeToTopic('alerts');
     FirebaseMessaging.onMessageOpenedApp.listen(_openStory);
-    final initial = await FirebaseMessaging.instance.getInitialMessage();
-    if (initial != null) _openStory(initial);
+    initial = await FirebaseMessaging.instance.getInitialMessage();
     FirebaseMessaging.onMessage.listen(_maybeSpeak);
     FirebaseMessaging.instance.onTokenRefresh.listen((_) => _saveFcmToken());
   } catch (_) {
     // no google-services / Play Services: app works, alerts don't arrive
   }
   runApp(const ProviderScope(child: FinSwipeApp()));
+  // App killed, opened via notification tap: navigatorKey has no live
+  // NavigatorState until the first frame is up, so the push has to wait.
+  if (initial != null) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openStory(initial!));
+  }
 }
 
 class FinSwipeApp extends StatelessWidget {
