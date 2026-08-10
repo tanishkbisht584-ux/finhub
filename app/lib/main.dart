@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'screens/ask.dart';
 import 'screens/feed.dart';
+import 'screens/interests.dart';
 import 'screens/profile.dart';
 import 'screens/saved.dart';
 import 'screens/watchlist.dart';
@@ -36,8 +37,16 @@ class FinSwipeApp extends StatelessWidget {
   }
 }
 
-class AuthGate extends StatelessWidget {
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  /// null = unknown yet; checked once per app start. Errors count as "has
+  /// interests" — a flaky network must never re-run onboarding.
+  bool? _needsInterests;
 
   /// saves/events carry a foreign key to profiles, so without this row every
   /// save silently fails. Safe to call on each launch — it upserts.
@@ -52,6 +61,20 @@ class AuthGate extends StatelessWidget {
     }
   }
 
+  Future<void> _checkInterests(User user) async {
+    if (_needsInterests != null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('follows')
+          .select('target_id')
+          .eq('user_id', user.id)
+          .limit(1);
+      if (mounted) setState(() => _needsInterests = rows.isEmpty);
+    } catch (_) {
+      if (mounted) setState(() => _needsInterests = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<AuthState>(
@@ -60,6 +83,15 @@ class AuthGate extends StatelessWidget {
         final session = Supabase.instance.client.auth.currentSession;
         if (session == null) return const SignInScreen();
         _ensureProfile(session.user);
+        _checkInterests(session.user);
+        if (_needsInterests == null) {
+          return const Scaffold(
+              body: Center(child: CircularProgressIndicator()));
+        }
+        if (_needsInterests == true) {
+          return InterestsScreen(
+              onDone: () => setState(() => _needsInterests = false));
+        }
         return const HomeShell();
       },
     );
