@@ -463,6 +463,13 @@ def send_fcm(hook, headline, story_id, score):
     return True
 
 
+def _fcm_token_is_dead(status_code, text):
+    """404 = dead token (app uninstalled/unregistered). 400 alone can just be
+    a malformed message, not a dead token -- only "UNREGISTERED" in the FCM
+    response body means the token itself is what's gone."""
+    return status_code == 404 or (status_code == 400 and "UNREGISTERED" in (text or ""))
+
+
 def send_fcm_token(token, hook, headline, story_id, score):
     """Direct-to-device variant of send_fcm for personalized alerts. Returns
     "sent" | "dead" | "fail" — the caller clears "dead" tokens and only
@@ -487,8 +494,7 @@ def send_fcm_token(token, hook, headline, story_id, score):
         timeout=30)
     if r.ok:
         return "sent"
-    # 404/400 = dead token (app uninstalled/unregistered): caller clears it
-    return "dead" if r.status_code in (400, 404) else "fail"
+    return "dead" if _fcm_token_is_dead(r.status_code, r.text) else "fail"
 
 
 def personal_matches(story, follows_by_user, companies_of):
@@ -543,7 +549,7 @@ def personal_alert_engine(now=None):
     cutoff = iso(now - timedelta(hours=6))
     stories = sb("GET", "stories?select=id,hook,headline,impact_score,category,sectors"
                         f"&created_at=gte.{cutoff}&impact_score=gte.{PERSONAL_MIN_SCORE}"
-                        "&alerted_at=is.null&status=in.(pending,approved)"
+                        "&alerted_at=is.null&status=eq.approved"
                         "&order=id.asc")
     if not stories:
         return 0
@@ -567,28 +573,34 @@ def personal_alert_engine(now=None):
             n_today = pa.get("n", 0) if pa.get("d") == today else 0
             cursor = pa.get("cur", 0)
             new_cursor = cursor
-            for s in stories:
-                if s["id"] <= cursor:
-                    continue
-                new_cursor = max(new_cursor, s["id"])
-                if n_today >= PERSONAL_CAP_PER_DAY:
-                    continue  # cursor still advances: stale news never buzzes later
-                if quiet and (s["impact_score"] or 0) < QUIET_PIERCE_SCORE:
-                    continue
-                if uid not in personal_matches(s, {uid: follows_by_user[uid]}, companies_of):
-                    continue
-                result = send_fcm_token(p["fcm_token"], s["hook"] or s["headline"],
-                                        s["headline"], s["id"], s["impact_score"])
-                if result == "sent":
-                    n_today += 1
-                    sent += 1
-                elif result == "dead":
-                    sb("PATCH", f"profiles?id=eq.{uid}", json={"fcm_token": None})
-                    break  # token's gone: no point trying it against later stories
-            if new_cursor != cursor or n_today != (pa.get("n", 0) if pa.get("d") == today else 0):
-                sb("PATCH", f"profiles?id=eq.{uid}",
-                   json={"alert_settings": {**settings,
-                         "pa": {"d": today, "n": n_today, "cur": new_cursor}}})
+            # A mid-loop exception (bad story shape, companies_of network blip)
+            # must not lose this user's pa state — the finally still PATCHes
+            # whatever cursor/count were reached, so a retry next pass resumes
+            # instead of re-buzzing the same stories.
+            try:
+                for s in stories:
+                    if s["id"] <= cursor:
+                        continue
+                    new_cursor = max(new_cursor, s["id"])
+                    if n_today >= PERSONAL_CAP_PER_DAY:
+                        continue  # cursor still advances: stale news never buzzes later
+                    if quiet and (s["impact_score"] or 0) < QUIET_PIERCE_SCORE:
+                        continue
+                    if uid not in personal_matches(s, {uid: follows_by_user[uid]}, companies_of):
+                        continue
+                    result = send_fcm_token(p["fcm_token"], s["hook"] or s["headline"],
+                                            s["headline"], s["id"], s["impact_score"])
+                    if result == "sent":
+                        n_today += 1
+                        sent += 1
+                    elif result == "dead":
+                        sb("PATCH", f"profiles?id=eq.{uid}", json={"fcm_token": None})
+                        break  # token's gone: no point trying it against later stories
+            finally:
+                if new_cursor != cursor or n_today != (pa.get("n", 0) if pa.get("d") == today else 0):
+                    sb("PATCH", f"profiles?id=eq.{uid}",
+                       json={"alert_settings": {**settings,
+                             "pa": {"d": today, "n": n_today, "cur": new_cursor}}})
         except Exception as e:
             # one bad user (dead creds, malformed token, transient network blip)
             # never stops the rest of the run's pushes

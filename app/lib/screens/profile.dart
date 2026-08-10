@@ -43,7 +43,7 @@ class ProfileScreen extends StatelessWidget {
           const Divider(height: 1),
           const SizedBox(height: 24),
           OutlinedButton(
-            onPressed: () => Supabase.instance.client.auth.signOut(),
+            onPressed: _signOut,
             style: OutlinedButton.styleFrom(
               foregroundColor: red,
               side: BorderSide(color: red.withValues(alpha: 0.5)),
@@ -67,6 +67,23 @@ class ProfileScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// Best-effort clear the device token before signing out, so the next
+  /// account on this (possibly shared) device doesn't inherit this
+  /// account's live FCM token and never registers its own. Never blocks
+  /// sign-out on it — a stale token just means a missed alert, not a stuck
+  /// sign-out button.
+  Future<void> _signOut() async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid != null) {
+      try {
+        await Supabase.instance.client
+            .from('profiles')
+            .update({'fcm_token': null}).eq('id', uid);
+      } catch (_) {}
+    }
+    await Supabase.instance.client.auth.signOut();
   }
 
   /// Google picture when there is one, initial when there isn't — same rule as
@@ -106,6 +123,7 @@ class AlertSettingsSection extends StatefulWidget {
     super.key,
     required this.userId,
     this.initial,
+    this.fetcher,
     this.writer,
   });
   final String userId;
@@ -113,6 +131,11 @@ class AlertSettingsSection extends StatefulWidget {
   /// Test seam: when set, skips the Supabase fetch and seeds `_current`
   /// with this map directly.
   final Map<String, dynamic>? initial;
+
+  /// Test seam: when set, replaces the Supabase read `_fetch` performs — for
+  /// the initial load (when [initial] is absent) and for the fresh re-read
+  /// `_toggle` does before every write.
+  final Future<Map<String, dynamic>> Function()? fetcher;
 
   /// Test seam: when set, replaces the Supabase `profiles.update` write —
   /// lets a widget test assert on the merged map without a live client.
@@ -136,6 +159,7 @@ class AlertSettingsSectionState extends State<AlertSettingsSection> {
   }
 
   Future<Map<String, dynamic>> _fetch() async {
+    if (widget.fetcher != null) return widget.fetcher!();
     final row = await Supabase.instance.client
         .from('profiles')
         .select('alert_settings')
@@ -156,10 +180,22 @@ class AlertSettingsSectionState extends State<AlertSettingsSection> {
 
   Future<void> _toggle(String key, bool v) async {
     final was = _current;
-    final merged = mergedAlertSettings(_current, key, v);
-    setState(() => _current = merged);
+    // Optimistic flip for the UI only. The WRITE below merges from a fresh
+    // read instead of this snapshot: the pipeline rewrites alert_settings.pa
+    // every 45s, so `_current` (fixed at initState) goes stale, and merging a
+    // stale copy would rewind/delete `pa` — breaking the 5/day cap and
+    // causing duplicate pushes.
+    setState(() => _current = mergedAlertSettings(_current, key, v));
+    Map<String, dynamic>? fresh;
+    try {
+      fresh = await _fetch();
+    } catch (_) {
+      fresh = null; // couldn't re-read: best effort, merge from the snapshot
+    }
+    final merged = mergedAlertSettings(fresh ?? _current, key, v);
     try {
       await _write(merged);
+      if (mounted) setState(() => _current = merged); // fold fresh pa back in
     } catch (e) {
       if (!mounted) return;
       setState(() => _current = was); // never leave a lie on screen

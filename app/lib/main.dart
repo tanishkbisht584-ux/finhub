@@ -162,6 +162,9 @@ class _AuthGateState extends State<AuthGate> {
         final session = Supabase.instance.client.auth.currentSession;
         if (session == null) {
           _needsInterests = null;
+          // A device-shared user's next account must register its own token
+          // and not inherit whatever the previous account already pushed.
+          _fcmTokenSaved = false;
           return const SignInScreen();
         }
         _ensureProfile(session.user);

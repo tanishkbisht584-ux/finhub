@@ -359,3 +359,71 @@ def test_personal_matches_empty_follows():
     from run import personal_matches
     assert personal_matches({"id": 1, "category": None, "sectors": None},
                             {}, companies_of=lambda sid: set()) == set()
+
+
+def test_personal_alert_only_queries_approved_stories(monkeypatch):
+    """Pending stories are RLS-invisible to the app (deep-link -> "story
+    unavailable") and can bypass gate_passes at impact>=8. The personal alert
+    engine must only ever push stories already approved."""
+    import run
+    calls = []
+
+    def fake_sb(method, path, **kw):
+        calls.append(path)
+        if path.startswith("profiles?select"):
+            return [{"id": "u1", "fcm_token": "tok",
+                     "alert_settings": {"personalized": True}}]
+        if path.startswith("follows"):
+            return [{"user_id": "u1", "target_type": "category", "target_id": "Markets"}]
+        return []
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    run.personal_alert_engine()
+    stories_calls = [c for c in calls if c.startswith("stories?")]
+    assert stories_calls, "engine never queried stories"
+    assert "status=eq.approved" in stories_calls[0]
+    assert "status=in.(pending,approved)" not in stories_calls[0]
+
+
+def test_fcm_token_dead_only_on_404_or_unregistered_400():
+    """400 alone can be a malformed message, not proof the token is dead —
+    only 404, or 400 whose body says UNREGISTERED, should get the token
+    cleared from the profile."""
+    from run import _fcm_token_is_dead
+    assert _fcm_token_is_dead(404, "")
+    assert _fcm_token_is_dead(400, "some UNREGISTERED token error")
+    assert not _fcm_token_is_dead(400, "malformed request")
+    assert not _fcm_token_is_dead(500, "")
+
+
+def test_personal_alert_engine_patches_pa_state_even_if_story_loop_raises(monkeypatch):
+    """A mid-loop exception (bad story shape, companies_of blip) must not lose
+    the user's cursor/count -- otherwise a retry re-buzzes stories already
+    sent, burning into the 5/day cap for nothing."""
+    import run
+
+    patches = []
+
+    def fake_sb(method, path, json=None, **kw):
+        if path.startswith("profiles?select"):
+            return [{"id": "u1", "fcm_token": "tok",
+                     "alert_settings": {"personalized": True, "pa": {}}}]
+        if path.startswith("follows"):
+            return [{"user_id": "u1", "target_type": "category", "target_id": "Markets"}]
+        if path.startswith("stories"):
+            return [{"id": 1, "hook": "h", "headline": "h", "impact_score": 9,
+                     "category": "Markets", "sectors": []}]
+        if method == "PATCH" and path.startswith("profiles?id=eq.u1"):
+            patches.append(json)
+            return {}
+        raise AssertionError(f"unexpected sb call: {method} {path}")
+
+    def boom(*a, **k):
+        raise RuntimeError("network blip")
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "send_fcm_token", boom)
+    run.personal_alert_engine()
+
+    assert len(patches) == 1
+    assert patches[0]["alert_settings"]["pa"]["cur"] == 1  # cursor still advanced
