@@ -61,8 +61,9 @@ void main() {
     expect(ribbonTargets[ribbon(0)].id, 'saved');
   });
 
-  test('sliding up the ribbon reaches Cancel', () {
-    expect(ribbonTargets[ribbon(-84)].id, 'cancel');
+  test('sliding up the ribbon reaches Watchlist, then Cancel', () {
+    expect(ribbonTargets[ribbon(-84)].id, 'watchlist');
+    expect(ribbonTargets[ribbon(-168)].id, 'cancel');
   });
 
   test('ribbon ignores a wobble and clamps at both ends', () {

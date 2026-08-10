@@ -231,6 +231,7 @@ class _Tile extends StatelessWidget {
 /// today, with room for shelves and filters later.
 const ribbonTargets = <ShareTarget>[
   ShareTarget('cancel', 'Cancel', Icons.close_rounded, red),
+  ShareTarget('watchlist', 'Watchlist', Icons.star_rounded, amber),
   ShareTarget('saved', 'Saved', Icons.bookmarks_rounded, green),
 ];
 

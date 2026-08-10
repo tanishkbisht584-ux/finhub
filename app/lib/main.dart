@@ -7,6 +7,7 @@ import 'screens/ask.dart';
 import 'screens/feed.dart';
 import 'screens/profile.dart';
 import 'screens/saved.dart';
+import 'screens/watchlist.dart';
 import 'share_palette.dart';
 import 'screens/sign_in.dart';
 import 'theme.dart';
@@ -115,7 +116,8 @@ class _HomeShellState extends State<HomeShell>
     if (!mounted) return;
     setState(() => _active = null);
     if (!commit || chosen == null) return;
-    if (ribbonTargets[chosen].id != 'saved') return;
+    final id = ribbonTargets[chosen].id;
+    if (id != 'saved' && id != 'watchlist') return;
     Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => Scaffold(
               appBar: AppBar(
@@ -123,7 +125,7 @@ class _HomeShellState extends State<HomeShell>
                   surfaceTintColor: bg,
                   elevation: 0,
                   leading: const BackButton(color: ink)),
-              body: const SavedScreen(),
+              body: id == 'saved' ? const SavedScreen() : const WatchlistScreen(),
             )));
   }
 
