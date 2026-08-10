@@ -53,17 +53,38 @@ def load_env():
 
 # ---------- Supabase (PostgREST) ----------
 
+PAGE = 1000  # PostgREST's silent per-response row cap
+
+
 def sb(method, path, **kwargs):
     key = os.environ["SUPABASE_SERVICE_KEY"]
-    r = requests.request(
-        method, f"{os.environ['SUPABASE_URL'].rstrip('/')}/rest/v1/{path}",
-        headers={"apikey": key, "Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json", **kwargs.pop("headers", {})},
-        timeout=30, **kwargs)
-    if not r.ok:  # PostgREST puts the actual reason in the body, not the status
-        raise requests.HTTPError(f"{r.status_code} {path.split('?')[0]}: {r.text[:300]}",
-                                 response=r)
-    return r.json() if r.text else None
+    headers = {"apikey": key, "Authorization": f"Bearer {key}",
+               "Content-Type": "application/json", **kwargs.pop("headers", {})}
+
+    def call(extra_headers=None):
+        r = requests.request(
+            method, f"{os.environ['SUPABASE_URL'].rstrip('/')}/rest/v1/{path}",
+            headers={**headers, **(extra_headers or {})}, timeout=30, **kwargs)
+        if not r.ok:  # PostgREST puts the actual reason in the body, not the status
+            raise requests.HTTPError(f"{r.status_code} {path.split('?')[0]}: {r.text[:300]}",
+                                     response=r)
+        return r.json() if r.text else None
+
+    if method != "GET":
+        return call()
+    # PostgREST silently truncates every response at 1000 rows. Once 57 sources
+    # filled the 48h window past that (3177 rows on 2026-08-10), the dedupe
+    # preload was reading only the OLDEST 1000 — so every new story was matched
+    # against everything except the recent cards it could actually duplicate,
+    # and the same event published as two cards again. Page until a short page;
+    # queries with their own limit= return one short page and are unaffected.
+    rows, start = [], 0
+    while True:
+        page = call({"Range": f"{start}-{start + PAGE - 1}"})
+        rows += page or []
+        if not page or len(page) < PAGE:
+            return rows
+        start += PAGE
 
 
 # ---------- normalize / dedupe ----------

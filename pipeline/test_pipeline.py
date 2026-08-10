@@ -297,3 +297,32 @@ def test_validate_rejects_missing_field():
     del bad["hook"]
     with pytest.raises(ValueError):
         validate(bad)
+
+
+def test_sb_pages_past_postgrest_1000_row_cap(monkeypatch):
+    """PostgREST silently truncates at 1000 rows. Measured 2026-08-10: the 48h
+    dedupe preload held 3177 rows, so the pipeline compared new stories against
+    only the oldest 1000 and republished recent events as fresh cards."""
+    import run
+
+    class FakeResponse:
+        ok, text = True, "x"
+        def __init__(self, rows):
+            self._rows = rows
+        def json(self):
+            return self._rows
+
+    total = 2300
+    calls = []
+
+    def fake_request(method, url, headers=None, timeout=None, **kw):
+        start, end = map(int, headers["Range"].split("-"))
+        calls.append(method)
+        return FakeResponse([{"i": i} for i in range(start, min(end + 1, total))])
+
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "k")
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setattr(run.requests, "request", fake_request)
+    rows = run.sb("GET", "stories?select=i")
+    assert len(rows) == total          # nothing silently dropped
+    assert len(calls) == 3             # 1000 + 1000 + 300
