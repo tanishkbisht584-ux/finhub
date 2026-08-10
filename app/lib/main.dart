@@ -86,7 +86,10 @@ Future<void> main() async {
     FirebaseMessaging.onMessageOpenedApp.listen(_openStory);
     initial = await FirebaseMessaging.instance.getInitialMessage();
     FirebaseMessaging.onMessage.listen(_maybeSpeak);
-    FirebaseMessaging.instance.onTokenRefresh.listen((_) => _saveFcmToken());
+    FirebaseMessaging.instance.onTokenRefresh.listen((_) {
+      _fcmTokenSaved = false;
+      _saveFcmToken();
+    });
   } catch (_) {
     // no google-services / Play Services: app works, alerts don't arrive
   }
