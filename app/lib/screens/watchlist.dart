@@ -27,6 +27,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
   }
 
   Future<void> _load() async {
+    _error = null; // stale error from a previous run must not survive a retry
     final sb = Supabase.instance.client;
     final uid = sb.auth.currentUser?.id;
     if (uid == null) return setState(() => _companies = const []);
