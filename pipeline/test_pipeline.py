@@ -1,4 +1,5 @@
 """Unit tests per spec §10: dedupe hashing, clustering, schema validation. No network."""
+import io
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -475,10 +476,23 @@ def test_usable_image_passes_normal_article_image():
     assert usable_image(None, {}) is None
 
 
+class _FakeRaw:
+    """io.BytesIO plus the decode_content kwarg urllib3's HTTPResponse.read
+    accepts -- og_image passes decode_content=True to undo gzip/br/deflate on
+    real responses; the fake bodies are already plain text, so it's a no-op
+    here, just accepted so the call signature matches."""
+    def __init__(self, body):
+        self._io = io.BytesIO(body)
+
+    def read(self, amt, decode_content=None):
+        return self._io.read(amt)
+
+
 class _FakeOgResp:
     """Stands in for requests.get(..., stream=True)'s response: og_image now
     reads a bounded slice off r.raw and uses `with`, so the fake needs the
-    same context-manager + raw.read(n) shape as the real thing."""
+    same context-manager + raw.read(n, decode_content=...) shape as the real
+    thing (urllib3's HTTPResponse.read)."""
     def __init__(self, text, content_type="text/html; charset=utf-8"):
         self.headers = {"Content-Type": content_type}
         self._body = text.encode()
@@ -494,8 +508,7 @@ class _FakeOgResp:
 
     @property
     def raw(self):
-        import io
-        return io.BytesIO(self._body)
+        return _FakeRaw(self._body)
 
 
 def test_og_image_parses_meta_and_filters(monkeypatch):

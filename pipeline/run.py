@@ -353,7 +353,7 @@ def og_image(article_url, seen_counts):
             r.raise_for_status()
             if "html" not in r.headers.get("Content-Type", ""):
                 return None
-            text = r.raw.read(524288).decode("utf-8", "replace")
+            text = r.raw.read(524288, decode_content=True).decode("utf-8", "replace")
         m = OG_IMAGE.search(text) or OG_IMAGE_REV.search(text)
         # HTML-escapes content= routinely ("?w=800&amp;h=450"); unescape before
         # the URL is stored/used, or it 404s and the width filter reads junk.
