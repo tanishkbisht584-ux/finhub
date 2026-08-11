@@ -340,6 +340,19 @@ OG_IMAGE_REV = re.compile(  # content= before property=, the other attribute ord
     r'(?:property=["\']og:image["\']|name=["\']twitter:image["\'])', re.I)
 
 
+def article_url_for_image(url, cid, alt_urls):
+    """The URL worth fetching an og:image from, or None.
+
+    GNews wrapper links hide the article behind JS Google deliberately locked
+    (no redirect, opaque tokens — verified 2026-08-11), so fetching them yields
+    Google's app shell, never the outlet page. The same story from a direct
+    outlet feed sits in the same cluster carrying the real article URL —
+    borrow it. No direct sibling means there is nothing worth fetching."""
+    if "news.google.com" not in url:
+        return url
+    return alt_urls.get(cid)
+
+
 def og_image(article_url, seen_counts):
     """One bounded GET for the article's own og:image. Regex, not a parser
     dependency; any failure whatsoever is None — this must never cost a story.
@@ -1127,6 +1140,14 @@ def main():
         else:
             to_process.append((item, cid))
 
+    # Direct-feed article URL per cluster, for cards whose own URL is a GNews
+    # wrapper (see article_url_for_image). A dupe IS the same story told by
+    # another outlet, so its URL is a faithful stand-in for the card's.
+    alt_urls = {}
+    for item, cid in dupes:
+        if "news.google.com" not in item["url"]:
+            alt_urls.setdefault(cid, item["url"])
+
     # Two ceilings: this run's share, and what's left of today's free quota.
     # The daily one only started mattering once the poller ran continuously —
     # 3800 passes/day against a ~3000-call budget would spend the day by 02:00
@@ -1217,10 +1238,12 @@ def main():
             # og:image fallback (spec M8): only for a card actually being
             # inserted without a usable image — bounded so a bad news day
             # can't melt the Actions budget.
-            if (keep and not twin and not base["image_url"]
+            fetch_url = article_url_for_image(item["url"], base["cluster_id"],
+                                              alt_urls)
+            if (keep and not twin and not base["image_url"] and fetch_url
                     and og_fetches < OG_FETCH_CAP):
                 og_fetches += 1
-                base["image_url"] = og_image(item["url"], seen_images)
+                base["image_url"] = og_image(fetch_url, seen_images)
                 if base["image_url"]:
                     # Same reason as match_videos: seen_images is read-only
                     # for the rest of this run otherwise, and one generic

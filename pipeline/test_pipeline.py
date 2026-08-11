@@ -767,3 +767,20 @@ def test_groq_retired_model_lanes_dropped(monkeypatch):
     monkeypatch.setattr(ai, "_groq_models", lambda: {"llama"})
     lanes = ai._fallback_lanes()
     assert [(l[0], l[3]) for l in lanes] == [("g1", "llama#1"), ("g2", "llama#2")]
+
+
+def test_gnews_card_borrows_cluster_siblings_article_url():
+    """GNews wrapper links hide the article behind JS (verified 2026-08-11:
+    no redirect, opaque tokens) — og:image on them sees Google's shell. The
+    same story from a direct outlet feed sits in the same cluster with the
+    real article URL; borrow it. No sibling -> no fetch, never Google's page."""
+    from run import article_url_for_image
+    alt = {"c1": "https://www.livemint.com/markets/rbi-cuts-rates-11754.html"}
+    # direct-feed card: its own URL is the article
+    assert article_url_for_image("https://et.com/story/1", "c1", alt) == "https://et.com/story/1"
+    # gnews card with a direct sibling: borrow the sibling
+    assert article_url_for_image(
+        "https://news.google.com/rss/articles/CBMixyz", "c1", alt) == alt["c1"]
+    # gnews card, no sibling: nothing to fetch
+    assert article_url_for_image(
+        "https://news.google.com/rss/articles/CBMiabc", "c9", alt) is None
