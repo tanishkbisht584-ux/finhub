@@ -3,6 +3,7 @@ swap is a config change, not a rewrite."""
 import json
 import os
 import pathlib
+import re
 import threading
 import time
 from collections import Counter
@@ -75,6 +76,74 @@ GEMINI_MODELS = ("gemini-3.5-flash-lite,gemini-3.1-flash-lite,"
 _cooldown = {}      # lane -> monotonic deadline before we try it again
 _cooldown_lock = threading.Lock()
 
+# provider -> set of live model names, or None when discovery failed. Fetched
+# once per process (CI restarts the poller every few hours, so this refreshes
+# at least that often); a mid-process retirement is carried by the dead-lane
+# bench until the next restart.
+_discovered = {}
+
+
+def _list_models(provider, url, headers, extract):
+    if provider not in _discovered:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            r.raise_for_status()
+            _discovered[provider] = extract(r.json())
+        except Exception as e:
+            # Advisory only: if we can't ask what exists, trust the configured
+            # list — discovery must never be the thing that stalls the pipeline.
+            print(f"MODEL DISCOVERY FAILED ({provider}, {type(e).__name__}): {str(e)[:120]}")
+            _discovered[provider] = None
+    return _discovered[provider]
+
+
+def _available_models():
+    keys = _split("GEMINI_API_KEY")
+    if not keys:
+        return None
+    return _list_models(
+        "gemini", "https://generativelanguage.googleapis.com/v1beta/models",
+        {"x-goog-api-key": keys[0]},
+        lambda j: {m["name"].split("/")[-1] for m in j.get("models", [])
+                   if "generateContent" in m.get("supportedGenerationMethods", [])})
+
+
+def _groq_models():
+    keys = _split("GROQ_API_KEY")
+    if not keys:
+        return None
+    return _list_models(
+        "groq", "https://api.groq.com/openai/v1/models",
+        {"Authorization": f"Bearer {keys[0]}"},
+        lambda j: {m["id"] for m in j.get("data", [])})
+
+
+_FLASH_LITE = re.compile(r"^gemini-(\d+\.\d+)-flash-lite$")
+
+
+def _current_models():
+    """The configured Gemini list with retired names swapped out live.
+
+    Google retires models in place (2026-08-11: gemini-2.0-flash-lite began
+    404ing overnight); this drops anything the API no longer serves and fills
+    each empty slot with the newest live flash-lite model, so a retirement
+    costs nothing until someone updates the list at leisure. Substitution is
+    Gemini-only: its version-in-the-name convention makes 'newest lite' a safe
+    pick, which no such convention makes true for Groq."""
+    configured = _split("GEMINI_MODELS", GEMINI_MODELS)
+    live = _available_models()
+    if live is None:
+        return configured
+    kept = [m for m in configured if m in live]
+    retired = [m for m in configured if m not in live]
+    if retired:
+        spares = sorted((m for m in live if _FLASH_LITE.match(m) and m not in kept),
+                        key=lambda m: float(_FLASH_LITE.match(m).group(1)),
+                        reverse=True)[:len(retired)]
+        print(f"MODEL SWAP: retired {retired} -> substituting {spares}")
+        kept += spares
+    return kept
+
 
 def _gemini_lanes():
     """Quota is metered per ACCOUNT as well as per model, so GEMINI_API_KEY takes
@@ -85,7 +154,7 @@ def _gemini_lanes():
     an account and not the answer quality."""
     keys = _split("GEMINI_API_KEY")
     return [(k, m, f"{m}#{i}")
-            for m in _split("GEMINI_MODELS", GEMINI_MODELS)
+            for m in _current_models()
             for i, k in enumerate(keys, 1)]
 
 
@@ -163,7 +232,19 @@ def _fallback_lanes():
     lanes = []
     for key_env, url, model_env, default_models in FALLBACKS:
         keys = _split(key_env)
-        for model in _split(model_env, default_models):
+        models = _split(model_env, default_models)
+        if key_env == "GROQ_API_KEY":
+            # Groq retires models too (deprecations land monthly); drop what
+            # its catalog no longer lists rather than probe a dead lane all
+            # run. No substitution here — unlike Gemini there's no naming
+            # convention that makes an automatic replacement a safe pick.
+            live = _groq_models()
+            if live is not None:
+                gone = [m for m in models if m not in live]
+                if gone:
+                    print(f"MODEL DISCOVERY: groq retired {gone}; lanes dropped")
+                models = [m for m in models if m in live]
+        for model in models:
             for i, key in enumerate(keys, 1):
                 lanes.append((key, url, model, f"{model}#{i}"))
     return lanes

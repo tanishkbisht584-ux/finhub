@@ -288,6 +288,7 @@ def test_multi_key_lanes(monkeypatch):
     import ai
     monkeypatch.setenv("GEMINI_MODELS", "flash-lite,flash")
     monkeypatch.setenv("GEMINI_API_KEY", "k1, k2 ,k3")
+    monkeypatch.setattr(ai, "_available_models", lambda: None)  # no network in tests
     lanes = ai._gemini_lanes()
     assert [l[2] for l in lanes] == [
         "flash-lite#1", "flash-lite#2", "flash-lite#3", "flash#1", "flash#2", "flash#3"]
@@ -303,6 +304,7 @@ def test_multi_key_fallback_lanes(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "g1,g2")
     monkeypatch.setenv("GROQ_MODEL", "llama,qwen")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(ai, "_groq_models", lambda: None)  # no network in tests
     lanes = ai._fallback_lanes()
     assert [(l[0], l[3]) for l in lanes] == [
         ("g1", "llama#1"), ("g2", "llama#2"), ("g1", "qwen#1"), ("g2", "qwen#2")]
@@ -678,6 +680,7 @@ def test_dead_model_lane_benched_not_fatal(monkeypatch):
     import ai
     monkeypatch.setenv("GEMINI_API_KEY", "k1")
     monkeypatch.setenv("GEMINI_MODELS", "retired-model,live-model")
+    monkeypatch.setattr(ai, "_available_models", lambda: None)  # no network in tests
     monkeypatch.setattr(ai, "_cooldown", {})
     monkeypatch.setattr(ai, "_next_slot", {})
 
@@ -712,6 +715,7 @@ def test_all_lanes_dead_defers_instead_of_flagging(monkeypatch):
     import pytest as _pytest
     monkeypatch.setenv("GEMINI_API_KEY", "k1")
     monkeypatch.setenv("GEMINI_MODELS", "retired-model")
+    monkeypatch.setattr(ai, "_available_models", lambda: None)  # no network in tests
     monkeypatch.setattr(ai, "_cooldown", {})
     monkeypatch.setattr(ai, "_next_slot", {})
 
@@ -727,3 +731,39 @@ def test_all_lanes_dead_defers_instead_of_flagging(monkeypatch):
     monkeypatch.setattr(ai, "_fallback_chat", lambda prompt: None)
     with _pytest.raises(ai.QuotaExhausted):
         ai._gemini("prompt")
+
+
+def test_retired_model_swapped_for_newest_live_lite(monkeypatch):
+    """The 2026-08-11 outage, automated: a configured model Google no longer
+    serves is dropped and the newest live flash-lite model takes its slot, so
+    a retirement costs nothing until someone updates the list at leisure."""
+    import ai
+    monkeypatch.setenv("GEMINI_MODELS", "gemini-3.5-flash-lite,gemini-2.0-flash-lite")
+    monkeypatch.setattr(ai, "_available_models", lambda: {
+        "gemini-3.5-flash-lite", "gemini-4.0-flash-lite", "gemini-2.5-flash-lite",
+        "gemini-4.0-flash-lite-preview"})
+    assert ai._current_models() == [
+        "gemini-3.5-flash-lite",   # still live, kept in preference order
+        "gemini-4.0-flash-lite",   # newest live lite subs for retired 2.0
+    ]
+
+
+def test_discovery_failure_trusts_configured_list(monkeypatch):
+    """Discovery is advisory: if the models endpoint is down, the configured
+    list must pass through untouched — never the reason the pipeline stalls."""
+    import ai
+    monkeypatch.setenv("GEMINI_MODELS", "gemini-3.5-flash-lite,gemini-2.0-flash-lite")
+    monkeypatch.setattr(ai, "_available_models", lambda: None)
+    assert ai._current_models() == ["gemini-3.5-flash-lite", "gemini-2.0-flash-lite"]
+
+
+def test_groq_retired_model_lanes_dropped(monkeypatch):
+    """Groq deprecates models monthly; a name its catalog no longer lists must
+    not keep a lane (probing a dead lane every call wastes the failover pass)."""
+    import ai
+    monkeypatch.setenv("GROQ_API_KEY", "g1,g2")
+    monkeypatch.setenv("GROQ_MODEL", "llama,dead-model")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(ai, "_groq_models", lambda: {"llama"})
+    lanes = ai._fallback_lanes()
+    assert [(l[0], l[3]) for l in lanes] == [("g1", "llama#1"), ("g2", "llama#2")]
