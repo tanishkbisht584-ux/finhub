@@ -468,18 +468,24 @@ def fetch_videos(source):
 def video_candidates(vids, recent, stories_by_cluster):
     """Free deterministic gates before any AI: the video's title must land in
     an existing story's cluster, and the clip must be within
-    VIDEO_MAX_AGE_HOURS of the story. Survivors carry their story."""
+    VIDEO_MAX_AGE_HOURS of the story. Survivors carry their story.
+
+    One candidate per story_id, first wins: two channels covering the same
+    story would otherwise both PATCH it, and the second write silently
+    clobbers the first with no error and an inflated attached-count."""
     out = []
+    seen_stories = set()
     for v in vids:
         cid, known = cluster_of(v["title"], recent)
         story = stories_by_cluster.get(cid) if known else None
-        if not story or story["video_url"]:
+        if not story or story["video_url"] or story["id"] in seen_stories:
             continue
         v_ts, s_ts = v.get("published_at"), story.get("published_at")
         if not v_ts or not s_ts:
             continue
         if abs((parse_ts(v_ts) - parse_ts(s_ts)).total_seconds()) > VIDEO_MAX_AGE_HOURS * 3600:
             continue
+        seen_stories.add(story["id"])
         out.append({**v, "story_id": story["id"],
                     "story_headline": story["headline"],
                     "story_image": story.get("image_url")})

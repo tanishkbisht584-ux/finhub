@@ -248,7 +248,7 @@ def video_match(pairs):
     try:
         lines = "\n".join(f"{i} | {v} | {h}" for i, (v, h) in enumerate(pairs))
         out = json.loads(_gemini(VIDEO_PROMPT.format(pairs=lines)))
-        return [i for i in out.get("match", [])
+        return [i for i in (out.get("match") or [])
                 if isinstance(i, int) and 0 <= i < len(pairs)]
     except (AIError, QuotaExhausted, ValueError, KeyError, json.JSONDecodeError,
             requests.RequestException) as e:

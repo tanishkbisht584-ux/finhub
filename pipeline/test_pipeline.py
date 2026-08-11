@@ -546,3 +546,39 @@ def test_video_candidates_gate_on_cluster_and_recency():
     cands = video_candidates(vids, recent, stories)
     assert [c["video_id"] for c in cands] == ["a1"]
     assert cands[0]["story_id"] == 7
+
+
+def test_match_videos_patches_only_the_confirmed_story(monkeypatch):
+    """match_videos end-to-end: a matching + a non-matching video, one story
+    without an image. Asserts the one PATCH that actually writes stories."""
+    import run
+
+    now = datetime.now(timezone.utc)
+    story = {"id": 42, "cluster_id": "c1", "headline": "RBI cuts repo rate by 25 bps",
+             "published_at": now.isoformat(), "image_url": None, "video_url": None}
+    recent = [("c1", run.title_tokens(story["headline"]))]
+
+    calls = []
+    def fake_sb(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("json")))
+        if method == "GET" and path.startswith("stories?"):
+            return [story]
+        return None
+    monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "fetch_videos", lambda source: [
+        {"title": "RBI cuts repo rate 25 bps: what it means", "video_id": "a1",
+         "published_at": now.isoformat()},          # matches the story's cluster
+        {"title": "Closing Bell: Sensex today", "video_id": "b2",
+         "published_at": now.isoformat()},           # no cluster match -> gated out
+    ])
+    stub_video_match = lambda pairs: [0]  # confirms the sole surviving candidate
+
+    attached = run.match_videos([{"id": 99, "name": "Test Video", "feed_url": "http://x"}],
+                                 recent, {}, stub_video_match)
+
+    assert attached == 1
+    story_patches = [c for c in calls if c[0] == "PATCH" and c[1] == "stories?id=eq.42"]
+    assert len(story_patches) == 1
+    patch = story_patches[0][2]
+    assert patch["video_url"] == "https://www.youtube.com/watch?v=a1"
+    assert patch["image_url"] == "https://img.youtube.com/vi/a1/hqdefault.jpg"
