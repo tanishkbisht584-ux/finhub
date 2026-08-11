@@ -63,8 +63,10 @@ def _split(env, default=""):
 
 # The free tier meters requests per MODEL (measured 2026-08-08: 500/day each),
 # so rotating on 429 multiplies daily capacity at zero cost. Order = preference.
+# gemini-2.0-flash-lite retired by Google (404 as of 2026-08-11); 2.5-flash-lite
+# verified live against our keys the same day and keeps the fourth quota pool.
 GEMINI_MODELS = ("gemini-3.5-flash-lite,gemini-3.1-flash-lite,"
-                 "gemini-2.0-flash-lite,gemini-3.5-flash")
+                 "gemini-2.5-flash-lite,gemini-3.5-flash")
 
 _cooldown = {}      # lane -> monotonic deadline before we try it again
 _cooldown_lock = threading.Lock()
@@ -209,7 +211,15 @@ def _gemini(prompt):
             _benched(lane, wait)
             last = f"{r.status_code} on {lane} (benched {wait:.0f}s)"
             continue
-        r.raise_for_status()
+        if not r.ok:
+            # Structurally dead lane — a retired model (2026-08-11: Google
+            # 404'd gemini-2.0-flash-lite) or a revoked key. raise_for_status
+            # here escaped _gemini before the next lane or the fallback chain
+            # ever ran, so one dead endpoint flagged every story after the
+            # preferred lanes hit quota. Bench it for an hour and move on.
+            _benched(lane, 3600.0)
+            last = f"{r.status_code} on {lane} (benched 1h)"
+            continue
         with _gate_lock:
             _usage[lane] += 1
         return r.json()["candidates"][0]["content"]["parts"][0]["text"]

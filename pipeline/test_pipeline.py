@@ -668,3 +668,62 @@ def test_retention_cutoff_is_date_truncated(monkeypatch):
     assert method == "DELETE"
     assert "events?created_at=lt." in path
     assert "T00:00:00" in path
+
+
+def test_dead_model_lane_benched_not_fatal(monkeypatch):
+    """Google retiring a model (2026-08-11: gemini-2.0-flash-lite began 404ing)
+    must cost one lane, not the story: 404/401 benches the lane and the next
+    one answers. raise_for_status() here escaped _gemini before the fallback
+    chain ever ran, so every call flagged once the preferred lanes hit quota."""
+    import ai
+    monkeypatch.setenv("GEMINI_API_KEY", "k1")
+    monkeypatch.setenv("GEMINI_MODELS", "retired-model,live-model")
+    monkeypatch.setattr(ai, "_cooldown", {})
+    monkeypatch.setattr(ai, "_next_slot", {})
+
+    class Resp:
+        def __init__(self, code, text=""):
+            self.status_code = code
+            self._text = text
+        @property
+        def ok(self):
+            return self.status_code < 400
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": self._text}]}}]}
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise __import__("requests").HTTPError(f"{self.status_code}")
+
+    calls = []
+    def fake_post(url, **kw):
+        calls.append(url)
+        return Resp(404) if "retired-model" in url else Resp(200, '{"ok": 1}')
+    monkeypatch.setattr(ai.requests, "post", fake_post)
+
+    assert ai._gemini("prompt") == '{"ok": 1}'
+    assert len(calls) == 2                      # dead lane tried once, then next
+    assert ai._cooldown.get("retired-model#1", 0) > 0   # and benched
+
+
+def test_all_lanes_dead_defers_instead_of_flagging(monkeypatch):
+    """Every lane structurally dead + no fallback -> QuotaExhausted, which the
+    caller treats as 'retry next run' — never a flagged story."""
+    import ai
+    import pytest as _pytest
+    monkeypatch.setenv("GEMINI_API_KEY", "k1")
+    monkeypatch.setenv("GEMINI_MODELS", "retired-model")
+    monkeypatch.setattr(ai, "_cooldown", {})
+    monkeypatch.setattr(ai, "_next_slot", {})
+
+    class Resp:
+        status_code = 404
+        ok = False
+        def json(self):
+            return {}
+        def raise_for_status(self):
+            raise __import__("requests").HTTPError("404")
+
+    monkeypatch.setattr(ai.requests, "post", lambda url, **kw: Resp())
+    monkeypatch.setattr(ai, "_fallback_chat", lambda prompt: None)
+    with _pytest.raises(ai.QuotaExhausted):
+        ai._gemini("prompt")
