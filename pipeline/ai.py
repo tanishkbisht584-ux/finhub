@@ -225,7 +225,7 @@ def editor_pass(digest):
     the editor is advisory; a bad call must never block the run."""
     try:
         out = json.loads(_gemini(EDITOR_PROMPT.format(digest=digest)))
-        relevels = [r for r in out.get("relevel", [])
+        relevels = [r for r in (out.get("relevel") or [])
                     if isinstance(r.get("id"), int) and isinstance(r.get("score"), int)
                     and 1 <= r["score"] <= 10]
         top = out.get("top_story_id")

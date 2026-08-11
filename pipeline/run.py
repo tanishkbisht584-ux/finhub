@@ -2,6 +2,7 @@
 Gemini card -> insert 'pending' into Supabase. Idempotent: url_hash re-checked
 every run, so re-processing is a no-op."""
 import hashlib
+import html
 import os
 import pathlib
 import re
@@ -267,11 +268,14 @@ def entry_image(entry):
 
 # Junk by path: logos, icons, bylines, spacers, ad slots. Case-insensitive,
 # matched against the whole URL — CDNs hide these words in either path or file.
-# Word-bound the word-like tokens (logo, icon, etc.) to avoid false positives
-# on financial vocabulary (default in "wilful-defaulters", author in "regulatory-authority").
+# Two different boundary rules, because one \b...\b for everything was wrong
+# both ways: "author"/"default" need BOTH boundaries (else "regulatory-authority"
+# and "wilful-defaulters" false-positive), but the rest only need a boundary
+# before the token, else digit-suffixed junk (logo2x.png, avatar1.jpg) survives
+# untouched — nothing legitimate ends a word right where "logo"/"icon"/etc. do.
 JUNK_IMAGE = re.compile(
-    r"\b(?:logo|icon|avatar|author|byline|placeholder|default|sprite|blank"
-    r"|spacer)\b|1x1|pixel|/ads?/", re.I)
+    r"\b(?:logo|icon|avatar|sprite|spacer|byline|placeholder|blank)"
+    r"|\b(?:author|default)\b|1x1|pixel|/ads?/", re.I)
 # Declared width, the two ways CDNs write it: ?width=200 / ?w=200, or -120x90.
 IMG_W_QUERY = re.compile(r"[?&](?:w|width)=(\d+)", re.I)
 IMG_W_NAME = re.compile(r"[-_](\d{2,4})x\d{2,4}\.(?:jpe?g|png|webp|gif)", re.I)
@@ -294,14 +298,35 @@ def usable_image(url, seen_counts):
     return url
 
 
+_seen_images_cache = {"at": 0.0, "counts": {}}
+
+
 def image_seen_counts():
-    """URL -> how many stories carried it in the last 7 days. One query per run
-    (sb() paginates); catches house images that are valid but say nothing."""
+    """URL -> how many CARDS carried it in the last 7 days. Only rows that
+    reached approved/pending count: rejected/duplicate rows never showed
+    anyone an image, so they're not evidence of a house image. Ordered so
+    sb()'s Range paging can't skip or duplicate a row mid-scan.
+
+    Memoized per process and refreshed at most every 10 minutes: this runs on
+    every main() iteration, and a resident poller (LOOP_SECONDS) calls main()
+    every 45s in prod — an unmemoized full scan of ~11k rows/week on every
+    iteration would be an egress bill for a number that only moves when a run
+    actually inserts a new image. The returned dict is the cached object
+    itself, not a copy: callers increment counts into it as they assign
+    images (see the og-fallback site and match_videos), and reusing the same
+    object lets those increments carry forward into the next iteration too,
+    tightening house-image detection within the cache window instead of
+    resetting every 45s."""
+    if time.monotonic() - _seen_images_cache["at"] <= 600:
+        return _seen_images_cache["counts"]
     since = iso(datetime.now(timezone.utc) - timedelta(days=7))
     counts = {}
     for r in sb("GET", f"stories?select=image_url&image_url=not.is.null"
-                       f"&created_at=gte.{since}"):
+                       f"&created_at=gte.{since}&status=in.(approved,pending)"
+                       "&order=created_at.asc"):
         counts[r["image_url"]] = counts.get(r["image_url"], 0) + 1
+    _seen_images_cache["at"] = time.monotonic()
+    _seen_images_cache["counts"] = counts
     return counts
 
 
@@ -317,14 +342,22 @@ OG_IMAGE_REV = re.compile(  # content= before property=, the other attribute ord
 
 def og_image(article_url, seen_counts):
     """One bounded GET for the article's own og:image. Regex, not a parser
-    dependency; any failure whatsoever is None — this must never cost a story."""
+    dependency; any failure whatsoever is None — this must never cost a story.
+
+    Streamed and capped at 512 KiB read: og:image lives in <head>, so nothing
+    past that is needed, and a huge or slow page can't hold the socket or
+    memory hostage for it."""
     try:
-        r = requests.get(article_url, headers=UA, timeout=OG_FETCH_TIMEOUT)
-        r.raise_for_status()
-        if "html" not in r.headers.get("Content-Type", ""):
-            return None
-        m = OG_IMAGE.search(r.text) or OG_IMAGE_REV.search(r.text)
-        return usable_image(m.group(1), seen_counts) if m else None
+        with requests.get(article_url, headers=UA, timeout=OG_FETCH_TIMEOUT,
+                          stream=True) as r:
+            r.raise_for_status()
+            if "html" not in r.headers.get("Content-Type", ""):
+                return None
+            text = r.raw.read(524288).decode("utf-8", "replace")
+        m = OG_IMAGE.search(text) or OG_IMAGE_REV.search(text)
+        # HTML-escapes content= routinely ("?w=800&amp;h=450"); unescape before
+        # the URL is stored/used, or it 404s and the width filter reads junk.
+        return usable_image(html.unescape(m.group(1)), seen_counts) if m else None
     except Exception:
         return None
 
@@ -473,6 +506,11 @@ def video_candidates(vids, recent, stories_by_cluster):
     One candidate per story_id, first wins: two channels covering the same
     story would otherwise both PATCH it, and the second write silently
     clobbers the first with no error and an inflated attached-count."""
+    # cluster_of() appends any unmatched video title to `recent` as a new
+    # cluster seed. A shallow copy keeps those appends local to this call —
+    # without it, video titles would leak into story clustering state if this
+    # ever runs before (or interleaved with) the story pass that owns `recent`.
+    recent = list(recent)
     out = []
     seen_stories = set()
     for v in vids:
@@ -507,9 +545,13 @@ def match_videos(yt_sources, recent, seen_images, video_match):
         return 0
     since = iso(datetime.now(timezone.utc) - timedelta(hours=48))
     stories_by_cluster = {}
+    # Ordered oldest-first so setdefault keeps the EARLIEST member of each
+    # cluster — the seed that started it (see cluster_of) — rather than
+    # whatever row PostgREST happened to return first. The seed is the card;
+    # attaching the video to it, not to a later duplicate, is the whole point.
     for r in sb("GET", f"stories?select=id,cluster_id,headline,published_at,"
                        f"image_url,video_url&created_at=gte.{since}"
-                       "&status=in.(approved,pending)"):
+                       "&status=in.(approved,pending)&order=created_at.asc"):
         stories_by_cluster.setdefault(r["cluster_id"], r)
     cands = video_candidates(vids, recent, stories_by_cluster)[:VIDEO_BATCH_CAP]
     confirmed = video_match([(c["title"], c["story_headline"]) for c in cands])
@@ -522,6 +564,10 @@ def match_videos(yt_sources, recent, seen_images, video_match):
                 f"https://img.youtube.com/vi/{c['video_id']}/hqdefault.jpg", seen_images)
             if thumb:
                 patch["image_url"] = thumb
+                # seen_images is read-only otherwise: without this, the same
+                # channel thumbnail could be assigned to every candidate this
+                # run before any run ever sees it HOUSE_IMAGE_USES times.
+                seen_images[thumb] = seen_images.get(thumb, 0) + 1
         sb("PATCH", f"stories?id=eq.{c['story_id']}", json=patch)
         attached += 1
     return attached
@@ -948,7 +994,11 @@ def revive_sources():
         if s["last_fetched_at"] and s["last_fetched_at"] > cutoff:
             continue  # probed recently enough
         try:
-            items = FETCHERS.get(s["type"], fetch_items)(s)
+            # A retired youtube source is a video feed, not a story feed —
+            # probing it with fetch_items would be the exact split_sources()
+            # invariant this pipeline otherwise enforces everywhere else.
+            items = (fetch_videos(s) if s["type"] == "youtube"
+                     else FETCHERS.get(s["type"], fetch_items)(s))
         except Exception as e:
             print(f"REVIVE probe failed {s['name']}: {str(e)[:80]}")
             continue
@@ -1168,6 +1218,12 @@ def main():
                     and og_fetches < OG_FETCH_CAP):
                 og_fetches += 1
                 base["image_url"] = og_image(item["url"], seen_images)
+                if base["image_url"]:
+                    # Same reason as match_videos: seen_images is read-only
+                    # for the rest of this run otherwise, and one generic
+                    # og:image could land on up to OG_FETCH_CAP cards before
+                    # any run ever counts it 3 times.
+                    seen_images[base["image_url"]] = seen_images.get(base["image_url"], 0) + 1
             try:
                 insert_story({
                     **base,

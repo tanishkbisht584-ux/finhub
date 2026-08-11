@@ -305,9 +305,13 @@ class _StoryCardState extends ConsumerState<StoryCard>
     }
   }
 
-  /// The card as a PNG — every share is an ad (spec §8).
+  /// The card as a PNG — every share is an ad (spec §8). The media strip
+  /// hides itself for this one frame (see shareCapture) so a hotlinked press
+  /// photo is never baked into the file we hand off to another app.
   Future<Uint8List?> _renderCard() async {
+    shareCapture.value = true;
     try {
+      await WidgetsBinding.instance.endOfFrame;
       final boundary =
           _shareKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
       final image = await boundary.toImage(pixelRatio: 2.5);
@@ -315,6 +319,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
       return bytes.buffer.asUint8List();
     } catch (_) {
       return null;
+    } finally {
+      shareCapture.value = false;
     }
   }
 
@@ -796,6 +802,12 @@ class _StoryCardState extends ConsumerState<StoryCard>
   }
 }
 
+/// True while a share PNG capture is in flight (see StoryCard._renderCard).
+/// The strip hides itself during capture so the hotlinked press photo it
+/// shows on screen is never baked into the redistributed share image — that
+/// would be exactly the re-hosting the strip's own hotlink comment forbids.
+final shareCapture = ValueNotifier<bool>(false);
+
 /// 16:9 picture or video thumbnail between headline and summary (spec: M8).
 /// Hotlinked from the origin CDN — we never re-host. A dead URL collapses the
 /// whole strip: a blank card is fine, a broken-image icon is not.
@@ -811,7 +823,23 @@ class _MediaStripState extends State<_MediaStrip> {
   bool _dead = false;
 
   @override
+  void didUpdateWidget(_MediaStrip old) {
+    super.didUpdateWidget(old);
+    // PageView.builder reuses this State across stories (no keys); without
+    // this, one dead image permanently hides every later story's image too.
+    if (old.story.imageUrl != widget.story.imageUrl) _dead = false;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: shareCapture,
+      builder: (context, capturing, _) =>
+          capturing ? const SizedBox.shrink() : _buildStrip(context),
+    );
+  }
+
+  Widget _buildStrip(BuildContext context) {
     final s = widget.story;
     final url = s.imageUrl;
     if (url == null || _dead) return const SizedBox.shrink();

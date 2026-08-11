@@ -444,6 +444,10 @@ def test_usable_image_rejects_junk_paths():
     assert usable_image("https://cdn.x.com/silicon-wafer-fab.jpg", {}) == "https://cdn.x.com/silicon-wafer-fab.jpg"
     # But actual junk patterns still reject
     assert usable_image("https://et.com/img/author-photo.jpg", {}) is None
+    # Regression: digit-suffixed junk. Only author/default need the trailing
+    # \b -- the rest must reject mid-word too, or CDN-suffixed junk survives.
+    assert usable_image("https://cdn.x.com/logo2x.png", {}) is None
+    assert usable_image("https://cdn.x.com/avatar1.jpg", {}) is None
 
 
 def test_usable_image_rejects_declared_small():
@@ -471,32 +475,60 @@ def test_usable_image_passes_normal_article_image():
     assert usable_image(None, {}) is None
 
 
+class _FakeOgResp:
+    """Stands in for requests.get(..., stream=True)'s response: og_image now
+    reads a bounded slice off r.raw and uses `with`, so the fake needs the
+    same context-manager + raw.read(n) shape as the real thing."""
+    def __init__(self, text, content_type="text/html; charset=utf-8"):
+        self.headers = {"Content-Type": content_type}
+        self._body = text.encode()
+
+    def raise_for_status(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    @property
+    def raw(self):
+        import io
+        return io.BytesIO(self._body)
+
+
 def test_og_image_parses_meta_and_filters(monkeypatch):
     import run
 
-    class FakeResp:
-        headers = {"Content-Type": "text/html; charset=utf-8"}
-        text = ('<html><head><meta property="og:image" '
-                'content="https://cdn.et.com/2026/rbi-presser.jpg"/></head></html>')
-        def raise_for_status(self): pass
-
-    monkeypatch.setattr(run.requests, "get", lambda *a, **k: FakeResp())
+    html_ok = ('<html><head><meta property="og:image" '
+               'content="https://cdn.et.com/2026/rbi-presser.jpg"/></head></html>')
+    monkeypatch.setattr(run.requests, "get", lambda *a, **k: _FakeOgResp(html_ok))
     assert run.og_image("https://et.com/story", {}) == "https://cdn.et.com/2026/rbi-presser.jpg"
     # the scraped image still goes through the relevance filter
-    FakeResp.text = ('<meta property="og:image" content="https://cdn.et.com/logo.png"/>')
+    html_junk = '<meta property="og:image" content="https://cdn.et.com/logo.png"/>'
+    monkeypatch.setattr(run.requests, "get", lambda *a, **k: _FakeOgResp(html_junk))
     assert run.og_image("https://et.com/story", {}) is None
 
 
 def test_og_image_falls_back_to_twitter_image(monkeypatch):
     import run
 
-    class FakeResp:
-        headers = {"Content-Type": "text/html"}
-        text = '<meta name="twitter:image" content="https://cdn.x.com/photo.jpg">'
-        def raise_for_status(self): pass
-
-    monkeypatch.setattr(run.requests, "get", lambda *a, **k: FakeResp())
+    html_ = '<meta name="twitter:image" content="https://cdn.x.com/photo.jpg">'
+    monkeypatch.setattr(run.requests, "get", lambda *a, **k: _FakeOgResp(html_))
     assert run.og_image("https://x.com/s", {}) == "https://cdn.x.com/photo.jpg"
+
+
+def test_og_image_unescapes_html_entities(monkeypatch):
+    """content= is HTML-escaped like any other attribute: '&amp;' between query
+    params is standard, and an un-unescaped URL 404s and confuses the width
+    filter (which then sees '?w=800&amp;h=450' instead of '?w=800&h=450')."""
+    import run
+
+    html_ = ('<meta property="og:image" '
+             'content="https://cdn.et.com/img.jpg?w=800&amp;h=450"/>')
+    monkeypatch.setattr(run.requests, "get", lambda *a, **k: _FakeOgResp(html_))
+    assert run.og_image("https://et.com/story", {}) == "https://cdn.et.com/img.jpg?w=800&h=450"
 
 
 def test_og_image_never_raises(monkeypatch):
@@ -505,11 +537,8 @@ def test_og_image_never_raises(monkeypatch):
     monkeypatch.setattr(run.requests, "get", boom)
     assert run.og_image("https://dead.example/s", {}) is None
 
-    class NotHtml:
-        headers = {"Content-Type": "application/pdf"}
-        text = ""
-        def raise_for_status(self): pass
-    monkeypatch.setattr(run.requests, "get", lambda *a, **k: NotHtml())
+    monkeypatch.setattr(run.requests, "get",
+                        lambda *a, **k: _FakeOgResp("", content_type="application/pdf"))
     assert run.og_image("https://x.com/file.pdf", {}) is None
 
 
@@ -582,6 +611,36 @@ def test_match_videos_patches_only_the_confirmed_story(monkeypatch):
     patch = story_patches[0][2]
     assert patch["video_url"] == "https://www.youtube.com/watch?v=a1"
     assert patch["image_url"] == "https://img.youtube.com/vi/a1/hqdefault.jpg"
+
+
+def test_image_seen_counts_filters_status_and_memoizes(monkeypatch):
+    """Only approved/pending rows count toward house-image detection (a
+    rejected/duplicate row never showed anyone an image), and a resident
+    poller calling this every 45s must not re-scan every time -- only after
+    the 10-minute cache window."""
+    import run
+    run._seen_images_cache = {"at": 0.0, "counts": {}}
+    calls = []
+
+    def fake_sb(method, path, **kw):
+        calls.append(path)
+        assert "status=in.(approved,pending)" in path
+        assert "order=created_at.asc" in path
+        return [{"image_url": "https://x.com/a.jpg"}, {"image_url": "https://x.com/a.jpg"}]
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    first = run.image_seen_counts()
+    assert first == {"https://x.com/a.jpg": 2}
+    assert len(calls) == 1
+
+    # second call within the cache window: no new query, same dict object
+    second = run.image_seen_counts()
+    assert len(calls) == 1
+    assert second is first
+
+    # a mutation by a caller (og fallback / match_videos) survives the cache
+    first["https://x.com/a.jpg"] += 1
+    assert run.image_seen_counts()["https://x.com/a.jpg"] == 3
 
 
 def test_retention_cutoff_is_date_truncated(monkeypatch):
