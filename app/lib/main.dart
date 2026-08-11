@@ -11,7 +11,6 @@ import 'screens/feed.dart';
 import 'screens/interests.dart';
 import 'screens/profile.dart';
 import 'screens/saved.dart';
-import 'screens/story_detail.dart';
 import 'screens/watchlist.dart';
 import 'share_palette.dart';
 import 'screens/sign_in.dart';
@@ -23,6 +22,10 @@ const supabasePublishableKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY'
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
+/// Which HomeShell tab is showing. A notification tap has to reach the feed
+/// from wherever the app happens to be — Ask, Profile, or a pushed sub-screen.
+final homeTab = ValueNotifier<int>(0);
+
 void _openStory(RemoteMessage m) {
   final id = int.tryParse(m.data['story_id'] ?? '');
   if (id == null) return;
@@ -32,8 +35,12 @@ void _openStory(RemoteMessage m) {
         .insert({'user_id': uid, 'story_id': id, 'type': 'alert_open'})
         .then((_) {}, onError: (_) {});
   }
-  navigatorKey.currentState
-      ?.push(MaterialPageRoute(builder: (_) => StoryDetailScreen(storyId: id)));
+  // Land in the feed itself, on that card, so the next swipe carries straight
+  // on into the rest of the news. Pushing a detail screen put you in a box you
+  // had to back out of before you could swipe at all.
+  navigatorKey.currentState?.popUntil((r) => r.isFirst);
+  homeTab.value = 0;
+  pendingStory.value = id;
 }
 
 final _tts = FlutterTts();
@@ -193,7 +200,7 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell>
     with SingleTickerProviderStateMixin {
-  int _tab = 0;
+  int _tab = homeTab.value;
 
   // Same hold-and-slide as the card's bookmark, hung off the News tab so the
   // Saved panel has a way in that does not depend on finding a story first.
@@ -206,7 +213,18 @@ class _HomeShellState extends State<HomeShell>
       vsync: this, duration: const Duration(milliseconds: 200));
 
   @override
+  void initState() {
+    super.initState();
+    homeTab.addListener(_syncTab);
+  }
+
+  void _syncTab() {
+    if (mounted) setState(() => _tab = homeTab.value);
+  }
+
+  @override
   void dispose() {
+    homeTab.removeListener(_syncTab);
     _ribbon.dispose();
     super.dispose();
   }
@@ -279,7 +297,7 @@ class _HomeShellState extends State<HomeShell>
       // the thought "I want my saved ones" actually occurs.
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
+        onDestinationSelected: (i) => homeTab.value = i,
         destinations: [
           NavigationDestination(
               icon: GestureDetector(

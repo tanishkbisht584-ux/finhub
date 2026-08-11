@@ -13,11 +13,28 @@ import '../publishers.dart';
 import '../share_palette.dart';
 import 'saved.dart';
 import 'stock.dart';
+import 'story_detail.dart';
 import 'watchlist.dart';
 import '../theme.dart';
 
 /// Whether the feed currently on screen came from the device cache.
 final servingCacheProvider = StateProvider<DateTime?>((ref) => null);
+
+/// Story id from a tapped alert, waiting for the feed to land on it.
+///
+/// A ValueNotifier rather than a provider because the setter is `_openStory`
+/// in main.dart — a top-level FCM callback with no WidgetRef and no context to
+/// find a container with.
+final pendingStory = ValueNotifier<int?>(null);
+
+/// Put the feed on [id]'s card. False when the story isn't in the loaded list,
+/// so the caller can fall back to the standalone detail screen.
+bool jumpToStory(PageController pc, List<Story> list, int id) {
+  final i = list.indexWhere((s) => s.id == id);
+  if (i < 0) return false;
+  if (pc.hasClients) pc.jumpToPage(i);
+  return true;
+}
 
 final storiesProvider = FutureProvider<List<Story>>((ref) async {
   // Feed ranking: the single current featured story pinned, then newest
@@ -121,32 +138,77 @@ Future<List<Map<String, dynamic>>> _attachCompanies(
   return rows;
 }
 
-class FeedScreen extends ConsumerWidget {
+class FeedScreen extends ConsumerStatefulWidget {
   const FeedScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FeedScreen> createState() => _FeedScreenState();
+}
+
+class _FeedScreenState extends ConsumerState<FeedScreen> {
+  final _pc = PageController();
+
+  @override
+  void initState() {
+    super.initState();
+    pendingStory.addListener(_rebuild);
+  }
+
+  @override
+  void dispose() {
+    pendingStory.removeListener(_rebuild);
+    _pc.dispose();
+    super.dispose();
+  }
+
+  /// An alert tapped while the feed is already on screen changes nothing the
+  /// providers watch, so ask for the frame that runs [_land].
+  void _rebuild() {
+    if (mounted) setState(() {});
+  }
+
+  /// Called after the frame that built the PageView, so the controller has
+  /// clients to jump with.
+  void _land(List<Story> list) {
+    final id = pendingStory.value;
+    if (id == null || !mounted) return;
+    pendingStory.value = null;
+    if (jumpToStory(_pc, list, id)) return;
+    // Aged past the feed's 48h window, unapproved since the alert went out, or
+    // we are serving the offline cache. One card beats the wrong card.
+    Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => StoryDetailScreen(storyId: id)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final stories = ref.watch(storiesProvider);
     final cachedAt = ref.watch(servingCacheProvider);
     return stories.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => _Offline(onRetry: () => ref.refresh(storiesProvider)),
-      data: (list) => list.isEmpty
-          ? const Center(child: Text('No stories yet — check back soon'))
-          : Column(children: [
-              if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: () => ref.refresh(storiesProvider.future),
-                  child: PageView.builder(
-                    scrollDirection: Axis.vertical,
-                    itemCount: list.length,
-                    onPageChanged: (i) => _logView(list[i].id),
-                    itemBuilder: (context, i) => StoryCard(story: list[i]),
+      data: (list) {
+        if (pendingStory.value != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
+        }
+        return list.isEmpty
+            ? const Center(child: Text('No stories yet — check back soon'))
+            : Column(children: [
+                if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: () => ref.refresh(storiesProvider.future),
+                    child: PageView.builder(
+                      controller: _pc,
+                      scrollDirection: Axis.vertical,
+                      itemCount: list.length,
+                      onPageChanged: (i) => _logView(list[i].id),
+                      itemBuilder: (context, i) => StoryCard(story: list[i]),
+                    ),
                   ),
                 ),
-              ),
-            ]),
+              ]);
+      },
     );
   }
 
