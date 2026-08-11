@@ -33,12 +33,18 @@ void main() {
 
   testWidgets('no media, no strip — card is exactly today\'s card',
       (tester) async {
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(_app(_s(const {})));
     expect(find.byType(AspectRatio), findsNothing);
     expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
   });
 
   testWidgets('dead image URL collapses the strip silently', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(_app(_s({'image_url': 'https://x.invalid/a.jpg'})));
     await tester.pumpAndSettle();
     // Test HTTP returns 400 for every request: the errorBuilder path.
