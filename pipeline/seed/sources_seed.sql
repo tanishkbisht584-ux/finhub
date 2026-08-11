@@ -78,3 +78,17 @@ insert into sources (name, type, feed_url, authority) values
 ('SCMP Business',      'rss', 'https://www.scmp.com/rss/92/feed', 7),
 -- startups
 ('YourStory', 'rss', 'https://yourstory.com/feed', 6);
+
+-- Added 2026-08-11: broadcaster video channels (M8). type='youtube' keeps them
+-- OUT of the story path — their items are media candidates matched onto
+-- existing stories, never inserted into `stories` themselves. Every channel_id
+-- below was verified live before commit: fetched the @handle page for its
+-- externalId, then fetched the feed and confirmed <author><name> matches the
+-- broadcaster (see task-4-report.md for the full evidence).
+insert into sources (name, type, feed_url, authority) values
+  ('CNBC-TV18 Video',    'youtube', 'https://www.youtube.com/feeds/videos.xml?channel_id=UCmRbHAgG2k2vDUvb3xsEunQ', 7),
+  ('ET Now Video',       'youtube', 'https://www.youtube.com/feeds/videos.xml?channel_id=UCI_mwTKUhicNzFrhm33MzBQ', 7),
+  ('Mint Video',         'youtube', 'https://www.youtube.com/feeds/videos.xml?channel_id=UCUI9vm69ZbAqRK3q3vKLWCQ', 7),
+  ('Moneycontrol Video', 'youtube', 'https://www.youtube.com/feeds/videos.xml?channel_id=UChftTVI0QJmyXkajQYt2tiQ', 7),
+  ('Zee Business Video', 'youtube', 'https://www.youtube.com/feeds/videos.xml?channel_id=UCkXopQ3ubd-rnXnStZqCl2w', 6)
+on conflict do nothing;

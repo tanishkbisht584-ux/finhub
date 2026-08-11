@@ -436,6 +436,91 @@ def fetch_nse(source):
 FETCHERS = {"nse": fetch_nse, "bse": fetch_bse}
 
 
+# ---------- broadcaster video (spec M8): media candidates, never stories ----------
+
+VIDEO_MAX_AGE_HOURS = 12   # a clip 12h+ from the story is a different bulletin
+VIDEO_BATCH_CAP = 20       # one AI call; keep the prompt readable
+
+
+def split_sources(sources):
+    """YouTube channels are media feeds, not news sources: their items must
+    never become story rows, so they leave the story path here."""
+    story = [s for s in sources if s["type"] != "youtube"]
+    yt = [s for s in sources if s["type"] == "youtube"]
+    return story, yt
+
+
+def fetch_videos(source):
+    """YouTube channel feed -> [{title, video_id, published_at}]. Plain RSS;
+    feedparser exposes <yt:videoId> as entry.yt_videoid."""
+    resp = requests.get(source["feed_url"], headers=UA, timeout=FETCH_TIMEOUT)
+    resp.raise_for_status()
+    vids = []
+    for e in feedparser.parse(resp.content).entries:
+        vid = e.get("yt_videoid")
+        title = (e.get("title") or "").strip()
+        if vid and title:
+            vids.append({"title": title, "video_id": vid,
+                         "published_at": entry_published(e)})
+    return vids
+
+
+def video_candidates(vids, recent, stories_by_cluster):
+    """Free deterministic gates before any AI: the video's title must land in
+    an existing story's cluster, and the clip must be within
+    VIDEO_MAX_AGE_HOURS of the story. Survivors carry their story."""
+    out = []
+    for v in vids:
+        cid, known = cluster_of(v["title"], recent)
+        story = stories_by_cluster.get(cid) if known else None
+        if not story or story["video_url"]:
+            continue
+        v_ts, s_ts = v.get("published_at"), story.get("published_at")
+        if not v_ts or not s_ts:
+            continue
+        if abs((parse_ts(v_ts) - parse_ts(s_ts)).total_seconds()) > VIDEO_MAX_AGE_HOURS * 3600:
+            continue
+        out.append({**v, "story_id": story["id"],
+                    "story_headline": story["headline"],
+                    "story_image": story.get("image_url")})
+    return out
+
+
+def match_videos(yt_sources, recent, seen_images, video_match):
+    """The whole video path: fetch channels, gate, one batched AI call, patch
+    matched stories. Every failure path costs a video, never a story."""
+    vids = []
+    for s in yt_sources:
+        try:
+            vids += fetch_videos(s)
+            sb("PATCH", f"sources?id=eq.{s['id']}",
+               json={"last_fetched_at": datetime.now(timezone.utc).isoformat()})
+        except Exception as e:
+            print(f"VIDEO FEED FAIL {s['name']}: {e}")
+    if not vids:
+        return 0
+    since = iso(datetime.now(timezone.utc) - timedelta(hours=48))
+    stories_by_cluster = {}
+    for r in sb("GET", f"stories?select=id,cluster_id,headline,published_at,"
+                       f"image_url,video_url&created_at=gte.{since}"
+                       "&status=in.(approved,pending)"):
+        stories_by_cluster.setdefault(r["cluster_id"], r)
+    cands = video_candidates(vids, recent, stories_by_cluster)[:VIDEO_BATCH_CAP]
+    confirmed = video_match([(c["title"], c["story_headline"]) for c in cands])
+    attached = 0
+    for i in confirmed:
+        c = cands[i]
+        patch = {"video_url": f"https://www.youtube.com/watch?v={c['video_id']}"}
+        if not c["story_image"]:
+            thumb = usable_image(
+                f"https://img.youtube.com/vi/{c['video_id']}/hqdefault.jpg", seen_images)
+            if thumb:
+                patch["image_url"] = thumb
+        sb("PATCH", f"stories?id=eq.{c['story_id']}", json=patch)
+        attached += 1
+    return attached
+
+
 # ---------- alert engine (spec §7 machine gate) ----------
 
 def in_quiet_hours(now):
@@ -821,7 +906,11 @@ def disable_dead_sources():
     since = iso(now - timedelta(days=SILENT_SOURCE_DAYS))
     producing = {r["source_name"] for r in
                  sb("GET", f"stories?select=source_name&created_at=gte.{since}")}
-    for s in sb("GET", "sources?select=id,name,last_fetched_at&is_active=eq.true"):
+    for s in sb("GET", "sources?select=id,name,type,last_fetched_at&is_active=eq.true"):
+        # YouTube channels never produce stories by design (spec M8) — judging
+        # them "silent" by story output would retire every one of them in 3 days.
+        if s["type"] == "youtube":
+            continue
         # Only judge a source that has had a fair chance: seeded long enough ago
         # that SILENT_SOURCE_DAYS of silence is evidence rather than newness.
         if s["name"] in producing or not s["last_fetched_at"]:
@@ -906,9 +995,10 @@ def insert_story(row, companies_by_key, card=None):
 def main():
     load_env()
     from ai import (AIError, QuotaExhausted, editor_pass, process_story,
-                    usage_report)  # after env load
+                    usage_report, video_match)  # after env load
 
     sources = sb("GET", "sources?select=*&is_active=eq.true")
+    sources, yt_sources = split_sources(sources)  # youtube items never enter the story path
     companies_by_key = {}
     for c in sb("GET", "companies?select=id,name,nse_symbol,aliases"):
         if c.get("nse_symbol"):
@@ -1109,6 +1199,7 @@ def main():
     releveled = chief_editor(editor_pass)
     alerted = alert_engine({s["name"]: s["authority"] for s in sources})
     personal = personal_alert_engine()
+    videos = match_videos(yt_sources, recent, seen_images, video_match)
     healed = retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key)
     disabled = disable_dead_sources()
     revived = revive_sources()
@@ -1116,7 +1207,8 @@ def main():
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
           + (f", {merged} merged into an existing story" if merged else "")
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
-          + f" | editor: {releveled} releveled | alerts: {alerted} sent, {personal} personal alerts | "
+          + f" | editor: {releveled} releveled | alerts: {alerted} sent, {personal} personal alerts, "
+          f"{videos} videos attached | "
           f"self-heal: {healed} recovered, {disabled} retired, {revived} revived, {approved} auto-approved")
     served = usage_report()
     if served:  # which lane actually carried the run — silent failover is visible

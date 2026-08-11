@@ -11,6 +11,7 @@ import requests
 
 PROMPT = (pathlib.Path(__file__).parent / "prompts" / "story_v1.txt").read_text(encoding="utf-8")
 EDITOR_PROMPT = (pathlib.Path(__file__).parent / "prompts" / "editor_v1.txt").read_text(encoding="utf-8")
+VIDEO_PROMPT = (pathlib.Path(__file__).parent / "prompts" / "video_v1.txt").read_text(encoding="utf-8")
 
 # Rate limits are metered per model/provider, so the throttle is too: one global
 # gate made 4 models queue behind each other and capped the whole pipeline at one
@@ -236,6 +237,23 @@ def editor_pass(digest):
         # identical to "nothing needed re-levelling".
         print(f"EDITOR PASS FAILED ({type(e).__name__}): {str(e)[:200]}")
         return None
+
+
+def video_match(pairs):
+    """One batched call per run (spec M8) over 'i | video title | headline'
+    lines. Returns the confirmed indices; [] on any failure — a lost video is
+    nothing, a wrong one is misinformation."""
+    if not pairs:
+        return []
+    try:
+        lines = "\n".join(f"{i} | {v} | {h}" for i, (v, h) in enumerate(pairs))
+        out = json.loads(_gemini(VIDEO_PROMPT.format(pairs=lines)))
+        return [i for i in out.get("match", [])
+                if isinstance(i, int) and 0 <= i < len(pairs)]
+    except (AIError, QuotaExhausted, ValueError, KeyError, json.JSONDecodeError,
+            requests.RequestException) as e:
+        print(f"VIDEO MATCH FAILED ({type(e).__name__}): {str(e)[:200]}")
+        return []
 
 
 def process_story(source_name, headline, body):

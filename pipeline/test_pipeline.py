@@ -1,4 +1,6 @@
 """Unit tests per spec §10: dedupe hashing, clustering, schema validation. No network."""
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from ai import validate
@@ -509,3 +511,38 @@ def test_og_image_never_raises(monkeypatch):
         def raise_for_status(self): pass
     monkeypatch.setattr(run.requests, "get", lambda *a, **k: NotHtml())
     assert run.og_image("https://x.com/file.pdf", {}) is None
+
+
+# ---------- M8: video matching ----------
+
+def test_youtube_sources_never_enter_the_story_path():
+    """A youtube source must be split out before the FETCHERS loop — its items
+    are media candidates, and fetch_items would happily turn them into stories."""
+    from run import split_sources
+    sources = [{"type": "rss"}, {"type": "youtube"}, {"type": "nse"}]
+    story_sources, yt_sources = split_sources(sources)
+    assert {s["type"] for s in story_sources} == {"rss", "nse"}
+    assert [s["type"] for s in yt_sources] == ["youtube"]
+
+
+def test_video_candidates_gate_on_cluster_and_recency():
+    from run import video_candidates, title_tokens
+    now = datetime.now(timezone.utc)
+    recent = [("c1", title_tokens("RBI cuts repo rate by 25 bps"))]
+    stories = {"c1": {"id": 7, "headline": "RBI cuts repo rate by 25 bps",
+                      "published_at": now.isoformat(), "video_url": None,
+                      "image_url": None}}
+    vids = [
+        # same cluster, fresh -> candidate
+        {"title": "RBI cuts repo rate 25 bps: what it means", "video_id": "a1",
+         "published_at": now.isoformat()},
+        # no cluster match -> discarded, no AI spent
+        {"title": "Closing Bell: Sensex today", "video_id": "b2",
+         "published_at": now.isoformat()},
+        # matches but 13h stale -> discarded
+        {"title": "RBI cuts repo rate by 25 bps analysis", "video_id": "c3",
+         "published_at": (now - timedelta(hours=13)).isoformat()},
+    ]
+    cands = video_candidates(vids, recent, stories)
+    assert [c["video_id"] for c in cands] == ["a1"]
+    assert cands[0]["story_id"] == 7
