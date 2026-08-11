@@ -974,6 +974,22 @@ def auto_approve():
     return len(rows or [])
 
 
+EVENTS_RETENTION_DAYS = 90   # spec M8: events grows on every swipe, forever,
+                             # against a 500 MB free tier — this makes it run for years
+
+
+def retention_sweep():
+    """Delete events older than EVENTS_RETENTION_DAYS. The cutoff is truncated
+    to the day, so the first run after midnight does the real delete and every
+    other run that day matches nothing — a once-per-day guard with no state."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=EVENTS_RETENTION_DAYS)) \
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        sb("DELETE", f"events?created_at=lt.{iso(cutoff)}")
+    except requests.RequestException as e:
+        print(f"RETENTION SWEEP FAILED: {e}")  # next run retries; nothing lost
+
+
 # ---------- main ----------
 
 def existing_hashes(hashes):
@@ -1210,6 +1226,7 @@ def main():
     disabled = disable_dead_sources()
     revived = revive_sources()
     approved = auto_approve()
+    retention_sweep()
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
           + (f", {merged} merged into an existing story" if merged else "")
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")

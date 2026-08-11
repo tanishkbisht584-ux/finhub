@@ -582,3 +582,17 @@ def test_match_videos_patches_only_the_confirmed_story(monkeypatch):
     patch = story_patches[0][2]
     assert patch["video_url"] == "https://www.youtube.com/watch?v=a1"
     assert patch["image_url"] == "https://img.youtube.com/vi/a1/hqdefault.jpg"
+
+
+def test_retention_cutoff_is_date_truncated(monkeypatch):
+    """The cutoff must be a day boundary: the first sweep each day deletes
+    everything older, every later sweep that day matches zero rows — that
+    truncation IS the once-per-day guard, with no state to store."""
+    import run
+    calls = []
+    monkeypatch.setattr(run, "sb", lambda m, p, **k: calls.append((m, p)) or [])
+    run.retention_sweep()
+    method, path = calls[0]
+    assert method == "DELETE"
+    assert "events?created_at=lt." in path
+    assert "T00:00:00" in path
