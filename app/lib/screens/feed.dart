@@ -553,6 +553,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
                 style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, height: 1.35)),
             const SizedBox(height: 12),
+            _MediaStrip(story: story),
             Expanded(
               child: SingleChildScrollView(
                 child: Column(
@@ -795,6 +796,69 @@ class _StoryCardState extends ConsumerState<StoryCard>
   }
 }
 
+/// 16:9 picture or video thumbnail between headline and summary (spec: M8).
+/// Hotlinked from the origin CDN — we never re-host. A dead URL collapses the
+/// whole strip: a blank card is fine, a broken-image icon is not.
+class _MediaStrip extends StatefulWidget {
+  const _MediaStrip({required this.story});
+  final Story story;
+
+  @override
+  State<_MediaStrip> createState() => _MediaStripState();
+}
+
+class _MediaStripState extends State<_MediaStrip> {
+  bool _dead = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.story;
+    final url = s.imageUrl;
+    if (url == null || _dead) return const SizedBox.shrink();
+    // 2x logical width: crisp on device without decoding a 4000px press photo
+    // into memory on a budget phone.
+    final cacheW = (MediaQuery.of(context).size.width * 2).round();
+    final img = AspectRatio(
+      aspectRatio: 16 / 9,
+      child: Image.network(
+        url,
+        fit: BoxFit.cover,
+        cacheWidth: cacheW,
+        // errorBuilder alone leaves a 16:9 hole; flag + rebuild collapses it.
+        errorBuilder: (_, __, ___) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !_dead) setState(() => _dead = true);
+          });
+          return const SizedBox.shrink();
+        },
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : Container(color: surface),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        decoration: BoxDecoration(border: Border.all(color: border)),
+        child: s.videoUrl == null
+            ? img
+            : InkWell(
+                onTap: () => launchUrl(Uri.parse(s.videoUrl!),
+                    mode: LaunchMode.externalApplication),
+                child: Stack(alignment: Alignment.center, children: [
+                  img,
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration:
+                        BoxDecoration(color: bg.withValues(alpha: 0.65)),
+                    child: const Icon(Icons.play_arrow_rounded,
+                        color: ink, size: 34),
+                  ),
+                ]),
+              ),
+      ),
+    );
+  }
+}
 
 /// Shown when the network failed and there is nothing cached to fall back on.
 class _Offline extends StatelessWidget {

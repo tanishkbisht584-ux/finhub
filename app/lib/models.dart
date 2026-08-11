@@ -27,6 +27,8 @@ class Story {
   final String sourceUrl;
   final String? category;
   final List<String> sectors;
+  final String? imageUrl;
+  final String? videoUrl;
 
   /// Every outlet that ran this story, earliest first — so the card can credit
   /// whoever broke it rather than whichever copy the pipeline happened to
@@ -52,6 +54,8 @@ class Story {
         sourceUrl = j['source_url'],
         category = j['category'],
         sectors = List<String>.from(j['sectors'] ?? const []),
+        imageUrl = j['image_url'],
+        videoUrl = j['video_url'],
         // Attached by the feed query and carried into the offline cache, so a
         // cached card keeps its outlet list too.
         outlets = [
