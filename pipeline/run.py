@@ -909,10 +909,13 @@ def remaining_budget_today():
 
 def retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key):
     """Re-run AI on recently flagged stories (headline-only — body isn't stored).
-    Older than 24h we stop trying; admin sees them. Cap 5/run to protect quota."""
+    Older than 24h we stop trying; admin sees them. Cap 20/run, newest first:
+    enough to drain a mass outage pileup (2026-08-11: 3.4k flagged in a day,
+    5/run could never catch up inside the 24h window) while a normal day's
+    handful costs nothing extra. QuotaExhausted still breaks out early."""
     cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=24))
     rows = sb("GET", f"stories?select=id,headline,source_name&status=eq.flagged"
-                     f"&created_at=gte.{cutoff}&limit=5")
+                     f"&created_at=gte.{cutoff}&order=created_at.desc&limit=20")
     healed = 0
     for row in rows:
         try:

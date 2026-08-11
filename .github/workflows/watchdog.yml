@@ -4,9 +4,14 @@ name: watchdog
 #   pipeline crash-looping (bad secret/dep/commit) -> alert (restart is useless)
 #   pipeline dead / cron-lagged                    -> self-heal: dispatch a run
 #   ingesting but nothing approved (gate stalled)  -> alert
+#   AI lanes failing (flagged stories piling up)   -> alert (catches PARTIAL
+#       outages the zero-approvals check misses — 2026-08-11 a retired Gemini
+#       model flagged 3.4k stories over 12h while approvals still trickled)
 #   feed ranking frozen (app's own query checked)  -> alert
 #   Supabase unreachable                           -> alert (nothing can heal it)
-# Alerts = one open `watchdog` issue at a time; GitHub emails the owner.
+# Alerts = one open `watchdog` issue at a time; GitHub emails the owner AND
+# an FCM push goes to the 'alerts' topic (the admin's phone). Healthy runs
+# auto-close any open watchdog issue so the next incident can alert again.
 # App-side failures (stale APK, expired session) are invisible from here.
 on:
   schedule:
@@ -23,11 +28,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Install FCM deps
+        run: pip install --quiet google-auth requests
       - name: Health check
         shell: python
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
@@ -107,6 +115,19 @@ jobs:
                   needs_you.append(
                       "Feed ranking frozen: freshest story in the visible top 10 is "
                       f"{top_age:.1f}h old while ingestion is fine.")
+
+              # partial AI outage: stories flag instead of being scored, while
+              # enough approvals trickle through to keep approved_age young
+              FLAG_SPIKE = 15  # normal is ~0-2/h; an hour at 15+ means lanes are dying
+              hr = urllib.parse.quote((now - timedelta(hours=1)).isoformat())
+              spike = call(sb_url + "stories?select=id&status=eq.flagged"
+                           f"&created_at=gte.{hr}&limit={FLAG_SPIKE}", sb)
+              if len(spike) >= FLAG_SPIKE:
+                  needs_you.append(
+                      f"AI lanes are FAILING: {FLAG_SPIKE}+ stories flagged in the "
+                      "last hour (AI errors, not editorial rejections). Check "
+                      "raw_ai_error on recent flagged rows — likely a dead model "
+                      "or exhausted keys.")
           except Exception as e:
               needs_you.append(
                   f"Supabase unreachable from the watchdog: {e}. If Supabase itself "
@@ -128,6 +149,16 @@ jobs:
                                 "pipeline run.")
 
           if not needs_you:
+              # healthy again: close the alarm so the NEXT incident can raise one
+              # (a forgotten open issue used to suppress all future alerts)
+              for i in call(gh + "/issues?labels=watchdog&state=open", gh_hdrs):
+                  call(gh + f"/issues/{i['number']}/comments", gh_hdrs,
+                       data=json.dumps({"body": "Auto-closed: pipeline healthy "
+                                        "again on the next watchdog pass."}).encode(),
+                       method="POST")
+                  call(gh + f"/issues/{i['number']}", gh_hdrs,
+                       data=json.dumps({"state": "closed"}).encode(), method="PATCH")
+                  print(f"closed healed watchdog issue #{i['number']}")
               state = healed[0] if healed else (
                   f"healthy: approved {approved_age:.1f}h ago, "
                   f"feed top {top_age:.1f}h old")
@@ -151,6 +182,31 @@ jobs:
                                     "assignees": [os.environ["REPO"].split("/")[0]]}
                                    ).encode(),
                    method="POST")
+              # email alone sat unread for 4h on 2026-08-11 — also buzz the
+              # phone via the app's existing 'alerts' FCM topic. Only on issue
+              # creation, so a long incident pings once, not hourly.
+              # ponytail: topic reaches every install; fine at 1 user, gate on
+              # an admin flag before public launch
+              try:
+                  sa = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+                  if sa:
+                      from google.oauth2 import service_account
+                      import google.auth.transport.requests as gar
+                      import requests as rq
+                      creds = service_account.Credentials.from_service_account_info(
+                          json.loads(sa),
+                          scopes=["https://www.googleapis.com/auth/firebase.messaging"])
+                      creds.refresh(gar.Request())
+                      rq.post("https://fcm.googleapis.com/v1/projects/"
+                              f"{creds.project_id}/messages:send",
+                              headers={"Authorization": f"Bearer {creds.token}"},
+                              json={"message": {"topic": "alerts", "notification": {
+                                  "title": "FinSwipe pipeline needs attention",
+                                  "body": needs_you[0][:170]}}},
+                              timeout=30).raise_for_status()
+                      print("ops push sent to phone")
+              except Exception as e:
+                  print("ops push failed (issue+email still raised):", e)
 
           print("NEEDS ATTENTION:", " | ".join(needs_you))
           sys.exit(1)
