@@ -265,6 +265,44 @@ def entry_image(entry):
     return None
 
 
+# Junk by path: logos, icons, bylines, spacers, ad slots. Case-insensitive,
+# matched against the whole URL — CDNs hide these words in either path or file.
+JUNK_IMAGE = re.compile(
+    r"logo|icon|avatar|author|byline|placeholder|default|sprite|blank"
+    r"|spacer|1x1|pixel|/ads?/", re.I)
+# Declared width, the two ways CDNs write it: ?width=200 / ?w=200, or -120x90.
+IMG_W_QUERY = re.compile(r"[?&](?:w|width)=(\d+)", re.I)
+IMG_W_NAME = re.compile(r"[-_](\d{2,4})x\d{2,4}\.(?:jpe?g|png|webp|gif)", re.I)
+HOUSE_IMAGE_USES = 3   # same URL on this many stories in 7d = furniture, not news
+MIN_IMAGE_WIDTH = 400
+
+
+def usable_image(url, seen_counts):
+    """The url, or None if it would make the card worse than no image at all.
+    Spec M8: prefer nothing over wrong — every ambiguous case returns None."""
+    if not url:
+        return None
+    if JUNK_IMAGE.search(url):
+        return None
+    m = IMG_W_QUERY.search(url) or IMG_W_NAME.search(url)
+    if m and int(m.group(1)) < MIN_IMAGE_WIDTH:
+        return None
+    if seen_counts.get(url, 0) >= HOUSE_IMAGE_USES:
+        return None
+    return url
+
+
+def image_seen_counts():
+    """URL -> how many stories carried it in the last 7 days. One query per run
+    (sb() paginates); catches house images that are valid but say nothing."""
+    since = iso(datetime.now(timezone.utc) - timedelta(days=7))
+    counts = {}
+    for r in sb("GET", f"stories?select=image_url&image_url=not.is.null"
+                       f"&created_at=gte.{since}"):
+        counts[r["image_url"]] = counts.get(r["image_url"], 0) + 1
+    return counts
+
+
 def entry_published(entry):
     t = entry.get("published_parsed") or entry.get("updated_parsed")
     return datetime(*t[:6], tzinfo=timezone.utc).isoformat() if t else None
@@ -853,6 +891,8 @@ def main():
         for a in c.get("aliases") or []:
             companies_by_key[a.casefold()] = c["id"]
 
+    seen_images = image_seen_counts()
+
     since = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Oldest first, one entry per cluster: the seed decides what the cluster is
     # about (see cluster_of). Loading every member is what let clusters chain.
@@ -910,7 +950,7 @@ def main():
     def base_row(item, cid):
         return {"url": item["url"], "url_hash": item["url_hash"], "cluster_id": cid,
                 "headline": item["headline"], "source_name": item["source"]["name"],
-                "source_url": item["url"], "image_url": item["image_url"],
+                "source_url": item["url"], "image_url": usable_image(item["image_url"], seen_images),
                 # No usable date from the source => stamp ingestion time. The app
                 # filters the feed on published_at, and NULL fails that filter, so
                 # an undated story was silently invisible forever — which had

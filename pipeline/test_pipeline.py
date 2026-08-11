@@ -427,3 +427,37 @@ def test_personal_alert_engine_patches_pa_state_even_if_story_loop_raises(monkey
 
     assert len(patches) == 1
     assert patches[0]["alert_settings"]["pa"]["cur"] == 1  # cursor still advanced
+
+
+def test_usable_image_rejects_junk_paths():
+    from run import usable_image
+    assert usable_image("https://et.com/img/logo.png", {}) is None
+    assert usable_image("https://et.com/assets/icon-32.png", {}) is None
+    assert usable_image("https://cdn.x.com/authors/rk-avatar.jpg", {}) is None
+    assert usable_image("https://cdn.x.com/1x1.gif", {}) is None
+    assert usable_image("https://cdn.x.com/ads/banner.jpg", {}) is None
+
+
+def test_usable_image_rejects_declared_small():
+    from run import usable_image
+    # width declared in the URL the way CDNs do it
+    assert usable_image("https://cdn.x.com/photo.jpg?width=200", {}) is None
+    assert usable_image("https://cdn.x.com/photo-120x90.jpg", {}) is None
+    # no declared dimensions -> benefit of the doubt
+    assert usable_image("https://cdn.x.com/photo.jpg", {}) == "https://cdn.x.com/photo.jpg"
+
+
+def test_usable_image_rejects_house_images():
+    """The generic 'BSE building' photo on every filing story carries no
+    information — 3+ appearances in a week means it's furniture, not news."""
+    from run import usable_image
+    url = "https://cdn.x.com/bse-building.jpg"
+    assert usable_image(url, {url: 3}) is None
+    assert usable_image(url, {url: 2}) == url
+
+
+def test_usable_image_passes_normal_article_image():
+    from run import usable_image
+    u = "https://images.et.com/2026/08/rbi-governor-presser.jpg"
+    assert usable_image(u, {}) == u
+    assert usable_image(None, {}) is None
