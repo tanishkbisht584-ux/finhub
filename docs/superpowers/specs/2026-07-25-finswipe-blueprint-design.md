@@ -328,8 +328,10 @@ Idempotent runs: hashes re-checked each run; no state in the runner; re-processi
 | 3 | Primary sources: NSE/BSE, SEBI, RBI + alert engine (machine gate, FCM send) | 1–1.5 wk | Exclusive content + alerts firing |
 | 4 | Flutter app core: auth/onboarding → feed → save/share → stock page | 3–4 wk | Installable app |
 | 5 | Q&A search (Edge Function + UI) + alert receive/deep-links + share images + PostHog → Play internal testing → closed beta | 1.5–2 wk | Beta users onboard |
+| Last | **Self-learning** (added 2026-08-11; deliberately the final dev phase — needs real usage data to learn from): feed ranking learns per-user from `events` (read vs swipe-past), source authority auto-tunes on engagement, weekly pipeline self-report. All ₹0 (SQL + pipeline code, no ML); the paid ML rec engine stays Phase 2 (§3) | 1–1.5 wk | App and pipeline improve themselves from usage |
 
 Gate between 2→4: if *you* don't want to read your own feed every morning, fix content quality before writing any Flutter.
+Gate before Last: enough real users generating `events` — self-tuning on one user's data just overfits to you.
 
 ---
 
