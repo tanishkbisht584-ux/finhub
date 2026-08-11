@@ -65,8 +65,12 @@ def _split(env, default=""):
 # so rotating on 429 multiplies daily capacity at zero cost. Order = preference.
 # gemini-2.0-flash-lite retired by Google (404 as of 2026-08-11); 2.5-flash-lite
 # verified live against our keys the same day and keeps the fourth quota pool.
+# The two -latest aliases are Google-maintained pointers to the current
+# generation: if every named model above is ever retired, they keep the
+# pipeline alive with no code change — retirement insurance, not extra quota.
 GEMINI_MODELS = ("gemini-3.5-flash-lite,gemini-3.1-flash-lite,"
-                 "gemini-2.5-flash-lite,gemini-3.5-flash")
+                 "gemini-2.5-flash-lite,gemini-3.5-flash,"
+                 "gemini-flash-lite-latest,gemini-flash-latest")
 
 _cooldown = {}      # lane -> monotonic deadline before we try it again
 _cooldown_lock = threading.Lock()
