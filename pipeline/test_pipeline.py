@@ -436,6 +436,12 @@ def test_usable_image_rejects_junk_paths():
     assert usable_image("https://cdn.x.com/authors/rk-avatar.jpg", {}) is None
     assert usable_image("https://cdn.x.com/1x1.gif", {}) is None
     assert usable_image("https://cdn.x.com/ads/banner.jpg", {}) is None
+    # Regression: word-bound junk patterns to avoid false positives on financial vocabulary
+    assert usable_image("https://cdn.x.com/wilful-defaulters-list.jpg", {}) == "https://cdn.x.com/wilful-defaulters-list.jpg"
+    assert usable_image("https://cdn.x.com/regulatory-authority-hq.jpg", {}) == "https://cdn.x.com/regulatory-authority-hq.jpg"
+    assert usable_image("https://cdn.x.com/silicon-wafer-fab.jpg", {}) == "https://cdn.x.com/silicon-wafer-fab.jpg"
+    # But actual junk patterns still reject
+    assert usable_image("https://et.com/img/author-photo.jpg", {}) is None
 
 
 def test_usable_image_rejects_declared_small():

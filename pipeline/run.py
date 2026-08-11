@@ -267,9 +267,11 @@ def entry_image(entry):
 
 # Junk by path: logos, icons, bylines, spacers, ad slots. Case-insensitive,
 # matched against the whole URL — CDNs hide these words in either path or file.
+# Word-bound the word-like tokens (logo, icon, etc.) to avoid false positives
+# on financial vocabulary (default in "wilful-defaulters", author in "regulatory-authority").
 JUNK_IMAGE = re.compile(
-    r"logo|icon|avatar|author|byline|placeholder|default|sprite|blank"
-    r"|spacer|1x1|pixel|/ads?/", re.I)
+    r"\b(?:logo|icon|avatar|author|byline|placeholder|default|sprite|blank"
+    r"|spacer)\b|1x1|pixel|/ads?/", re.I)
 # Declared width, the two ways CDNs write it: ?width=200 / ?w=200, or -120x90.
 IMG_W_QUERY = re.compile(r"[?&](?:w|width)=(\d+)", re.I)
 IMG_W_NAME = re.compile(r"[-_](\d{2,4})x\d{2,4}\.(?:jpe?g|png|webp|gif)", re.I)
