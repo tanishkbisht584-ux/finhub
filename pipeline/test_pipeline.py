@@ -467,3 +467,45 @@ def test_usable_image_passes_normal_article_image():
     u = "https://images.et.com/2026/08/rbi-governor-presser.jpg"
     assert usable_image(u, {}) == u
     assert usable_image(None, {}) is None
+
+
+def test_og_image_parses_meta_and_filters(monkeypatch):
+    import run
+
+    class FakeResp:
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+        text = ('<html><head><meta property="og:image" '
+                'content="https://cdn.et.com/2026/rbi-presser.jpg"/></head></html>')
+        def raise_for_status(self): pass
+
+    monkeypatch.setattr(run.requests, "get", lambda *a, **k: FakeResp())
+    assert run.og_image("https://et.com/story", {}) == "https://cdn.et.com/2026/rbi-presser.jpg"
+    # the scraped image still goes through the relevance filter
+    FakeResp.text = ('<meta property="og:image" content="https://cdn.et.com/logo.png"/>')
+    assert run.og_image("https://et.com/story", {}) is None
+
+
+def test_og_image_falls_back_to_twitter_image(monkeypatch):
+    import run
+
+    class FakeResp:
+        headers = {"Content-Type": "text/html"}
+        text = '<meta name="twitter:image" content="https://cdn.x.com/photo.jpg">'
+        def raise_for_status(self): pass
+
+    monkeypatch.setattr(run.requests, "get", lambda *a, **k: FakeResp())
+    assert run.og_image("https://x.com/s", {}) == "https://cdn.x.com/photo.jpg"
+
+
+def test_og_image_never_raises(monkeypatch):
+    import run
+    def boom(*a, **k): raise run.requests.ConnectionError("dead host")
+    monkeypatch.setattr(run.requests, "get", boom)
+    assert run.og_image("https://dead.example/s", {}) is None
+
+    class NotHtml:
+        headers = {"Content-Type": "application/pdf"}
+        text = ""
+        def raise_for_status(self): pass
+    monkeypatch.setattr(run.requests, "get", lambda *a, **k: NotHtml())
+    assert run.og_image("https://x.com/file.pdf", {}) is None

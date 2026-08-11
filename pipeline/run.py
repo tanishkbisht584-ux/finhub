@@ -305,6 +305,30 @@ def image_seen_counts():
     return counts
 
 
+OG_FETCH_CAP = 25          # spec M8: hard cap per run, 3s timeout each —
+OG_FETCH_TIMEOUT = 3       # this is what keeps the Actions budget intact
+OG_IMAGE = re.compile(
+    r'<meta[^>]+(?:property=["\']og:image["\']|name=["\']twitter:image["\'])'
+    r'[^>]+content=["\']([^"\']+)["\']', re.I)
+OG_IMAGE_REV = re.compile(  # content= before property=, the other attribute order
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+'
+    r'(?:property=["\']og:image["\']|name=["\']twitter:image["\'])', re.I)
+
+
+def og_image(article_url, seen_counts):
+    """One bounded GET for the article's own og:image. Regex, not a parser
+    dependency; any failure whatsoever is None — this must never cost a story."""
+    try:
+        r = requests.get(article_url, headers=UA, timeout=OG_FETCH_TIMEOUT)
+        r.raise_for_status()
+        if "html" not in r.headers.get("Content-Type", ""):
+            return None
+        m = OG_IMAGE.search(r.text) or OG_IMAGE_REV.search(r.text)
+        return usable_image(m.group(1), seen_counts) if m else None
+    except Exception:
+        return None
+
+
 def entry_published(entry):
     t = entry.get("published_parsed") or entry.get("updated_parsed")
     return datetime(*t[:6], tzinfo=timezone.utc).isoformat() if t else None
@@ -974,6 +998,7 @@ def main():
     # the run before alerts and auto-approve ever execute. Past the deadline the
     # remaining stories defer exactly like a quota block — nothing is lost.
     processed = flagged = dropped = quota_blocked = merged = 0
+    og_fetches = 0
     landed = set()   # clusters whose card actually reached the database this run
     deadline = time.monotonic() + AI_PHASE_SECONDS
 
@@ -1024,6 +1049,13 @@ def main():
             elif keep:
                 published.append((base["cluster_id"],
                                   title_tokens(card["headline_rewrite"])))
+            # og:image fallback (spec M8): only for a card actually being
+            # inserted without a usable image — bounded so a bad news day
+            # can't melt the Actions budget.
+            if (keep and not twin and not base["image_url"]
+                    and og_fetches < OG_FETCH_CAP):
+                og_fetches += 1
+                base["image_url"] = og_image(item["url"], seen_images)
             try:
                 insert_story({
                     **base,
