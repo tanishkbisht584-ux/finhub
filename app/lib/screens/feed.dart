@@ -44,40 +44,45 @@ const feedCategories = [
   'Commodities', 'Geopolitics',
 ];
 
-/// Session-only chip selection (null = All): it's a filter, not a setting.
-final selectedCategory = ValueNotifier<String?>(null);
+/// The one feed's composition (owner's call 2026-08-12: "only one feed to
+/// scroll, with a filter to add categories, subtract them, or all"). Chips
+/// toggle a category in or out of the single feed; this is a lasting
+/// customization, persisted on-device. Default: everything.
+final enabledCategories =
+    ValueNotifier<Set<String>>({...feedCategories});
+const _categoriesPrefsKey = 'feed_categories_v1';
 
-/// Categories the user switched off — hidden everywhere, All included.
-/// Persisted on-device; loaded once at FeedScreen init.
-final hiddenCategories = ValueNotifier<Set<String>>(const {});
-const _hiddenPrefsKey = 'hidden_categories_v1';
-
-Future<void> loadHiddenCategories() async {
+Future<void> loadEnabledCategories() async {
   final prefs = await SharedPreferences.getInstance();
-  hiddenCategories.value =
-      (prefs.getStringList(_hiddenPrefsKey) ?? const []).toSet();
+  final saved = prefs.getStringList(_categoriesPrefsKey);
+  if (saved != null) enabledCategories.value = saved.toSet();
 }
 
-Future<void> setCategoryHidden(String cat, bool hidden) async {
-  final next = {...hiddenCategories.value};
-  hidden ? next.add(cat) : next.remove(cat);
-  hiddenCategories.value = next;
-  // Hiding what you're looking at must not leave you on an empty feed.
-  if (hidden && selectedCategory.value == cat) selectedCategory.value = null;
+Future<void> toggleCategory(String cat) async {
+  final next = {...enabledCategories.value};
+  next.contains(cat) ? next.remove(cat) : next.add(cat);
+  enabledCategories.value = next;
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setStringList(_hiddenPrefsKey, next.toList()..sort());
+  await prefs.setStringList(_categoriesPrefsKey, next.toList()..sort());
 }
 
-/// An alerted story must never be invisible because of a chip.
-void resetFilterForAlert() => selectedCategory.value = null;
+Future<void> enableAllCategories() async {
+  enabledCategories.value = {...feedCategories};
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.remove(_categoriesPrefsKey);
+}
 
-/// The feed the reader actually sees. A null-category story (shouldn't happen
-/// for approved rows, but guard) shows under All only.
-List<Story> visibleStories(List<Story> list, Set<String> hidden, String? sel) =>
-    [
+/// An alerted story must never be invisible because the chips exclude its
+/// category: open the feed back up.
+void resetFilterForAlert() => enabledCategories.value = {...feedCategories};
+
+/// The one feed the reader scrolls. A story with a null category (shouldn't
+/// happen for approved rows, but guard) shows only when nothing is excluded.
+List<Story> visibleStories(List<Story> list, Set<String> enabled) => [
       for (final s in list)
-        if (!hidden.contains(s.category) &&
-            (sel == null || s.category == sel))
+        if (s.category == null
+            ? enabled.length == feedCategories.length
+            : enabled.contains(s.category))
           s
     ];
 
@@ -197,16 +202,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   void initState() {
     super.initState();
     pendingStory.addListener(_rebuild);
-    selectedCategory.addListener(_onFilterChanged);
-    hiddenCategories.addListener(_onFilterChanged);
-    loadHiddenCategories();
+    enabledCategories.addListener(_onFilterChanged);
+    loadEnabledCategories();
   }
 
   @override
   void dispose() {
     pendingStory.removeListener(_rebuild);
-    selectedCategory.removeListener(_onFilterChanged);
-    hiddenCategories.removeListener(_onFilterChanged);
+    enabledCategories.removeListener(_onFilterChanged);
     _pc.dispose();
     super.dispose();
   }
@@ -254,28 +257,35 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         if (pendingStory.value != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
         }
-        final shown = visibleStories(
-            list, hiddenCategories.value, selectedCategory.value);
+        final shown = visibleStories(list, enabledCategories.value);
         return list.isEmpty
             ? const Center(child: Text('No stories yet — check back soon'))
             : Column(children: [
                 if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
-                const CategoryStrip(),
                 Expanded(
-                  child: shown.isEmpty
-                      ? const Center(
-                          child: Text('Nothing here right now — try All'))
-                      : RefreshIndicator(
-                          onRefresh: () => ref.refresh(storiesProvider.future),
-                          child: PageView.builder(
-                            controller: _pc,
-                            scrollDirection: Axis.vertical,
-                            itemCount: shown.length,
-                            onPageChanged: (i) => _logView(shown[i].id),
-                            itemBuilder: (context, i) =>
-                                StoryCard(story: shown[i]),
+                  // The strip floats in the quiet zone above the card's
+                  // IMPACT line (card margin 12 + padding 24) instead of
+                  // costing the feed a row of its own.
+                  child: Stack(children: [
+                    shown.isEmpty
+                        ? const Center(
+                            child:
+                                Text('Nothing enabled — tap All up top'))
+                        : RefreshIndicator(
+                            onRefresh: () =>
+                                ref.refresh(storiesProvider.future),
+                            child: PageView.builder(
+                              controller: _pc,
+                              scrollDirection: Axis.vertical,
+                              itemCount: shown.length,
+                              onPageChanged: (i) => _logView(shown[i].id),
+                              itemBuilder: (context, i) =>
+                                  StoryCard(story: shown[i]),
+                            ),
                           ),
-                        ),
+                    const Positioned(
+                        top: 0, left: 0, right: 0, child: CategoryStrip()),
+                  ]),
                 ),
               ]);
       },
@@ -292,43 +302,36 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 }
 
-/// Horizontal chip strip above the feed (spec 2026-08-12): All + every
-/// non-hidden category, then the hide-sheet gear. Clay-black minimal: flat,
-/// square, mono; green marks the active chip.
+/// Chip strip floating above the card's IMPACT line (owner's call
+/// 2026-08-12): ONE feed, and each chip toggles its category in or out of it.
+/// All lights every chip. Clay-black minimal: flat, square, mono; green
+/// marks an enabled chip.
 class CategoryStrip extends StatelessWidget {
   const CategoryStrip({super.key});
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<Set<String>>(
-      valueListenable: hiddenCategories,
-      builder: (context, hidden, _) => ValueListenableBuilder<String?>(
-        valueListenable: selectedCategory,
-        builder: (context, sel, _) => SizedBox(
-          height: 40,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            children: [
-              _chip('All', sel == null, () => selectedCategory.value = null),
-              for (final c in feedCategories)
-                if (!hidden.contains(c))
-                  _chip(c, sel == c, () => selectedCategory.value = c),
-              IconButton(
-                icon: const Icon(Icons.tune, size: 16, color: inkDim),
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                visualDensity: VisualDensity.compact,
-                onPressed: () => _editSheet(context),
-              ),
-            ],
-          ),
+      valueListenable: enabledCategories,
+      builder: (context, enabled, _) => Container(
+        height: 30,
+        color: bg, // cards scroll beneath the floating strip
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          children: [
+            _chip('All', enabled.length == feedCategories.length,
+                enableAllCategories),
+            for (final c in feedCategories)
+              _chip(c, enabled.contains(c), () => toggleCategory(c)),
+          ],
         ),
       ),
     );
   }
 
-  Widget _chip(String label, bool active, VoidCallback onTap) => Padding(
-        padding: const EdgeInsets.only(right: 8, top: 6, bottom: 6),
+  Widget _chip(String label, bool on, VoidCallback onTap) => Padding(
+        padding: const EdgeInsets.only(right: 8, top: 3, bottom: 3),
         child: GestureDetector(
           onTap: onTap,
           child: Container(
@@ -336,54 +339,16 @@ class CategoryStrip extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: surface,
-              border: Border.all(color: active ? green : border),
+              border: Border.all(color: on ? green : border),
             ),
             child: Text(label,
                 style: mono.copyWith(
-                    fontSize: 11.5,
-                    color: active ? green : inkDim,
-                    fontWeight: active ? FontWeight.w700 : FontWeight.w400)),
+                    fontSize: 10.5,
+                    color: on ? green : inkDim,
+                    fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
           ),
         ),
       );
-
-  void _editSheet(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: surface,
-      shape: const RoundedRectangleBorder(), // square corners, clay-black
-      builder: (_) => ValueListenableBuilder<Set<String>>(
-        valueListenable: hiddenCategories,
-        builder: (context, hidden, _) => SafeArea(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-              child: Row(children: [
-                Text('YOUR FEED',
-                    style: mono.copyWith(
-                        fontSize: 12, fontWeight: FontWeight.w700)),
-                const Spacer(),
-                Text('${feedCategories.length - hidden.length} of '
-                    '${feedCategories.length} on',
-                    style: mono.copyWith(fontSize: 11)),
-              ]),
-            ),
-            for (final c in feedCategories)
-              SwitchListTile(
-                dense: true,
-                activeTrackColor: green.withValues(alpha: 0.4),
-                title: Text(c,
-                    style: TextStyle(
-                        fontSize: 14,
-                        color: hidden.contains(c) ? inkDim : ink)),
-                value: !hidden.contains(c),
-                onChanged: (on) => setCategoryHidden(c, !on),
-              ),
-          ]),
-        ),
-      ),
-    );
-  }
 }
 
 class StoryCard extends ConsumerStatefulWidget {
