@@ -258,33 +258,38 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
         }
         final shown = visibleStories(list, enabledCategories.value);
+        // The body paints edge-to-edge on Android, so top:0 is under the
+        // clock. The strip sits just below the system inset and the cards
+        // start below the strip — no overlap on any device.
+        final inset = MediaQuery.of(context).padding.top;
         return list.isEmpty
             ? const Center(child: Text('No stories yet — check back soon'))
             : Column(children: [
                 if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
                 Expanded(
-                  // The strip floats in the quiet zone above the card's
-                  // IMPACT line (card margin 12 + padding 24) instead of
-                  // costing the feed a row of its own.
                   child: Stack(children: [
-                    shown.isEmpty
-                        ? const Center(
-                            child:
-                                Text('Nothing enabled — tap All up top'))
-                        : RefreshIndicator(
-                            onRefresh: () =>
-                                ref.refresh(storiesProvider.future),
-                            child: PageView.builder(
-                              controller: _pc,
-                              scrollDirection: Axis.vertical,
-                              itemCount: shown.length,
-                              onPageChanged: (i) => _logView(shown[i].id),
-                              itemBuilder: (context, i) =>
-                                  StoryCard(story: shown[i]),
+                    Padding(
+                      padding: EdgeInsets.only(top: inset + 30),
+                      child: shown.isEmpty
+                          ? const Center(
+                              child:
+                                  Text('Nothing enabled — tap All up top'))
+                          : RefreshIndicator(
+                              onRefresh: () =>
+                                  ref.refresh(storiesProvider.future),
+                              child: PageView.builder(
+                                controller: _pc,
+                                scrollDirection: Axis.vertical,
+                                itemCount: shown.length,
+                                onPageChanged: (i) => _logView(shown[i].id),
+                                itemBuilder: (context, i) =>
+                                    StoryCard(story: shown[i]),
+                              ),
                             ),
-                          ),
-                    const Positioned(
-                        top: 0, left: 0, right: 0, child: CategoryStrip()),
+                    ),
+                    Positioned(
+                        top: inset, left: 0, right: 0,
+                        child: const CategoryStrip()),
                   ]),
                 ),
               ]);
