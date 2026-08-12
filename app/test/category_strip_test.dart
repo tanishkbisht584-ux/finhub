@@ -1,20 +1,22 @@
-// Feed category chips (owner's call 2026-08-12): ONE feed to scroll; each
-// chip toggles its category in or out of it, All lights everything, choices
-// persist on-device, and a notification tap must never land behind a filter.
+// Feed filters (owner's calls 2026-08-12): ONE feed; a round tune tile at
+// top right (share-palette style) opens the panel; categories toggle in/out,
+// a minimum-impact dial narrows further; choices persist on-device; a
+// notification tap must never land behind any filter.
 import 'package:finswipe/models.dart';
 import 'package:finswipe/screens/feed.dart'
-    show CategoryStrip, visibleStories, feedCategories, enabledCategories,
-         pendingStory, toggleCategory, enableAllCategories, resetFilterForAlert;
+    show FeedFilterButton, visibleStories, feedCategories, enabledCategories,
+         minImpact, setMinImpact, pendingStory, toggleCategory,
+         enableAllCategories, resetFilterForAlert, filtersActive;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-Story _s(int id, String? cat) => Story.fromJson({
+Story _s(int id, String? cat, {int? impact}) => Story.fromJson({
       'id': id,
       'headline': 'Headline $id',
       'hook': 'Hook $id',
       'summary': 'S.',
-      'impact_score': 6,
+      'impact_score': impact,
       'source_name': 'ET',
       'source_url': 'https://e.co/$id',
       'category': cat,
@@ -25,58 +27,62 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     enabledCategories.value = {...feedCategories};
+    minImpact.value = 0;
     pendingStory.value = null;
   });
 
-  test('visibleStories: one feed composed of the enabled categories', () {
-    final list = [_s(1, 'Markets'), _s(2, 'IPO'), _s(3, 'Policy'), _s(4, null)];
-    // everything enabled: all show, null category included
-    expect(visibleStories(list, {...feedCategories}).map((s) => s.id),
+  test('visibleStories: categories compose the feed, min impact narrows it',
+      () {
+    final list = [
+      _s(1, 'Markets', impact: 9),
+      _s(2, 'IPO', impact: 5),
+      _s(3, 'Policy', impact: 7),
+      _s(4, null), // null category AND null score
+    ];
+    expect(visibleStories(list, {...feedCategories}, 0).map((s) => s.id),
         [1, 2, 3, 4]);
-    // subtract IPO: it leaves the ONE feed; null category hides too, because
-    // an unlabeled story can't prove it belongs to what's left
     final minusIpo = {...feedCategories}..remove('IPO');
-    expect(visibleStories(list, minusIpo).map((s) => s.id), [1, 3]);
-    // down to a single category
-    expect(visibleStories(list, const {'Policy'}).map((s) => s.id), [3]);
-    expect(visibleStories(list, const {}), isEmpty);
+    expect(visibleStories(list, minusIpo, 0).map((s) => s.id), [1, 3]);
+    // impact dial: null score counts as 0 and drops out
+    expect(visibleStories(list, {...feedCategories}, 6).map((s) => s.id),
+        [1, 3]);
+    expect(visibleStories(list, {...feedCategories}, 8).map((s) => s.id), [1]);
+    // both dials together
+    expect(visibleStories(list, minusIpo, 8).map((s) => s.id), [1]);
   });
 
-  test('toggle subtracts and re-adds; choices persist; All restores', () async {
+  test('choices persist; reset opens everything back up', () async {
     await toggleCategory('IPO');
-    expect(enabledCategories.value, isNot(contains('IPO')));
+    await setMinImpact(6);
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getStringList('feed_categories_v1'), isNot(contains('IPO')));
-    await toggleCategory('IPO');
-    expect(enabledCategories.value, contains('IPO'));
-    await toggleCategory('Policy');
+    expect(prefs.getInt('feed_min_impact_v1'), 6);
+    expect(filtersActive(), isTrue);
+    resetFilterForAlert();
+    expect(enabledCategories.value, {...feedCategories});
+    expect(minImpact.value, 0);
+    expect(filtersActive(), isFalse);
     await enableAllCategories();
     expect(enabledCategories.value, {...feedCategories});
   });
 
-  test('a notification tap opens the feed back up', () {
-    enabledCategories.value = const {'Markets'};
-    resetFilterForAlert();
-    expect(enabledCategories.value, {...feedCategories});
-  });
-
-  testWidgets('chips render, tapping toggles membership, All relights',
-      (tester) async {
-    // 9 chips need ~1000 logical px; the ListView only mounts what fits.
-    tester.view.physicalSize = const Size(1400, 600);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
+  testWidgets('tune tile opens the panel; pills toggle live', (tester) async {
     await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(body: CategoryStrip())));
-    expect(find.text('All'), findsOneWidget);
-    for (final c in feedCategories) {
-      expect(find.text(c), findsOneWidget);
-    }
+        home: Scaffold(body: Center(child: FeedFilterButton()))));
+    expect(find.byIcon(Icons.tune), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('YOUR FEED'), findsOneWidget);
+    expect(find.text('MIN IMPACT'), findsOneWidget);
     await tester.tap(find.text('IPO'));
     await tester.pump();
     expect(enabledCategories.value, isNot(contains('IPO')));
-    await tester.tap(find.text('All'));
+    await tester.tap(find.text('8+'));
     await tester.pump();
-    expect(enabledCategories.value, {...feedCategories});
+    expect(minImpact.value, 8);
+    expect(filtersActive(), isTrue);
+    await tester.tap(find.text('Reset'));
+    await tester.pump();
+    expect(filtersActive(), isFalse);
   });
 }

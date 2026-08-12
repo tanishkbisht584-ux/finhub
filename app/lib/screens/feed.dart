@@ -72,17 +72,47 @@ Future<void> enableAllCategories() async {
   await prefs.remove(_categoriesPrefsKey);
 }
 
-/// An alerted story must never be invisible because the chips exclude its
-/// category: open the feed back up.
-void resetFilterForAlert() => enabledCategories.value = {...feedCategories};
+/// Minimum impact score a card needs to stay in the feed (0 = show all).
+/// Same lifecycle as the category set: persisted, reset by alerts.
+final minImpact = ValueNotifier<int>(0);
+const _minImpactPrefsKey = 'feed_min_impact_v1';
+
+Future<void> loadMinImpact() async {
+  final prefs = await SharedPreferences.getInstance();
+  minImpact.value = prefs.getInt(_minImpactPrefsKey) ?? 0;
+}
+
+Future<void> setMinImpact(int v) async {
+  minImpact.value = v;
+  final prefs = await SharedPreferences.getInstance();
+  v == 0
+      ? await prefs.remove(_minImpactPrefsKey)
+      : await prefs.setInt(_minImpactPrefsKey, v);
+}
+
+/// An alerted story must never be invisible because a filter excludes it:
+/// open the feed back up.
+void resetFilterForAlert() {
+  enabledCategories.value = {...feedCategories};
+  minImpact.value = 0;
+}
+
+/// True when any filter is narrowing the feed — the tune button glows so a
+/// thin feed is never a mystery.
+bool filtersActive() =>
+    enabledCategories.value.length != feedCategories.length ||
+    minImpact.value > 0;
 
 /// The one feed the reader scrolls. A story with a null category (shouldn't
-/// happen for approved rows, but guard) shows only when nothing is excluded.
-List<Story> visibleStories(List<Story> list, Set<String> enabled) => [
+/// happen for approved rows, but guard) shows only when nothing is excluded;
+/// a null impact score counts as 0.
+List<Story> visibleStories(List<Story> list, Set<String> enabled, int minImp) =>
+    [
       for (final s in list)
-        if (s.category == null
-            ? enabled.length == feedCategories.length
-            : enabled.contains(s.category))
+        if ((s.category == null
+                ? enabled.length == feedCategories.length
+                : enabled.contains(s.category)) &&
+            (s.impactScore ?? 0) >= minImp)
           s
     ];
 
@@ -203,13 +233,16 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     super.initState();
     pendingStory.addListener(_rebuild);
     enabledCategories.addListener(_onFilterChanged);
+    minImpact.addListener(_onFilterChanged);
     loadEnabledCategories();
+    loadMinImpact();
   }
 
   @override
   void dispose() {
     pendingStory.removeListener(_rebuild);
     enabledCategories.removeListener(_onFilterChanged);
+    minImpact.removeListener(_onFilterChanged);
     _pc.dispose();
     super.dispose();
   }
@@ -257,10 +290,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         if (pendingStory.value != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
         }
-        final shown = visibleStories(list, enabledCategories.value);
-        // The body paints edge-to-edge on Android, so top:0 is under the
-        // clock. The strip sits just below the system inset and the cards
-        // start below the strip — no overlap on any device.
+        final shown = visibleStories(
+            list, enabledCategories.value, minImpact.value);
+        // Cards keep the full screen; the filter is one round tile at top
+        // right, below the system inset so it clears every phone's status
+        // bar and notch.
         final inset = MediaQuery.of(context).padding.top;
         return list.isEmpty
             ? const Center(child: Text('No stories yet — check back soon'))
@@ -268,28 +302,26 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                 if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
                 Expanded(
                   child: Stack(children: [
-                    Padding(
-                      padding: EdgeInsets.only(top: inset + 30),
-                      child: shown.isEmpty
-                          ? const Center(
-                              child:
-                                  Text('Nothing enabled — tap All up top'))
-                          : RefreshIndicator(
-                              onRefresh: () =>
-                                  ref.refresh(storiesProvider.future),
-                              child: PageView.builder(
-                                controller: _pc,
-                                scrollDirection: Axis.vertical,
-                                itemCount: shown.length,
-                                onPageChanged: (i) => _logView(shown[i].id),
-                                itemBuilder: (context, i) =>
-                                    StoryCard(story: shown[i]),
-                              ),
+                    shown.isEmpty
+                        ? const Center(
+                            child: Text(
+                                'Nothing matches your filters — tap the dial'))
+                        : RefreshIndicator(
+                            onRefresh: () =>
+                                ref.refresh(storiesProvider.future),
+                            child: PageView.builder(
+                              controller: _pc,
+                              scrollDirection: Axis.vertical,
+                              itemCount: shown.length,
+                              onPageChanged: (i) => _logView(shown[i].id),
+                              itemBuilder: (context, i) =>
+                                  StoryCard(story: shown[i]),
                             ),
-                    ),
+                          ),
                     Positioned(
-                        top: inset, left: 0, right: 0,
-                        child: const CategoryStrip()),
+                        top: inset + 8,
+                        right: 16,
+                        child: const FeedFilterButton()),
                   ]),
                 ),
               ]);
@@ -307,53 +339,118 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 }
 
-/// Chip strip floating above the card's IMPACT line (owner's call
-/// 2026-08-12): ONE feed, and each chip toggles its category in or out of it.
-/// All lights every chip. Clay-black minimal: flat, square, mono; green
-/// marks an enabled chip.
-class CategoryStrip extends StatelessWidget {
-  const CategoryStrip({super.key});
+/// One round tile at top right (owner's call 2026-08-12: a symbol, not an
+/// edge-to-edge strip, so it fits every phone). Same visual language as the
+/// share palette's tiles: circular, tint glow when live, mono microlabel.
+/// Glows green whenever a filter is narrowing the feed — a thin feed must
+/// never be a mystery.
+class FeedFilterButton extends StatelessWidget {
+  const FeedFilterButton({super.key});
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<Set<String>>(
       valueListenable: enabledCategories,
-      builder: (context, enabled, _) => Container(
-        height: 30,
-        color: bg, // cards scroll beneath the floating strip
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          children: [
-            _chip('All', enabled.length == feedCategories.length,
-                enableAllCategories),
-            for (final c in feedCategories)
-              _chip(c, enabled.contains(c), () => toggleCategory(c)),
-          ],
-        ),
+      builder: (context, _, __) => ValueListenableBuilder<int>(
+        valueListenable: minImpact,
+        builder: (context, _, __) {
+          final live = filtersActive();
+          return GestureDetector(
+            onTap: () => showFeedFilterSheet(context),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: live
+                    ? green.withValues(alpha: 0.18)
+                    : surface.withValues(alpha: 0.96),
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: live ? green : border, width: live ? 1.5 : 1),
+              ),
+              child:
+                  Icon(Icons.tune, size: 18, color: live ? green : inkDim),
+            ),
+          );
+        },
       ),
     );
   }
+}
 
-  Widget _chip(String label, bool on, VoidCallback onTap) => Padding(
-        padding: const EdgeInsets.only(right: 8, top: 3, bottom: 3),
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: surface,
-              border: Border.all(color: on ? green : border),
-            ),
-            child: Text(label,
-                style: mono.copyWith(
-                    fontSize: 10.5,
-                    color: on ? green : inkDim,
-                    fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
+/// The filter panel: category pills + minimum-impact tiles, dressed like the
+/// share palette (tint glow, mono labels, 140ms ease).
+void showFeedFilterSheet(BuildContext context) {
+  Widget pill(String label, bool on, Color tint, VoidCallback onTap,
+          {double fontSize = 11}) =>
+      GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: on ? tint.withValues(alpha: 0.18) : surface,
+            border:
+                Border.all(color: on ? tint : border, width: on ? 1.5 : 1),
           ),
+          child: Text(label,
+              style: mono.copyWith(
+                  fontSize: fontSize,
+                  color: on ? tint : inkDim,
+                  fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
         ),
       );
+
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: bg,
+    shape: const RoundedRectangleBorder(), // square corners, clay-black
+    builder: (_) => ValueListenableBuilder<Set<String>>(
+      valueListenable: enabledCategories,
+      builder: (context, enabled, _) => ValueListenableBuilder<int>(
+        valueListenable: minImpact,
+        builder: (context, minImp, _) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+            child:
+                Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
+                    CrossAxisAlignment.start, children: [
+              Row(children: [
+                Text('YOUR FEED',
+                    style: mono.copyWith(
+                        fontSize: 12, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                pill('Reset', filtersActive(), green, resetFilterForAlert,
+                    fontSize: 10),
+              ]),
+              const SizedBox(height: 14),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                pill('All', enabled.length == feedCategories.length, green,
+                    enableAllCategories),
+                for (final c in feedCategories)
+                  pill(c, enabled.contains(c), green,
+                      () => toggleCategory(c)),
+              ]),
+              const SizedBox(height: 18),
+              Text('MIN IMPACT',
+                  style: mono.copyWith(
+                      fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 10),
+              Wrap(spacing: 8, children: [
+                pill('ANY', minImp == 0, green, () => setMinImpact(0)),
+                pill('4+', minImp == 4, amber, () => setMinImpact(4)),
+                pill('6+', minImp == 6, amber, () => setMinImpact(6)),
+                // 8+ burns ember, same as the card's IMPACT line
+                pill('8+', minImp == 8, red, () => setMinImpact(8)),
+              ]),
+            ]),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class StoryCard extends ConsumerStatefulWidget {
