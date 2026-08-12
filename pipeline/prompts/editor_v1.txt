@@ -9,7 +9,22 @@ Judge them RELATIVE TO EACH OTHER (per-story scoring judged each in isolation):
 - Name the single most important story right now (null if nothing stands out).
 
 The signals (cluster_size, authority) are facts — use them, never re-derive them.
-Return ONLY JSON: {{"relevel": [{{"id": <int>, "score": <1-10>}}], "top_story_id": <int or null>}}
+
+Also list same-EVENT pairs the clustering missed: two lines that retell the one
+event in different words ("chairman resigns" / "leadership uncertainty at group").
+Rules for merge:
+- Same event only. An event and the market's REACTION to it ("X resigns" vs
+  "shares fall after X resigns") are DIFFERENT stories — never merge across
+  those two groups. But retellings WITHIN a group are one story and must
+  merge: "shares fall 4%" / "stocks decline" / "shares drop" after the same
+  event are one story; "X resigns" / "X steps down" / "leadership uncertainty
+  after X quits" are one story.
+- Pair format [keep_id, duplicate_id]: keep the better telling (higher
+  authority, more precise headline); the duplicate leaves the feed.
+- When unsure, do not merge. A missed duplicate is two cards; a wrong merge
+  silently kills a real story.
+
+Return ONLY JSON: {{"relevel": [{{"id": <int>, "score": <1-10>}}], "top_story_id": <int or null>, "merge": [[<keep_id>, <duplicate_id>]]}}
 
 Digest:
 {digest}

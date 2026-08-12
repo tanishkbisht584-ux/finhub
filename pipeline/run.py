@@ -885,6 +885,21 @@ def chief_editor(editor_pass):
     for rl in out["relevel"]:
         if rl["id"] in ids:
             sb("PATCH", f"stories?id=eq.{rl['id']}", json={"impact_score": rl["score"]})
+    # Same-event merges the clustering missed (spec §5). Seen live 2026-08-12:
+    # 'Chandrasekaran resigns' ran as 6 approved cards because every outlet
+    # rephrased it and token overlap can't see synonyms. The duplicate joins
+    # the keeper's CLUSTER (its outlet keeps its credit on the card) and its
+    # status leaves the feed. Both ids must come from the digest we actually
+    # showed the editor — a hallucinated id must never touch a row.
+    cluster_of_id = {r["id"]: r["cluster_id"] for r in rows}
+    merged = 0
+    for keep, dup in out.get("merge", []):
+        if keep in ids and dup in ids:
+            sb("PATCH", f"stories?id=eq.{dup}",
+               json={"status": "duplicate", "cluster_id": cluster_of_id[keep]})
+            merged += 1
+    if merged:
+        print(f"EDITOR MERGE: {merged} same-event card(s) folded into their cluster")
     if out["top_story_id"] in ids:
         # one featured at a time — stale pins were freezing the feed's top
         sb("PATCH", "stories?is_featured=eq.true", json={"is_featured": False})

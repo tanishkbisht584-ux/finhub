@@ -316,7 +316,8 @@ def _gemini(prompt):
 
 def editor_pass(digest):
     """Chief Editor (spec §5): one comparative call per run over a compact digest.
-    Returns {"relevel": [{"id", "score"}], "top_story_id"} or None on any failure —
+    Returns {"relevel": [{"id", "score"}], "top_story_id", "merge": [[keep, dup]]}
+    or None on any failure —
     the editor is advisory; a bad call must never block the run."""
     try:
         out = json.loads(_gemini(EDITOR_PROMPT.format(digest=digest)))
@@ -324,7 +325,13 @@ def editor_pass(digest):
                     if isinstance(r.get("id"), int) and isinstance(r.get("score"), int)
                     and 1 <= r["score"] <= 10]
         top = out.get("top_story_id")
-        return {"relevel": relevels, "top_story_id": top if isinstance(top, int) else None}
+        # Same-event pairs the clustering missed (spec §5): [keep, duplicate].
+        # Validated hard — a malformed pair must never demote a story.
+        merges = [p for p in (out.get("merge") or [])
+                  if isinstance(p, list) and len(p) == 2
+                  and all(isinstance(i, int) for i in p) and p[0] != p[1]]
+        return {"relevel": relevels, "merge": merges,
+                "top_story_id": top if isinstance(top, int) else None}
     except (AIError, ValueError, KeyError, json.JSONDecodeError,
             requests.RequestException) as e:
         # Advisory pass: never break the run — but never fail silently either.

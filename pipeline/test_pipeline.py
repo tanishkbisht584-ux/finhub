@@ -784,3 +784,58 @@ def test_gnews_card_borrows_cluster_siblings_article_url():
     # gnews card, no sibling: nothing to fetch
     assert article_url_for_image(
         "https://news.google.com/rss/articles/CBMiabc", "c9", alt) is None
+
+
+def test_editor_pass_parses_and_validates_merge_pairs(monkeypatch):
+    """2026-08-12: 'Chandrasekaran resigns' ran as 6 separate approved cards —
+    word-overlap clustering cannot see that 'Leadership Uncertainty' retells
+    'resigns'. Spec §5 always said the editor flags same-event pairs the
+    clustering missed; editor_pass must surface them, validated."""
+    import ai, json as _json
+    monkeypatch.setattr(ai, "_gemini", lambda prompt: _json.dumps({
+        "relevel": [], "top_story_id": None,
+        "merge": [[14548, 14540], [14548, "junk"], [7, 7], [14507]]}))
+    out = ai.editor_pass("digest")
+    # only the well-formed pair survives: ints, distinct, both present
+    assert out["merge"] == [[14548, 14540]]
+
+
+def test_editor_pass_merge_null_and_missing_are_empty(monkeypatch):
+    import ai, json as _json
+    monkeypatch.setattr(ai, "_gemini", lambda p: _json.dumps(
+        {"relevel": [], "top_story_id": None, "merge": None}))
+    assert ai.editor_pass("d")["merge"] == []
+    monkeypatch.setattr(ai, "_gemini", lambda p: _json.dumps(
+        {"relevel": [], "top_story_id": None}))
+    assert ai.editor_pass("d")["merge"] == []
+
+
+def test_chief_editor_applies_merges_within_digest_only(monkeypatch):
+    """The duplicate joins the keeper's cluster (so its outlet still gets
+    credit on the card) and leaves the feed. Ids the digest never showed the
+    editor must be ignored — hallucinated ids must not touch rows."""
+    import run
+    rows = [
+        {"id": 1, "headline": "Tata Sons chairman resigns", "impact_score": 8,
+         "category": "Corporate", "cluster_id": "keep-c", "source_name": "Mint"},
+        {"id": 2, "headline": "Tata Group faces leadership uncertainty",
+         "impact_score": 7, "category": "Corporate", "cluster_id": "dup-c",
+         "source_name": "ET"},
+    ]
+    patches = []
+    def fake_sb(method, path, **kw):
+        if method == "GET" and path.startswith("stories"):
+            return rows
+        if method == "GET" and path.startswith("sources"):
+            return []
+        if method == "PATCH":
+            patches.append((path, kw.get("json")))
+            return []
+        return []
+    monkeypatch.setattr(run, "sb", fake_sb)
+    releveled = run.chief_editor(lambda digest: {
+        "relevel": [], "top_story_id": None,
+        "merge": [[1, 2], [1, 999]]})   # 999 hallucinated -> ignored
+    assert releveled == 0
+    assert patches == [("stories?id=eq.2",
+                        {"status": "duplicate", "cluster_id": "keep-c"})]
