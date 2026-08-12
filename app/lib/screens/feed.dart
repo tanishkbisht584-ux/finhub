@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -35,6 +36,50 @@ bool jumpToStory(PageController pc, List<Story> list, int id) {
   if (pc.hasClients) pc.jumpToPage(i);
   return true;
 }
+
+/// The pipeline's fixed 8 (ai.py CATEGORIES). Strip order is fixed, not
+/// data-driven — a stable strip beats one that jumps as stories churn.
+const feedCategories = [
+  'Markets', 'Economy', 'IPO', 'Corporate', 'Policy', 'Global',
+  'Commodities', 'Geopolitics',
+];
+
+/// Session-only chip selection (null = All): it's a filter, not a setting.
+final selectedCategory = ValueNotifier<String?>(null);
+
+/// Categories the user switched off — hidden everywhere, All included.
+/// Persisted on-device; loaded once at FeedScreen init.
+final hiddenCategories = ValueNotifier<Set<String>>(const {});
+const _hiddenPrefsKey = 'hidden_categories_v1';
+
+Future<void> loadHiddenCategories() async {
+  final prefs = await SharedPreferences.getInstance();
+  hiddenCategories.value =
+      (prefs.getStringList(_hiddenPrefsKey) ?? const []).toSet();
+}
+
+Future<void> setCategoryHidden(String cat, bool hidden) async {
+  final next = {...hiddenCategories.value};
+  hidden ? next.add(cat) : next.remove(cat);
+  hiddenCategories.value = next;
+  // Hiding what you're looking at must not leave you on an empty feed.
+  if (hidden && selectedCategory.value == cat) selectedCategory.value = null;
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setStringList(_hiddenPrefsKey, next.toList()..sort());
+}
+
+/// An alerted story must never be invisible because of a chip.
+void resetFilterForAlert() => selectedCategory.value = null;
+
+/// The feed the reader actually sees. A null-category story (shouldn't happen
+/// for approved rows, but guard) shows under All only.
+List<Story> visibleStories(List<Story> list, Set<String> hidden, String? sel) =>
+    [
+      for (final s in list)
+        if (!hidden.contains(s.category) &&
+            (sel == null || s.category == sel))
+          s
+    ];
 
 final storiesProvider = FutureProvider<List<Story>>((ref) async {
   // Feed ranking: the single current featured story pinned, then newest
@@ -152,13 +197,24 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   void initState() {
     super.initState();
     pendingStory.addListener(_rebuild);
+    selectedCategory.addListener(_onFilterChanged);
+    hiddenCategories.addListener(_onFilterChanged);
+    loadHiddenCategories();
   }
 
   @override
   void dispose() {
     pendingStory.removeListener(_rebuild);
+    selectedCategory.removeListener(_onFilterChanged);
+    hiddenCategories.removeListener(_onFilterChanged);
     _pc.dispose();
     super.dispose();
+  }
+
+  /// A different filter is a different feed: start it from its top card.
+  void _onFilterChanged() {
+    if (_pc.hasClients) _pc.jumpToPage(0);
+    _rebuild();
   }
 
   /// An alert tapped while the feed is already on screen changes nothing the
@@ -173,11 +229,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final id = pendingStory.value;
     if (id == null || !mounted) return;
     pendingStory.value = null;
-    if (jumpToStory(_pc, list, id)) return;
-    // Aged past the feed's 48h window, unapproved since the alert went out, or
-    // we are serving the offline cache. One card beats the wrong card.
-    Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => StoryDetailScreen(storyId: id)));
+    // The alerted story must never be invisible because of a chip — reset the
+    // filter, then jump AFTER the frame that rebuilds the unfiltered PageView
+    // (jumping now would index into the still-filtered list).
+    resetFilterForAlert();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (jumpToStory(_pc, list, id)) return;
+      // Aged past the feed's 48h window, unapproved since the alert went out,
+      // or we are serving the offline cache. One card beats the wrong card.
+      Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => StoryDetailScreen(storyId: id)));
+    });
   }
 
   @override
@@ -191,21 +254,28 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         if (pendingStory.value != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
         }
+        final shown = visibleStories(
+            list, hiddenCategories.value, selectedCategory.value);
         return list.isEmpty
             ? const Center(child: Text('No stories yet — check back soon'))
             : Column(children: [
                 if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
+                const CategoryStrip(),
                 Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: () => ref.refresh(storiesProvider.future),
-                    child: PageView.builder(
-                      controller: _pc,
-                      scrollDirection: Axis.vertical,
-                      itemCount: list.length,
-                      onPageChanged: (i) => _logView(list[i].id),
-                      itemBuilder: (context, i) => StoryCard(story: list[i]),
-                    ),
-                  ),
+                  child: shown.isEmpty
+                      ? const Center(
+                          child: Text('Nothing here right now — try All'))
+                      : RefreshIndicator(
+                          onRefresh: () => ref.refresh(storiesProvider.future),
+                          child: PageView.builder(
+                            controller: _pc,
+                            scrollDirection: Axis.vertical,
+                            itemCount: shown.length,
+                            onPageChanged: (i) => _logView(shown[i].id),
+                            itemBuilder: (context, i) =>
+                                StoryCard(story: shown[i]),
+                          ),
+                        ),
                 ),
               ]);
       },
@@ -219,6 +289,100 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         .from('events')
         .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'})
         .then((_) {}, onError: (_) {});
+  }
+}
+
+/// Horizontal chip strip above the feed (spec 2026-08-12): All + every
+/// non-hidden category, then the hide-sheet gear. Clay-black minimal: flat,
+/// square, mono; green marks the active chip.
+class CategoryStrip extends StatelessWidget {
+  const CategoryStrip({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: hiddenCategories,
+      builder: (context, hidden, _) => ValueListenableBuilder<String?>(
+        valueListenable: selectedCategory,
+        builder: (context, sel, _) => SizedBox(
+          height: 40,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            children: [
+              _chip('All', sel == null, () => selectedCategory.value = null),
+              for (final c in feedCategories)
+                if (!hidden.contains(c))
+                  _chip(c, sel == c, () => selectedCategory.value = c),
+              IconButton(
+                icon: const Icon(Icons.tune, size: 16, color: inkDim),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _editSheet(context),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(String label, bool active, VoidCallback onTap) => Padding(
+        padding: const EdgeInsets.only(right: 8, top: 6, bottom: 6),
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: surface,
+              border: Border.all(color: active ? green : border),
+            ),
+            child: Text(label,
+                style: mono.copyWith(
+                    fontSize: 11.5,
+                    color: active ? green : inkDim,
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w400)),
+          ),
+        ),
+      );
+
+  void _editSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: surface,
+      shape: const RoundedRectangleBorder(), // square corners, clay-black
+      builder: (_) => ValueListenableBuilder<Set<String>>(
+        valueListenable: hiddenCategories,
+        builder: (context, hidden, _) => SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Row(children: [
+                Text('YOUR FEED',
+                    style: mono.copyWith(
+                        fontSize: 12, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                Text('${feedCategories.length - hidden.length} of '
+                    '${feedCategories.length} on',
+                    style: mono.copyWith(fontSize: 11)),
+              ]),
+            ),
+            for (final c in feedCategories)
+              SwitchListTile(
+                dense: true,
+                activeTrackColor: green.withValues(alpha: 0.4),
+                title: Text(c,
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: hidden.contains(c) ? inkDim : ink)),
+                value: !hidden.contains(c),
+                onChanged: (on) => setCategoryHidden(c, !on),
+              ),
+          ]),
+        ),
+      ),
+    );
   }
 }
 
