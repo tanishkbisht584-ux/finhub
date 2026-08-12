@@ -27,7 +27,10 @@ AI_PHASE_SECONDS = int(os.environ.get("AI_PHASE_SECONDS", "300"))  # leave room 
 # keys x 3 models (12000 exact, from x-ratelimit headers). 16000 leaves the
 # Gemini estimate a wide error margin and ~4000/day spare for runtime Q&A (M5).
 DAILY_AI_BUDGET = int(os.environ.get("DAILY_AI_BUDGET", "16000"))
-AUTO_APPROVE_MINUTES = 5    # unreviewed score < 8 goes live after this (owner's call)
+AUTO_APPROVE_MINUTES = 2    # unreviewed score < 8 goes live after this (owner's
+                            # call 2026-08-12: ordinary news visible within ~5
+                            # min of announcement; rejecting later still pulls
+                            # a card from the feed instantly)
 FAST_LANE_SCORE = 8         # >= this publishes on arrival, no approval wait
 BREAKING_MINUTES = 15       # younger than this jumps the AI queue entirely
 SILENT_SOURCE_DAYS = 3      # fetches fine but publishes nothing -> retire it
@@ -140,11 +143,15 @@ def title_tokens(title):
 # AI budget is ~500 calls/day/model; spending it on grey-market-premium updates
 # is what starved the real news. These are stored 'rejected' (visible in admin),
 # never silently dropped, and never sent to the AI.
+# Owner's junk definition (2026-08-12): junk = NOT financial. Market listicles
+# ("stocks to watch", "top gainers") are real content — the AI reads and
+# scores them now. Only repetitive status spam stays pattern-filtered: the
+# same GMP/allotment counter reposted forty times a day is a ticker, not news.
+# Non-financial junk (Bollywood, lifestyle) is the AI's call, never a keyword
+# match — "Zee Entertainment" is a listed company.
 LOW_VALUE = re.compile(
     r"grey market premium|\bGMP\b|subscription status|allotment status"
-    r"|IPO day \d|day \d+ of (?:bidding|subscription)"
-    r"|top (?:gainers|losers)|multibagger|penny stock"
-    r"|stocks? to (?:watch|buy)|trade spotlight|f&o ban", re.I)
+    r"|IPO day \d|day \d+ of (?:bidding|subscription)", re.I)
 
 
 def age_minutes(item, now=None):

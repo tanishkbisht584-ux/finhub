@@ -860,3 +860,17 @@ def test_dupe_image_promotes_to_imageless_card(monkeypatch):
     assert patches == [("stories?id=eq.42",
                         {"image_url": "https://cdn.x.com/photo.jpg"})]
     assert run.promote_dupe_images({}) == 0     # nothing to do, no queries
+
+
+def test_low_value_is_status_spam_only():
+    """Owner's junk definition (2026-08-12): junk = not financial. Listicles
+    are content now; only repetitive status counters stay pattern-filtered."""
+    from run import LOW_VALUE
+    # still filtered: the same counter reposted all day
+    assert LOW_VALUE.search("Tata Capital IPO GMP today: grey market premium at 5%")
+    assert LOW_VALUE.search("XYZ IPO day 3 subscription status")
+    # content now: the AI reads and scores these
+    assert not LOW_VALUE.search("Stocks to watch: Tata Motors, HAL, IRCTC")
+    assert not LOW_VALUE.search("Top gainers and losers today")
+    assert not LOW_VALUE.search("Multibagger alert: this smallcap tripled")
+    assert not LOW_VALUE.search("F&O ban list for August 13")
