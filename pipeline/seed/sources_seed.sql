@@ -92,3 +92,17 @@ insert into sources (name, type, feed_url, authority) values
   ('Moneycontrol Video', 'youtube', 'https://www.youtube.com/feeds/videos.xml?channel_id=UChftTVI0QJmyXkajQYt2tiQ', 7),
   ('Zee Business Video', 'youtube', 'https://www.youtube.com/feeds/videos.xml?channel_id=UCkXopQ3ubd-rnXnStZqCl2w', 6)
 on conflict do nothing;
+
+-- Added 2026-08-12 (M9): direct feeds for outlets previously reached only via
+-- Google News site: proxies. Google's rss/articles links are JS-locked (no
+-- redirect, opaque tokens), so proxied cards can never carry the outlet's
+-- image or a direct link; these feeds fix both. All three verified live
+-- (fresh entries; CNBC/NDTV carry media_content images 10/10). Their proxies
+-- stay active as safety net — clustering + the editor merge fold the dupes.
+-- NOT replaceable (verified 2026-08-12): Moneycontrol RSS frozen since
+-- Apr 2024, Financial Express 410 Gone, Zee Business WAF 403, Reuters retired.
+insert into sources (name, type, feed_url, authority) values
+  ('Business Standard Markets', 'rss', 'https://www.business-standard.com/rss/markets-106.rss', 6),
+  ('CNBC-TV18 Markets',         'rss', 'https://www.cnbctv18.com/commonfeeds/v1/cne/rss/market.xml', 7),
+  ('NDTV Profit Latest',        'rss', 'https://feeds.feedburner.com/ndtvprofit-latest', 6)
+on conflict do nothing;
