@@ -340,6 +340,24 @@ OG_IMAGE_REV = re.compile(  # content= before property=, the other attribute ord
     r'(?:property=["\']og:image["\']|name=["\']twitter:image["\'])', re.I)
 
 
+def promote_dupe_images(images_by_cluster):
+    """PATCH each imageless card whose cluster gained an image via a duplicate.
+
+    A GNews-proxied card can never fetch its own image (Google's links are
+    JS-locked), but its direct-feed duplicate arrives carrying one — the first
+    15 direct-feed stories (2026-08-12) all filed as image-bearing dupes under
+    imageless cards. One query for all affected clusters, never per dupe."""
+    if not images_by_cluster:
+        return 0
+    cids = ",".join(f'"{c}"' for c in images_by_cluster)
+    cards = sb("GET", f"stories?select=id,cluster_id&cluster_id=in.({cids})"
+                      "&status=in.(approved,pending)&image_url=is.null")
+    for c in cards:
+        sb("PATCH", f"stories?id=eq.{c['id']}",
+           json={"image_url": images_by_cluster[c["cluster_id"]]})
+    return len(cards)
+
+
 def article_url_for_image(url, cid, alt_urls):
     """The URL worth fetching an og:image from, or None.
 
@@ -1298,17 +1316,24 @@ def main():
     # Otherwise drop the duplicate unwritten: its url stays unseen, and the next
     # run picks up the whole group together.
     held = 0
+    dupe_images = {}
     for item, cid in dupes:
         if cid not in seen_clusters and cid not in landed:
             held += 1
             continue
         try:
-            insert_story({**base_row(item, cid), "status": "duplicate"}, companies_by_key)
+            row = base_row(item, cid)
+            insert_story({**row, "status": "duplicate"}, companies_by_key)
+            if row["image_url"]:
+                dupe_images.setdefault(cid, row["image_url"])
         except requests.RequestException as e:
             print(f"DUPLICATE INSERT FAIL {item['url_hash'][:8]}: {e}")
     if held:
         print(f"{held} duplicates held back: their story was deferred, so the "
               f"whole group waits for the next run")
+    promoted = promote_dupe_images(dupe_images)
+    if promoted:
+        print(f"{promoted} imageless card(s) took a duplicate's image")
 
     if fetched_source_ids:
         ids = ",".join(str(i) for i in fetched_source_ids)

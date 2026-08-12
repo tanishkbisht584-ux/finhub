@@ -839,3 +839,24 @@ def test_chief_editor_applies_merges_within_digest_only(monkeypatch):
     assert releveled == 0
     assert patches == [("stories?id=eq.2",
                         {"status": "duplicate", "cluster_id": "keep-c"})]
+
+
+def test_dupe_image_promotes_to_imageless_card(monkeypatch):
+    """A GNews-proxied card can never fetch its own image (locked links), but
+    its direct-feed duplicate arrives carrying one — seen live 2026-08-12,
+    first 15 direct-feed stories all filed as image-bearing dupes under
+    imageless cards. The image must flow up to the card the reader sees."""
+    import run
+    patches = []
+    def fake_sb(method, path, **kw):
+        if method == "GET":
+            return [{"id": 42, "cluster_id": "c1"}]   # imageless card in c1
+        patches.append((path, kw.get("json")))
+        return []
+    monkeypatch.setattr(run, "sb", fake_sb)
+    n = run.promote_dupe_images({"c1": "https://cdn.x.com/photo.jpg",
+                                 "c2": "https://cdn.x.com/other.jpg"})
+    assert n == 1
+    assert patches == [("stories?id=eq.42",
+                        {"image_url": "https://cdn.x.com/photo.jpg"})]
+    assert run.promote_dupe_images({}) == 0     # nothing to do, no queries
