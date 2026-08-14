@@ -874,3 +874,24 @@ def test_low_value_is_status_spam_only():
     assert not LOW_VALUE.search("Top gainers and losers today")
     assert not LOW_VALUE.search("Multibagger alert: this smallcap tripled")
     assert not LOW_VALUE.search("F&O ban list for August 13")
+
+
+def test_auto_approve_ten_minute_backstop(monkeypatch):
+    """Owner's rule (2026-08-14): no relevant story waits more than 10 min.
+    The fast lane approves score>=8 at insert, but a healed flag or an editor
+    relevel re-enters pending ABOVE the auto-approve ceiling and sat there
+    forever (seen live: 2 stuck cards). Age alone now publishes."""
+    import run
+    patches = []
+    def fake_sb(method, path, **kw):
+        if method == "PATCH":
+            patches.append(path)
+        return []
+    monkeypatch.setattr(run, "sb", fake_sb)
+    run.auto_approve()
+    assert len(patches) == 2
+    # the ordinary lane: score < 8 after AUTO_APPROVE_MINUTES
+    assert "impact_score=lt.8" in patches[0]
+    # the backstop: ANY pending story after 10 minutes, no score filter
+    assert "impact_score" not in patches[1]
+    assert "status=eq.pending" in patches[1]

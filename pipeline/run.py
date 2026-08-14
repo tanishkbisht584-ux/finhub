@@ -27,6 +27,7 @@ AI_PHASE_SECONDS = int(os.environ.get("AI_PHASE_SECONDS", "300"))  # leave room 
 # keys x 3 models (12000 exact, from x-ratelimit headers). 16000 leaves the
 # Gemini estimate a wide error margin and ~4000/day spare for runtime Q&A (M5).
 DAILY_AI_BUDGET = int(os.environ.get("DAILY_AI_BUDGET", "16000"))
+PENDING_MAX_MINUTES = 10    # owner's rule 2026-08-14: NOTHING relevant waits longer
 AUTO_APPROVE_MINUTES = 2    # unreviewed score < 8 goes live after this (owner's
                             # call 2026-08-12: ordinary news visible within ~5
                             # min of announcement; rejecting later still pulls
@@ -1077,7 +1078,15 @@ def auto_approve():
     cutoff = iso(datetime.now(timezone.utc) - timedelta(minutes=AUTO_APPROVE_MINUTES))
     rows = sb("PATCH", f"stories?status=eq.pending&impact_score=lt.8&created_at=lt.{cutoff}",
               json={"status": "approved"}, headers={"Prefer": "return=representation"})
-    return len(rows or [])
+    # Owner's rule (2026-08-14): no relevant story waits more than 10 minutes,
+    # score be damned. The fast lane approves >= 8 at insert, but a healed
+    # flag or an editor relevel re-enters pending ABOVE the < 8 ceiling and
+    # sat there forever (seen live: 2 stuck cards). Age alone now publishes —
+    # pending already means the AI judged it relevant.
+    backstop = iso(datetime.now(timezone.utc) - timedelta(minutes=PENDING_MAX_MINUTES))
+    rows2 = sb("PATCH", f"stories?status=eq.pending&created_at=lt.{backstop}",
+               json={"status": "approved"}, headers={"Prefer": "return=representation"})
+    return len(rows or []) + len(rows2 or [])
 
 
 EVENTS_RETENTION_DAYS = 90   # spec M8: events grows on every swipe, forever,
