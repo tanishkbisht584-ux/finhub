@@ -4,9 +4,10 @@
 // notification tap must never land behind any filter.
 import 'package:finswipe/models.dart';
 import 'package:finswipe/screens/feed.dart'
-    show FeedFilterButton, visibleStories, feedCategories, enabledCategories,
-         minImpact, setMinImpact, pendingStory, toggleCategory,
-         enableAllCategories, resetFilterForAlert, filtersActive;
+    show FeedFilterButton, LiveButton, liveMode, visibleStories,
+         feedCategories, enabledCategories, minImpact, setMinImpact,
+         pendingStory, toggleCategory, enableAllCategories,
+         resetFilterForAlert, filtersActive;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -84,5 +85,18 @@ void main() {
     await tester.tap(find.text('Reset'));
     await tester.pump();
     expect(filtersActive(), isFalse);
+  });
+
+  testWidgets('LIVE tile toggles the mode on tap', (tester) async {
+    liveMode.value = false;
+    await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(body: Center(child: LiveButton()))));
+    expect(find.text('LIVE'), findsOneWidget);
+    await tester.tap(find.text('LIVE'));
+    await tester.pump();
+    expect(liveMode.value, isTrue);
+    await tester.tap(find.text('LIVE'));
+    await tester.pump();
+    expect(liveMode.value, isFalse);
   });
 }

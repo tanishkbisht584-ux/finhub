@@ -73,6 +73,13 @@ Future<void> enableAllCategories() async {
   await prefs.remove(_categoriesPrefsKey);
 }
 
+/// LIVE mode (owner 2026-08-14): red tile top-left. On = the feed hugs the
+/// bleeding edge — instant refresh on toggle, then a 15s fresh-poll instead
+/// of the ambient 90s. A mode, not a setting: every launch starts calm.
+final liveMode = ValueNotifier<bool>(false);
+const livePollSeconds = 15;
+const ambientPollSeconds = 90;
+
 /// Minimum impact score a card needs to stay in the feed (0 = show all).
 /// Same lifecycle as the category set: persisted, reset by alerts.
 final minImpact = ValueNotifier<int>(0);
@@ -294,12 +301,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     pendingStory.addListener(_rebuild);
     enabledCategories.addListener(_onFilterChanged);
     minImpact.addListener(_onFilterChanged);
+    liveMode.addListener(_onLiveToggle);
     loadEnabledCategories();
     loadMinImpact();
-    // Fresh arrivals slot in at the top without yanking the current card;
-    // 90s matches the pipeline's own cadence closely enough.
-    _freshTimer = Timer.periodic(
-        const Duration(seconds: 90), (_) => _pullFresh());
+    _startFreshTimer();
   }
 
   @override
@@ -308,8 +313,31 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     pendingStory.removeListener(_rebuild);
     enabledCategories.removeListener(_onFilterChanged);
     minImpact.removeListener(_onFilterChanged);
+    liveMode.removeListener(_onLiveToggle);
     _pc.dispose();
     super.dispose();
+  }
+
+  void _startFreshTimer() {
+    _freshTimer?.cancel();
+    // LIVE hugs the edge at 15s; ambient 90s matches the pipeline's cadence.
+    _freshTimer = Timer.periodic(
+        Duration(
+            seconds: liveMode.value ? livePollSeconds : ambientPollSeconds),
+        (_) => _pullFresh());
+  }
+
+  void _onLiveToggle() {
+    _startFreshTimer();
+    if (liveMode.value) {
+      // Going live re-baselines: fetch the true latest and start from the
+      // newest card. The provider's new page identity re-seeds _feed.
+      ref.invalidate(storiesProvider);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pc.hasClients) _pc.jumpToPage(0);
+      });
+    }
+    _rebuild();
   }
 
   /// Seed (or re-seed after a pull-to-refresh) from the provider's page.
@@ -469,6 +497,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                           ),
                     Positioned(
                         top: inset + 8,
+                        left: 16,
+                        child: const LiveButton()),
+                    Positioned(
+                        top: inset + 8,
                         right: 16,
                         child: const FeedFilterButton()),
                   ]),
@@ -506,6 +538,44 @@ class _EndOfFeed extends StatelessWidget {
         Text("That's the last 48 hours of market news.",
             style: mono.copyWith(fontSize: 11.5)),
       ]),
+    );
+  }
+}
+
+/// LIVE toggle, top left — the filter dial's mirror twin. Red when on (red =
+/// market-direction urgency in this app's language), calm surface when off.
+class LiveButton extends StatelessWidget {
+  const LiveButton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: liveMode,
+      builder: (context, on, _) => GestureDetector(
+        onTap: () => liveMode.value = !on,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: on
+                ? red.withValues(alpha: 0.18)
+                : surface.withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(20),
+            border:
+                Border.all(color: on ? red : border, width: on ? 1.5 : 1),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.sensors, size: 16, color: on ? red : inkDim),
+            const SizedBox(width: 5),
+            Text('LIVE',
+                style: mono.copyWith(
+                    fontSize: 10.5,
+                    color: on ? red : inkDim,
+                    fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
+          ]),
+        ),
+      ),
     );
   }
 }
