@@ -35,7 +35,21 @@ Rules:
   "keep an eye", "remains to be seen", "marks a significant", "underscores
   the importance", "monitor the situation". If the why-care sentence has no
   concrete content, drop it — four sharp sentences beat five soft ones.
-- impact.score: 9-10 only for historic/market-moving events, 7-8 major, 4-6 notable, 1-3 minor.
+- impact.score — anchor to these, not to adjectives:
+  9-10: moves the whole market TODAY — repo-rate surprise, budget day, war
+        escalation touching oil, index crash/rally >2%, top-3 conglomerate
+        leadership shock.
+  7-8:  moves a whole sector or a Nifty-50 stock hard — major policy change,
+        Nifty-50 CEO exit or fraud, US Fed/tariff decisions hitting India,
+        blockbuster results streak broken.
+  5-6:  moves one large company or clearly shifts a sector's outlook —
+        strong/weak quarterly of a well-known name, notable M&A, sector
+        regulation drafts.
+  3-4:  routine corporate news of listed names — in-line results, dividends,
+        order wins, guidance affirmations.
+  1-2:  micro-caps, procedural filings, listicles, distant-relevance items.
+  Do NOT hug the middle: a story that fits the 7-8 anchors IS a 7-8. The
+  daily fast lane and alerts depend on honest highs.
 - is_india_relevant: false for stories with no plausible effect on Indian markets or economy.
 - Entertainment, celebrity, sport, lifestyle content with NO market or economy
   angle (a film release, a cricket score, a celebrity story) is junk here:
