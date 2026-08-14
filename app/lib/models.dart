@@ -30,6 +30,9 @@ class Story {
   final String? imageUrl;
   final String? videoUrl;
 
+  /// Pagination cursor for the infinite feed — the feed is ordered on it.
+  final DateTime? publishedAt;
+
   /// Every outlet that ran this story, earliest first — so the card can credit
   /// whoever broke it rather than whichever copy the pipeline happened to
   /// process. Empty when no other outlet carried it.
@@ -56,6 +59,7 @@ class Story {
         sectors = List<String>.from(j['sectors'] ?? const []),
         imageUrl = j['image_url'],
         videoUrl = j['video_url'],
+        publishedAt = DateTime.tryParse(j['published_at'] ?? ''),
         // Attached by the feed query and carried into the offline cache, so a
         // cached card keeps its outlet list too.
         outlets = [

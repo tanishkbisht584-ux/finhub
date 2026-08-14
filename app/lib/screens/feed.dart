@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -103,6 +104,16 @@ bool filtersActive() =>
     enabledCategories.value.length != feedCategories.length ||
     minImpact.value > 0;
 
+/// Dedup-by-id merge for the infinite feed: [incoming] joins [current] at the
+/// bottom (an older page) or the top (fresh arrivals), never duplicating a
+/// card the reader already has.
+List<Story> mergeStories(List<Story> current, List<Story> incoming,
+    {bool atTop = false}) {
+  final have = {for (final s in current) s.id};
+  final fresh = [for (final s in incoming) if (!have.contains(s.id)) s];
+  return atTop ? [...fresh, ...current] : [...current, ...fresh];
+}
+
 /// The one feed the reader scrolls. A story with a null category (shouldn't
 /// happen for approved rows, but guard) shows only when nothing is excluded;
 /// a null impact score counts as 0.
@@ -147,6 +158,31 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
     return cached.map(Story.fromJson).toList();
   }
 });
+
+/// One hydrated page of the feed for the infinite scroll. [before] pages
+/// downward (older than the reader's last card); [after] picks up fresh
+/// arrivals. Same 48h window, ordering and hydration as the first page.
+Future<List<Story>> fetchFeedPage({DateTime? before, DateTime? after}) async {
+  final since = DateTime.now()
+      .toUtc()
+      .subtract(const Duration(hours: 48))
+      .toIso8601String();
+  var q = Supabase.instance.client
+      .from('stories')
+      .select()
+      .eq('status', 'approved')
+      .gte('published_at', since);
+  // lte, not lt: same-second neighbours must not fall through the crack —
+  // mergeStories dedupes the one-card overlap by id.
+  if (before != null) q = q.lte('published_at', before.toIso8601String());
+  if (after != null) q = q.gt('published_at', after.toIso8601String());
+  final rows = await q
+      .order('published_at', ascending: false)
+      .limit(after != null ? 20 : 50);
+  final hydrated =
+      await _attachCompanies(await _attachOutlets(rows.cast<Map<String, dynamic>>()));
+  return hydrated.map(Story.fromJson).toList();
+}
 
 /// Attach every outlet that carried each story, earliest first.
 ///
@@ -228,6 +264,15 @@ class FeedScreen extends ConsumerStatefulWidget {
 class _FeedScreenState extends ConsumerState<FeedScreen> {
   final _pc = PageController();
 
+  /// Infinite feed state: older pages fetched as the reader nears the
+  /// bottom, fresh arrivals collected on a timer. Both merge with the
+  /// provider's first page, deduped by id.
+  final List<Story> _older = [];
+  final List<Story> _newer = [];
+  bool _exhausted = false;
+  bool _loadingMore = false;
+  Timer? _freshTimer;
+
   @override
   void initState() {
     super.initState();
@@ -236,15 +281,86 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     minImpact.addListener(_onFilterChanged);
     loadEnabledCategories();
     loadMinImpact();
+    // Fresh arrivals slot in at the top without yanking the current card;
+    // 90s matches the pipeline's own cadence closely enough.
+    _freshTimer = Timer.periodic(
+        const Duration(seconds: 90), (_) => _pullFresh());
   }
 
   @override
   void dispose() {
+    _freshTimer?.cancel();
     pendingStory.removeListener(_rebuild);
     enabledCategories.removeListener(_onFilterChanged);
     minImpact.removeListener(_onFilterChanged);
     _pc.dispose();
     super.dispose();
+  }
+
+  List<Story> _combined(List<Story> page1) =>
+      mergeStories(mergeStories(page1, _newer, atTop: true), _older);
+
+  Future<void> _loadMore(List<Story> combined) async {
+    if (_loadingMore || _exhausted) return;
+    _loadingMore = true;
+    try {
+      DateTime? cursor;
+      for (final s in combined.reversed) {
+        if (s.publishedAt != null) {
+          cursor = s.publishedAt;
+          break;
+        }
+      }
+      if (cursor == null) return;
+      final page = await fetchFeedPage(before: cursor);
+      final merged = mergeStories(combined, page);
+      if (merged.length == combined.length) {
+        _exhausted = true; // the 48h window is drained — the feed may end
+      } else {
+        _older.addAll(merged.sublist(combined.length));
+      }
+      if (mounted) setState(() {});
+    } catch (_) {
+      // Offline mid-scroll: the reader keeps what's loaded; the next swipe
+      // near the bottom simply tries again.
+    } finally {
+      _loadingMore = false;
+    }
+  }
+
+  Future<void> _pullFresh() async {
+    if (!mounted) return;
+    final page1 = ref.read(storiesProvider).valueOrNull;
+    if (page1 == null) return;
+    final combined = _combined(page1);
+    DateTime? newest;
+    for (final s in combined) {
+      if (s.publishedAt != null) {
+        newest = s.publishedAt;
+        break;
+      }
+    }
+    if (newest == null) return;
+    try {
+      final fresh = await fetchFeedPage(after: newest);
+      if (fresh.isEmpty || !mounted) return;
+      final before = combined.length;
+      final merged = mergeStories(combined, fresh, atTop: true);
+      final added = merged.length - before;
+      if (added == 0) return;
+      _newer.insertAll(0, merged.sublist(0, added));
+      final page = _pc.hasClients ? _pc.page?.round() : null;
+      setState(() {});
+      // New cards above shift every index: silently re-aim the controller so
+      // the reader stays on the exact card they were reading.
+      if (page != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _pc.hasClients) _pc.jumpToPage(page + added);
+        });
+      }
+    } catch (_) {
+      // A missed poll is nothing; the next one runs in 90s.
+    }
   }
 
   /// A different filter is a different feed: start it from its top card.
@@ -290,8 +406,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         if (pendingStory.value != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
         }
+        final combined = _combined(list);
         final shown = visibleStories(
-            list, enabledCategories.value, minImpact.value);
+            combined, enabledCategories.value, minImpact.value);
         // Cards keep the full screen; the filter is one round tile at top
         // right, below the system inset so it clears every phone's status
         // bar and notch.
@@ -307,15 +424,31 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                             child: Text(
                                 'Nothing matches your filters — tap the dial'))
                         : RefreshIndicator(
-                            onRefresh: () =>
-                                ref.refresh(storiesProvider.future),
+                            onRefresh: () {
+                              // A refresh restarts the window: the provider
+                              // reloads the newest page and the side lists
+                              // rebuild from it.
+                              _older.clear();
+                              _newer.clear();
+                              _exhausted = false;
+                              return ref.refresh(storiesProvider.future);
+                            },
                             child: PageView.builder(
                               controller: _pc,
                               scrollDirection: Axis.vertical,
-                              itemCount: shown.length,
-                              onPageChanged: (i) => _logView(shown[i].id),
-                              itemBuilder: (context, i) =>
-                                  StoryCard(story: shown[i]),
+                              itemCount:
+                                  shown.length + (_exhausted ? 1 : 0),
+                              onPageChanged: (i) {
+                                if (i < shown.length) _logView(shown[i].id);
+                                // A few cards from the bottom: fetch the
+                                // next page before the reader gets there.
+                                if (i >= shown.length - 4) {
+                                  _loadMore(combined);
+                                }
+                              },
+                              itemBuilder: (context, i) => i < shown.length
+                                  ? StoryCard(story: shown[i])
+                                  : const _EndOfFeed(),
                             ),
                           ),
                     Positioned(
@@ -336,6 +469,28 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         .from('events')
         .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'})
         .then((_) {}, onError: (_) {});
+  }
+}
+
+/// The honest end (owner 2026-08-14): when the 48h window is drained the
+/// feed stops — no loop, no spinner theatre.
+class _EndOfFeed extends StatelessWidget {
+  const _EndOfFeed();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.done_all_rounded, size: 30, color: inkDim),
+        const SizedBox(height: 12),
+        Text("You're all caught up",
+            style:
+                serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        Text("That's the last 48 hours of market news.",
+            style: mono.copyWith(fontSize: 11.5)),
+      ]),
+    );
   }
 }
 
