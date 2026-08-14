@@ -1,7 +1,7 @@
 """FinSwipe admin — the same ledger, at desk scale (minimal mockup).
 Run: streamlit run admin/app.py  ·  Deploy: Streamlit Community Cloud (free)."""
 import hmac
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 import streamlit as st
@@ -52,7 +52,7 @@ last_run = max((s["last_fetched_at"] or "" for s in sources), default="") or Non
 st.markdown(
     f"### FinSwipe Admin · Review Queue &nbsp;&nbsp;"
     f"<span style='color:{GREEN};font-size:0.8em'>● Pipeline last ran {ago(last_run)} ago</span>&nbsp;&nbsp;"
-    f"<span style='color:{GREEN};font-size:0.8em'>● Auto-approve &lt;8 after 5 min</span>",
+    f"<span style='color:{GREEN};font-size:0.8em'>● Auto-approve &lt;8 after 2 min · everything by 10</span>",
     unsafe_allow_html=True)
 
 left, right = st.columns([2.2, 1])
@@ -117,6 +117,38 @@ with right:
     st.markdown("<br>".join(
         f"{k} <span style='float:right;font-weight:700'>{v}</span>"
         for k, v in rows), unsafe_allow_html=True)
+
+    st.markdown("---")
+    # ---------- M10: reader metrics from the events the app already logs ----
+    st.markdown("**READERS · 7 DAYS**")
+
+    def count(path):
+        r = requests.get(f"{URL}/rest/v1/{path}",
+                         headers={"apikey": KEY, "Authorization": f"Bearer {KEY}",
+                                  "Prefer": "count=exact", "Range": "0-0"},
+                         timeout=30)
+        try:
+            return int(r.headers.get("Content-Range", "/0").split("/")[-1])
+        except ValueError:
+            return 0
+
+    week = (datetime.now(timezone.utc) - timedelta(days=7)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    views = count(f"events?type=eq.view&created_at=gte.{week}")
+    saves = count(f"events?type=eq.save&created_at=gte.{week}")
+    shares = count(f"events?type=eq.share&created_at=gte.{week}")
+    opens = count(f"events?type=eq.alert_open&created_at=gte.{week}")
+    # distinct readers: events carry no PII, user ids only
+    readers = len({e["user_id"] for e in
+                   sb("GET", f"events?select=user_id&created_at=gte.{week}")})
+    mrows = [("Cards read", views),
+             ("Readers", readers),
+             ("Saved", f"{saves}" + (f" ({saves * 100 // views}%)" if views else "")),
+             ("Shared", shares),
+             ("Alert opens", opens)]
+    st.markdown("<br>".join(
+        f"{k} <span style='float:right;font-weight:700'>{v}</span>"
+        for k, v in mrows), unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("**SOURCE HEALTH**")
