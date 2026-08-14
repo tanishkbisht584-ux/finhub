@@ -64,6 +64,21 @@ def iso_days_ago(n):
     return (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def html_bars(data, color):
+    """Ledger-style bars, no chart library — st.bar_chart drags in altair,
+    which is broken on this machine's Python 3.14 (TypedDict closed=)."""
+    peak = max(data.values()) or 1
+    rows = []
+    for label, v in data.items():
+        w = max(2, v * 100 // peak)
+        rows.append(
+            f"<div style='display:flex;align-items:center;margin:3px 0'>"
+            f"<span style='width:60px;color:{DIM};font-size:0.75em'>{label}</span>"
+            f"<div style='background:{color};height:14px;width:{w}%;opacity:0.85'></div>"
+            f"<span style='margin-left:8px;font-size:0.8em;font-weight:700'>{v}</span></div>")
+    st.markdown("".join(rows), unsafe_allow_html=True)
+
+
 # ---------- header ----------
 sources = sb("GET", "sources?select=id,name,type,authority,is_active,last_fetched_at&order=name")
 last_run = max((s["last_fetched_at"] or "" for s in sources), default="") or None
@@ -172,7 +187,7 @@ with tab_metrics:
             d0, d1 = iso_days_ago(n + 1), iso_days_ago(n)
             label = (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%d %b")
             days[label] = count(f"stories?status=eq.approved&created_at=gte.{d0}&created_at=lt.{d1}")
-        st.bar_chart(days, height=200, color=GREEN)
+        html_bars(days, GREEN)
 
         st.markdown("**IMPACT MIX · TODAY**")
         today = iso_days_ago(1)
@@ -180,7 +195,7 @@ with tab_metrics:
                  "6-7": count(f"stories?status=eq.approved&impact_score=gte.6&impact_score=lte.7&created_at=gte.{today}"),
                  "4-5": count(f"stories?status=eq.approved&impact_score=gte.4&impact_score=lte.5&created_at=gte.{today}"),
                  "1-3": count(f"stories?status=eq.approved&impact_score=lte.3&created_at=gte.{today}")}
-        st.bar_chart(bands, height=180, color=RED)
+        html_bars(bands, RED)
 
     with mc2:
         st.markdown("**READERS · 7 DAYS**")
