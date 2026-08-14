@@ -105,13 +105,27 @@ bool filtersActive() =>
     minImpact.value > 0;
 
 /// Dedup-by-id merge for the infinite feed: [incoming] joins [current] at the
-/// bottom (an older page) or the top (fresh arrivals), never duplicating a
-/// card the reader already has.
+/// bottom (an older page) or the top, never duplicating a card the reader
+/// already has.
 List<Story> mergeStories(List<Story> current, List<Story> incoming,
     {bool atTop = false}) {
   final have = {for (final s in current) s.id};
   final fresh = [for (final s in incoming) if (!have.contains(s.id)) s];
   return atTop ? [...fresh, ...current] : [...current, ...fresh];
+}
+
+/// Fresh arrivals land as the reader's NEXT swipe (owner 2026-08-14: "swipe a
+/// story, recent news comes, next swipe shows the latest card"): deduped,
+/// inserted right after [anchorId] — the card currently on screen. No anchor
+/// (feed not started, card gone) falls back to the top.
+List<Story> insertFresh(List<Story> feed, List<Story> fresh, int? anchorId) {
+  final have = {for (final s in feed) s.id};
+  final add = [for (final s in fresh) if (!have.contains(s.id)) s];
+  if (add.isEmpty) return feed;
+  final at = anchorId == null
+      ? -1
+      : feed.indexWhere((s) => s.id == anchorId);
+  return [...feed.sublist(0, at + 1), ...add, ...feed.sublist(at + 1)];
 }
 
 /// The one feed the reader scrolls. A story with a null category (shouldn't
@@ -264,11 +278,12 @@ class FeedScreen extends ConsumerStatefulWidget {
 class _FeedScreenState extends ConsumerState<FeedScreen> {
   final _pc = PageController();
 
-  /// Infinite feed state: older pages fetched as the reader nears the
-  /// bottom, fresh arrivals collected on a timer. Both merge with the
-  /// provider's first page, deduped by id.
-  final List<Story> _older = [];
-  final List<Story> _newer = [];
+  /// The one owned feed list: seeded from the provider's first page, grows
+  /// at the bottom as the reader nears it, and takes fresh arrivals right
+  /// after the card on screen. Not strictly chronological once fresh cards
+  /// land mid-stream — that's the point.
+  List<Story> _feed = const [];
+  List<Story>? _page1Ref; // identity of the provider page we seeded from
   bool _exhausted = false;
   bool _loadingMore = false;
   Timer? _freshTimer;
@@ -297,27 +312,36 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     super.dispose();
   }
 
-  List<Story> _combined(List<Story> page1) =>
-      mergeStories(mergeStories(page1, _newer, atTop: true), _older);
+  /// Seed (or re-seed after a pull-to-refresh) from the provider's page.
+  List<Story> _seeded(List<Story> page1) {
+    if (!identical(page1, _page1Ref)) {
+      _page1Ref = page1;
+      _feed = [...page1];
+      _exhausted = false;
+    }
+    return _feed;
+  }
 
-  Future<void> _loadMore(List<Story> combined) async {
+  Future<void> _loadMore() async {
     if (_loadingMore || _exhausted) return;
     _loadingMore = true;
     try {
       DateTime? cursor;
-      for (final s in combined.reversed) {
-        if (s.publishedAt != null) {
+      for (final s in _feed) {
+        // oldest card anywhere in the stream — fresh mid-stream inserts mean
+        // the list isn't strictly chronological, so scan rather than peek
+        if (s.publishedAt != null &&
+            (cursor == null || s.publishedAt!.isBefore(cursor))) {
           cursor = s.publishedAt;
-          break;
         }
       }
       if (cursor == null) return;
       final page = await fetchFeedPage(before: cursor);
-      final merged = mergeStories(combined, page);
-      if (merged.length == combined.length) {
+      final merged = mergeStories(_feed, page);
+      if (merged.length == _feed.length) {
         _exhausted = true; // the 48h window is drained — the feed may end
       } else {
-        _older.addAll(merged.sublist(combined.length));
+        _feed = merged;
       }
       if (mounted) setState(() {});
     } catch (_) {
@@ -329,34 +353,31 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Future<void> _pullFresh() async {
-    if (!mounted) return;
-    final page1 = ref.read(storiesProvider).valueOrNull;
-    if (page1 == null) return;
-    final combined = _combined(page1);
+    if (!mounted || _feed.isEmpty) return;
     DateTime? newest;
-    for (final s in combined) {
-      if (s.publishedAt != null) {
+    for (final s in _feed) {
+      if (s.publishedAt != null &&
+          (newest == null || s.publishedAt!.isAfter(newest))) {
         newest = s.publishedAt;
-        break;
       }
     }
     if (newest == null) return;
     try {
       final fresh = await fetchFeedPage(after: newest);
       if (fresh.isEmpty || !mounted) return;
-      final before = combined.length;
-      final merged = mergeStories(combined, fresh, atTop: true);
-      final added = merged.length - before;
-      if (added == 0) return;
-      _newer.insertAll(0, merged.sublist(0, added));
+      // Anchor on the card being read RIGHT NOW: the fresh cards become the
+      // very next swipe, seamlessly — never a jump, never behind the reader.
+      int? anchorId;
+      final shown = visibleStories(
+          _feed, enabledCategories.value, minImpact.value);
       final page = _pc.hasClients ? _pc.page?.round() : null;
-      setState(() {});
-      // New cards above shift every index: silently re-aim the controller so
-      // the reader stays on the exact card they were reading.
-      if (page != null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _pc.hasClients) _pc.jumpToPage(page + added);
-        });
+      if (page != null && shown.isNotEmpty) {
+        anchorId = shown[page.clamp(0, shown.length - 1)].id;
+      }
+      final grown = insertFresh(_feed, fresh, anchorId);
+      if (grown.length != _feed.length) {
+        _feed = grown;
+        setState(() {});
       }
     } catch (_) {
       // A missed poll is nothing; the next one runs in 90s.
@@ -406,7 +427,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         if (pendingStory.value != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
         }
-        final combined = _combined(list);
+        final combined = _seeded(list);
         final shown = visibleStories(
             combined, enabledCategories.value, minImpact.value);
         // Cards keep the full screen; the filter is one round tile at top
@@ -424,15 +445,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                             child: Text(
                                 'Nothing matches your filters — tap the dial'))
                         : RefreshIndicator(
-                            onRefresh: () {
-                              // A refresh restarts the window: the provider
-                              // reloads the newest page and the side lists
-                              // rebuild from it.
-                              _older.clear();
-                              _newer.clear();
-                              _exhausted = false;
-                              return ref.refresh(storiesProvider.future);
-                            },
+                            onRefresh: () =>
+                                // A refresh restarts the window: _seeded
+                                // re-seeds from the provider's new page.
+                                ref.refresh(storiesProvider.future),
                             child: PageView.builder(
                               controller: _pc,
                               scrollDirection: Axis.vertical,
@@ -443,7 +459,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                                 // A few cards from the bottom: fetch the
                                 // next page before the reader gets there.
                                 if (i >= shown.length - 4) {
-                                  _loadMore(combined);
+                                  _loadMore();
                                 }
                               },
                               itemBuilder: (context, i) => i < shown.length
