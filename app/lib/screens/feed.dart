@@ -329,15 +329,29 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   void _onLiveToggle() {
     _startFreshTimer();
-    if (liveMode.value) {
-      // Going live re-baselines: fetch the true latest and start from the
-      // newest card. The provider's new page identity re-seeds _feed.
-      ref.invalidate(storiesProvider);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _pc.hasClients) _pc.jumpToPage(0);
-      });
-    }
+    // Going live re-baselines to the true latest and starts from the newest
+    // card — same deterministic path as pull-to-refresh.
+    if (liveMode.value) _manualRefresh();
     _rebuild();
+  }
+
+  bool _refreshing = false;
+
+  /// The one refresh everything shares: refetch the newest page, re-seed,
+  /// land on the newest card. Deterministic — no gesture arbitration.
+  Future<void> _manualRefresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    try {
+      final fresh = ref.refresh(storiesProvider.future);
+      await fresh;
+      if (mounted && _pc.hasClients) _pc.jumpToPage(0);
+    } catch (_) {
+      // Offline: the current cards stand; nothing to report beyond the
+      // cache banner the provider already raises.
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
   }
 
   /// Seed (or re-seed after a pull-to-refresh) from the provider's page.
@@ -472,11 +486,20 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                         ? const Center(
                             child: Text(
                                 'Nothing matches your filters — tap the dial'))
-                        : RefreshIndicator(
-                            onRefresh: () =>
-                                // A refresh restarts the window: _seeded
-                                // re-seeds from the provider's new page.
-                                ref.refresh(storiesProvider.future),
+                        : NotificationListener<OverscrollNotification>(
+                            // RefreshIndicator on a vertical PageView loses
+                            // the gesture to the page snap (seen on device:
+                            // pull did nothing). Overscroll past the first
+                            // card IS the pull — trigger the refresh
+                            // directly, no arbitration to lose.
+                            onNotification: (n) {
+                              if (n.overscroll < -6 &&
+                                  _pc.hasClients &&
+                                  (_pc.page ?? 1) < 0.5) {
+                                _manualRefresh();
+                              }
+                              return false;
+                            },
                             child: PageView.builder(
                               controller: _pc,
                               scrollDirection: Axis.vertical,
@@ -495,6 +518,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                                   : const _EndOfFeed(),
                             ),
                           ),
+                    if (_refreshing)
+                      Positioned(
+                          top: inset,
+                          left: 0,
+                          right: 0,
+                          child: const LinearProgressIndicator(
+                              minHeight: 2,
+                              color: green,
+                              backgroundColor: Colors.transparent)),
                     Positioned(
                         top: inset + 8,
                         left: 16,
@@ -1011,16 +1043,23 @@ class _StoryCardState extends ConsumerState<StoryCard>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // IMPACT 9/10 · SHORT + LONG — monospace ledger line
-            Text.rich(TextSpan(children: [
-              TextSpan(
-                  text: 'IMPACT ${story.impactScore ?? '–'}/10',
-                  style: mono.copyWith(
-                      color: impactColor(story.impactScore),
-                      fontWeight: FontWeight.w700)),
-              if (_horizon.isNotEmpty)
-                TextSpan(text: '  ·  $_horizon', style: mono),
-            ])),
+            // Clear the floating LIVE/filter tiles (feed paints edge-to-edge,
+            // so the status inset tells us how far down they reach; on the
+            // detail screen the AppBar consumes it and this collapses to 20).
+            SizedBox(height: MediaQuery.of(context).padding.top + 20),
+            // IMPACT 9/10 · SHORT + LONG — monospace ledger line, centered
+            // between the two tiles' row (owner 2026-08-14).
+            Center(
+              child: Text.rich(TextSpan(children: [
+                TextSpan(
+                    text: 'IMPACT ${story.impactScore ?? '–'}/10',
+                    style: mono.copyWith(
+                        color: impactColor(story.impactScore),
+                        fontWeight: FontWeight.w700)),
+                if (_horizon.isNotEmpty)
+                  TextSpan(text: '  ·  $_horizon', style: mono),
+              ])),
+            ),
             const SizedBox(height: 14),
             if (story.hook != null)
               Text(story.hook!,
