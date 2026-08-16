@@ -132,33 +132,50 @@ Deno.serve(async (req) => {
   // Same auth stance as qa: caller must be a signed-in user.
   const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
   const { data: userData } = await sb.auth.getUser(jwt);
-  if (!userData?.user) return new Response("unauthorized", { status: 401 });
+  const user = userData?.user;
+  if (!user) return new Response("unauthorized", { status: 401 });
 
   const body = await req.json().catch(() => ({}));
   const storyId = Number(body?.story_id);
   if (!Number.isInteger(storyId)) return new Response("story_id required", { status: 400 });
 
+  // Re-impose status='approved' explicitly (sb is service-role, bypasses RLS) —
+  // same posture as qa's search_stories RPC. Non-approved looks identical to
+  // absent so status is never leaked.
   const { data: row } = await sb.from("stories")
-    .select("id, headline, hook, summary, category, impact_score, source_url, cluster_id, deep_read")
+    .select("id, headline, hook, summary, category, impact_score, source_url, cluster_id, deep_read, status")
     .eq("id", storyId).maybeSingle();
-  if (!row) return new Response("not found", { status: 404 });
+  if (!row || row.status !== "approved") return new Response("not found", { status: 404 });
 
-  // Already generated: return the cached read, no AI call.
+  // Already generated: return the cached read, no AI call, doesn't count
+  // against the generation cap below.
   if (row.deep_read) return Response.json(row.deep_read);
+
+  // Cost guard: 50 GENERATIONS/user/day, silent (mirrors qa's abuse guard,
+  // qa/index.ts:210-217). Cached reads above are free and never reach here.
+  const midnight = new Date();
+  midnight.setUTCHours(0, 0, 0, 0);
+  const { count } = await sb.from("events")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id).eq("type", "deep_read_gen")
+    .gte("created_at", midnight.toISOString());
+  if ((count ?? 0) >= 50) return new Response("daily limit", { status: 429 });
+  await sb.from("events").insert({ user_id: user.id, type: "deep_read_gen" });
 
   let members: Member[] = [];
   if (row.cluster_id != null) {
     const { data } = await sb.from("stories")
       .select("headline, source_name, source_url")
-      .eq("cluster_id", row.cluster_id).limit(12);
+      .eq("cluster_id", row.cluster_id).neq("id", storyId).limit(12);
     members = data ?? [];
   }
 
   // Article body: the story's own URL unless it's a GNews wrapper, else the
-  // first cluster member whose URL isn't one either.
+  // first cluster member with a real, non-GNews URL (a null source_url must
+  // not short-circuit past a later member that has one).
   let articleUrl = !isGNews(row.source_url) ? row.source_url : null;
   if (!articleUrl) {
-    articleUrl = members.find((m) => !isGNews(m.source_url))?.source_url ?? null;
+    articleUrl = members.find((m) => m.source_url && !isGNews(m.source_url))?.source_url ?? null;
   }
   const articleText = articleUrl ? await fetchArticleText(articleUrl) : "";
 
