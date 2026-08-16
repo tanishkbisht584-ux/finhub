@@ -141,3 +141,28 @@ class Quote {
             if (c != null) (c as num).toDouble()
         ];
 }
+
+/// One newspaper page of a deep read (spec 2026-08-16).
+class DeepPage {
+  final String? heading;
+  final String body;
+  DeepPage(this.heading, this.body);
+}
+
+/// The AI-written whole story. Every field defaults so a refusal or a
+/// truncated payload degrades to "no pages" instead of throwing.
+class DeepRead {
+  final List<DeepPage> pages;
+  DeepRead(this.pages);
+  bool get hasContent => pages.isNotEmpty;
+
+  factory DeepRead.fromJson(Map<String, dynamic>? j) {
+    final raw = j?['pages'];
+    if (raw is! List) return DeepRead(const []);
+    return DeepRead([
+      for (final p in raw)
+        if (p is Map && (p['body'] is String) && (p['body'] as String).trim().isNotEmpty)
+          DeepPage(p['heading'] as String?, p['body'] as String)
+    ]);
+  }
+}
