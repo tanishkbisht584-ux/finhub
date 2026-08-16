@@ -1,5 +1,6 @@
 """FinSwipe admin — the same ledger, at desk scale.
 Run: admin/launch.bat  ·  Deploy: Streamlit Community Cloud (free)."""
+from html import escape
 from urllib.parse import quote
 
 import hmac
@@ -105,7 +106,7 @@ with tab_review:
     for s in pending:
         with st.container(border=True):
             st.markdown(
-                f"{impact_span(s['impact_score'])} &nbsp; **{s['headline']}**<br>"
+                f"{impact_span(s['impact_score'])} &nbsp; **{escape(s['headline'])}**<br>"
                 f"<span style='color:{DIM};font-size:0.8em'>{s['source_name']} · "
                 f"{s['category'] or '—'} · {ago(s['created_at'])} ago</span>",
                 unsafe_allow_html=True)
@@ -131,7 +132,7 @@ with tab_review:
             with st.container(border=True):
                 st.markdown(
                     f"<span style='color:{RED};font-weight:700'>Flagged</span> &nbsp; "
-                    f"{s['headline']}<br><span style='color:{DIM};font-size:0.8em'>"
+                    f"{escape(s['headline'])}<br><span style='color:{DIM};font-size:0.8em'>"
                     f"{s['source_name']} · {ago(s['created_at'])} ago</span>",
                     unsafe_allow_html=True)
                 with st.expander("Inspect error"):
@@ -159,10 +160,10 @@ with tab_stories:
         with st.container(border=True):
             star = " ⭐" if s.get("is_featured") else ""
             st.markdown(
-                f"{impact_span(s['impact_score'])} &nbsp; **{s['headline']}**{star}<br>"
+                f"{impact_span(s['impact_score'])} &nbsp; **{escape(s['headline'])}**{star}<br>"
                 f"<span style='color:{DIM};font-size:0.8em'>{s['status']} · "
                 f"{s['source_name']} · {s['category'] or '—'} · {ago(s['created_at'])} ago</span>"
-                + (f"<br><span style='font-size:0.85em'>{s['hook']}</span>" if s.get("hook") else ""),
+                + (f"<br><span style='font-size:0.85em'>{escape(s['hook'])}</span>" if s.get("hook") else ""),
                 unsafe_allow_html=True)
             c1, c2, c3, _ = st.columns([1, 1, 1, 3])
             if s["status"] != "approved":
