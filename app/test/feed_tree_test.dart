@@ -1,5 +1,5 @@
 import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show StoryCard;
+import 'package:finswipe/screens/feed.dart' show StoryCard, StoryPager;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,7 +15,10 @@ Story _s(int id) => Story.fromJson({
       'sectors': const [],
     });
 
-/// The real tree: Column > Expanded > RefreshIndicator > PageView > card.
+/// The real tree: Column > Expanded > RefreshIndicator > PageView >
+/// StoryPager (deep-read wrapper) > card. Nesting StoryPager here is what
+/// actually exercises the gesture pass-through the feed relies on — a bare
+/// StoryCard would pass even if StoryPager swallowed the gestures.
 Widget _app() => ProviderScope(
       child: MaterialApp(
         home: Scaffold(
@@ -26,7 +29,7 @@ Widget _app() => ProviderScope(
                 child: PageView.builder(
                   scrollDirection: Axis.vertical,
                   itemCount: 3,
-                  itemBuilder: (_, i) => StoryCard(story: _s(i)),
+                  itemBuilder: (_, i) => StoryPager(story: _s(i)),
                 ),
               ),
             ),

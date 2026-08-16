@@ -1493,15 +1493,20 @@ class _StoryPagerState extends State<StoryPager> {
     if (_requested || _read != null) return;
     _requested = true;
     final id = widget.story.id;
-    track('deep_read', {'story_id': id});
     try {
       final res = await Supabase.instance.client.functions
           .invoke('deepread', body: {'story_id': id});
       final read = DeepRead.fromJson(
           res.data is Map ? Map<String, dynamic>.from(res.data as Map) : null);
       // A refusal isn't cached server-side either — leave it out of the memo
-      // so a later encounter retries against a possibly-richer story.
-      if (read.hasContent) _deepReadMemo[id] = read;
+      // so a later encounter retries against a possibly-richer story. Analytics
+      // fires exactly here, tied to the memo write: once per story per
+      // session, never on a retry that only reaches a refusal, never on a
+      // memo hit (that path returns above before this is reached).
+      if (read.hasContent) {
+        _deepReadMemo[id] = read;
+        track('deep_read', {'story_id': id});
+      }
       if (mounted && widget.story.id == id) setState(() => _read = read);
     } catch (_) {
       if (mounted && widget.story.id == id) {
@@ -1526,6 +1531,8 @@ class _StoryPagerState extends State<StoryPager> {
           pageIndex: i - 1,
           impactScore: widget.story.impactScore,
           category: widget.story.category,
+          sourceUrl: widget.story.sourceUrl,
+          sourceName: widget.story.sourceName,
         );
       },
     );
@@ -1565,24 +1572,51 @@ class DeepReadPages extends StatelessWidget {
       required this.read,
       required this.pageIndex,
       this.impactScore,
-      this.category});
+      this.category,
+      this.sourceUrl,
+      this.sourceName});
   final DeepRead read;
   final int pageIndex;
   final int? impactScore;
   final String? category;
+  final String? sourceUrl;
+  final String? sourceName;
 
   @override
   Widget build(BuildContext context) {
     if (!read.hasContent) {
+      final url = sourceUrl;
       return Container(
         margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         color: surface,
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(28),
-            child: Text('Full story unavailable — read the original below.',
-                textAlign: TextAlign.center,
-                style: mono.copyWith(fontSize: 12)),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text('Full story unavailable — read the original.',
+                  textAlign: TextAlign.center,
+                  style: mono.copyWith(fontSize: 12)),
+              if (url != null && url.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                // Same "Read original ↗" idiom as the card's attribution.
+                InkWell(
+                  onTap: () => launchUrl(Uri.parse(url),
+                      mode: LaunchMode.externalApplication),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if ((sourceName ?? '').isNotEmpty) ...[
+                      Text(sourceName!,
+                          style: mono.copyWith(
+                              fontSize: 12, fontWeight: FontWeight.w700)),
+                      const SizedBox(width: 6),
+                    ],
+                    Text('Read original', style: mono.copyWith(fontSize: 12)),
+                    const SizedBox(width: 3),
+                    const Icon(Icons.north_east_rounded,
+                        size: 11, color: inkDim),
+                  ]),
+                ),
+              ],
+            ]),
           ),
         ),
       );

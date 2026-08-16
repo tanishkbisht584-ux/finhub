@@ -25,5 +25,20 @@ void main() {
         home: Scaffold(
             body: DeepReadPages(read: DeepRead(const []), pageIndex: 0))));
     expect(find.textContaining('unavailable'), findsOneWidget);
+    expect(find.textContaining('below'), findsNothing);
+  });
+
+  testWidgets('refusal fallback carries a tappable outlet link', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: DeepReadPages(
+      read: DeepRead(const []),
+      pageIndex: 0,
+      sourceUrl: 'https://example.com/story',
+      sourceName: 'Example Wire',
+    ))));
+    expect(find.text('Example Wire'), findsOneWidget);
+    expect(find.text('Read original'), findsOneWidget);
+    expect(find.byType(InkWell), findsOneWidget);
   });
 }
