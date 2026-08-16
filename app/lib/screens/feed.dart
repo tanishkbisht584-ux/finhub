@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../analytics.dart';
 import '../feed_cache.dart';
 import '../models.dart';
 import '../publishers.dart';
@@ -91,6 +92,7 @@ Future<void> loadMinImpact() async {
 }
 
 Future<void> setMinImpact(int v) async {
+  track('filter_impact', {'min': v});
   minImpact.value = v;
   final prefs = await SharedPreferences.getInstance();
   v == 0
@@ -328,6 +330,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   void _onLiveToggle() {
+    track(liveMode.value ? 'live_on' : 'live_off');
     _startFreshTimer();
     // Going live re-baselines to the true latest and starts from the newest
     // card — same deterministic path as pull-to-refresh.
@@ -549,6 +552,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         .from('events')
         .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'})
         .then((_) {}, onError: (_) {});
+    track('view', {'story_id': storyId});
   }
 }
 
@@ -797,6 +801,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
         await saves.delete().eq('user_id', user.id).eq('story_id', story.id);
       } else {
         await saves.upsert({'user_id': user.id, 'story_id': story.id});
+        track('save', {'story_id': story.id});
       }
       // The Saved tab reads its own provider; without this it kept serving the
       // list it fetched on first open and the change never appeared there.
@@ -835,6 +840,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
         .from('events')
         .insert({'user_id': uid, 'story_id': story.id, 'type': 'share'})
         .then((_) {}, onError: (_) {});
+    track('share', {'story_id': story.id});
   }
 
   Future<void> _fire(String targetId) async {

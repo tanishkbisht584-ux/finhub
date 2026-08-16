@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'analytics.dart';
 import 'screens/ask.dart';
 import 'screens/feed.dart';
 import 'screens/interests.dart';
@@ -34,6 +35,7 @@ void _openStory(RemoteMessage m) {
     Supabase.instance.client.from('events')
         .insert({'user_id': uid, 'story_id': id, 'type': 'alert_open'})
         .then((_) {}, onError: (_) {});
+    track('alert_open', {'story_id': id});
   }
   // Land in the feed itself, on that card, so the next swipe carries straight
   // on into the rest of the news. Pushing a detail screen put you in a box you
@@ -100,6 +102,7 @@ Future<void> main() async {
   } catch (_) {
     // no google-services / Play Services: app works, alerts don't arrive
   }
+  track('app_open');
   runApp(const ProviderScope(child: FinSwipeApp()));
   // App killed, opened via notification tap: navigatorKey has no live
   // NavigatorState until the first frame is up, so the push has to wait.

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../analytics.dart';
 import '../models.dart';
 import '../theme.dart';
 
@@ -51,6 +52,7 @@ Future<void> _unsave(BuildContext context, WidgetRef ref, Story s) async {
         await Supabase.instance.client
             .from('saves')
             .upsert({'user_id': uid, 'story_id': s.id});
+        track('save', {'story_id': s.id});
         ref.invalidate(savedProvider);
       },
     ),
