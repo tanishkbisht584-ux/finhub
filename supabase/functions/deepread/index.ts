@@ -153,14 +153,22 @@ Deno.serve(async (req) => {
 
   // Cost guard: 50 GENERATIONS/user/day, silent (mirrors qa's abuse guard,
   // qa/index.ts:210-217). Cached reads above are free and never reach here.
-  const midnight = new Date();
-  midnight.setUTCHours(0, 0, 0, 0);
-  const { count } = await sb.from("events")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id).eq("type", "deep_read_gen")
-    .gte("created_at", midnight.toISOString());
-  if ((count ?? 0) >= 50) return new Response("daily limit", { status: 429 });
-  await sb.from("events").insert({ user_id: user.id, type: "deep_read_gen" });
+  // Type 'deep_read' matches the app's PostHog event name and 008's CHECK
+  // constraint update. This is cost protection, not a security boundary: a
+  // failed count/insert (network blip, unexpected error) degrades to
+  // ALLOWING generation rather than blocking it — swallowed, not logged.
+  try {
+    const midnight = new Date();
+    midnight.setUTCHours(0, 0, 0, 0);
+    const { count, error } = await sb.from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id).eq("type", "deep_read")
+      .gte("created_at", midnight.toISOString());
+    if (!error && (count ?? 0) >= 50) return new Response("daily limit", { status: 429 });
+    await sb.from("events").insert({ user_id: user.id, type: "deep_read" });
+  } catch {
+    // cap check/log unavailable -> proceed rather than block generation
+  }
 
   let members: Member[] = [];
   if (row.cluster_id != null) {
