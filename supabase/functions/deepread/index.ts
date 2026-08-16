@@ -1,0 +1,194 @@
+// Deep read (spec 2026-08-16): the whole story, written once, cached forever.
+// POST {story_id} -> {"pages":[{heading,body}...]}; {"pages":[]} = refusal,
+// returned but never cached so a later open retries.
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const sb = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_KEY")!,
+);
+
+// (key, model) lanes, Groq-first; same comma-separated multi-key pattern as the
+// pipeline. Order = preference: strongest chat model across every key first.
+// Transcribed verbatim from supabase/functions/qa/index.ts.
+function lanes(): { url: string; key: string; model: string }[] {
+  const out: { url: string; key: string; model: string }[] = [];
+  const groqKeys = (Deno.env.get("GROQ_API_KEYS") ?? Deno.env.get("GROQ_API_KEY") ?? "")
+    .split(",").map((k) => k.trim()).filter(Boolean);
+  for (const model of ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"]) {
+    for (const key of groqKeys) {
+      out.push({ url: "https://api.groq.com/openai/v1/chat/completions", key, model });
+    }
+  }
+  return out;
+}
+
+async function chat(prompt: string): Promise<string | null> {
+  for (const { url, key, model } of lanes()) {
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model, temperature: 0.2,
+          response_format: { type: "json_object" },
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      if (!r.ok) continue; // 429/503/anything -> next lane
+      return (await r.json()).choices[0].message.content;
+    } catch {
+      continue; // a provider outage must never surface as a 500
+    }
+  }
+  // Gemini depth: only reached when every Groq lane is down.
+  for (
+    const key of (Deno.env.get("GEMINI_API_KEYS") ?? Deno.env.get("GEMINI_API_KEY") ?? "")
+      .split(",").map((k) => k.trim()).filter(Boolean)
+  ) {
+    try {
+      const r = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        {
+          method: "POST",
+          headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { response_mime_type: "application/json", temperature: 0.2 },
+          }),
+        },
+      );
+      if (!r.ok) continue;
+      return (await r.json()).candidates[0].content.parts[0].text;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+type Member = { headline: string; source_name: string; source_url: string | null };
+
+// Bounded, best-effort fetch of the source article's plain text. news.google.com
+// is a GNews wrapper (JS-locked, verified 2026-08-12) and must never be fetched
+// here. ANY failure (network, timeout, non-text body) degrades to "" — the
+// prompt still works from headline/hook/summary/cluster corroboration alone.
+async function fetchArticleText(url: string): Promise<string> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5000);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    const html = await r.text();
+    return html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 6000);
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isGNews(url: string | null): boolean {
+  return !!url && url.includes("news.google.com");
+}
+
+function prompt(
+  row: {
+    headline: string; hook: string | null; summary: string | null;
+    category: string | null; impact_score: number | null;
+  },
+  members: Member[],
+  articleText: string,
+): string {
+  const also = members.map((m) => `${m.headline} — ${m.source_name}`).join("\n");
+  return `You are FinSwipe's staff writer. Using ONLY the material below, write the
+whole story for a reader who knows nothing about it, in plain easy English.
+Facts only, never advice, never numbers that are not in the material.
+Structure it as 3-6 newspaper pages, each 60-120 words:
+"What happened", "Background", "Who is affected", "Why it matters",
+and "What's next" only if the material supports it.
+If the material is too thin to write honestly, return {"pages": []}.
+Return ONLY JSON: {"pages": [{"heading": "...", "body": "..."}]}
+
+HEADLINE: ${row.headline} / HOOK: ${row.hook ?? ""} / SUMMARY: ${row.summary ?? ""}
+CATEGORY: ${row.category ?? ""} IMPACT: ${row.impact_score ?? ""}/10
+ALSO REPORTED BY: ${also || "(no other sources)"}
+ARTICLE TEXT: ${articleText || "(unavailable)"}`;
+}
+
+// A fresh Response each call — Deno.serve handles concurrent requests, and a
+// Response body is a single-use stream, so a module-level constant reused
+// across requests risks "body already used" (a refusal turning into a 500).
+function refusal() {
+  return Response.json({ pages: [] });
+}
+
+Deno.serve(async (req) => {
+  // Same auth stance as qa: caller must be a signed-in user.
+  const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
+  const { data: userData } = await sb.auth.getUser(jwt);
+  if (!userData?.user) return new Response("unauthorized", { status: 401 });
+
+  const body = await req.json().catch(() => ({}));
+  const storyId = Number(body?.story_id);
+  if (!Number.isInteger(storyId)) return new Response("story_id required", { status: 400 });
+
+  const { data: row } = await sb.from("stories")
+    .select("id, headline, hook, summary, category, impact_score, source_url, cluster_id, deep_read")
+    .eq("id", storyId).maybeSingle();
+  if (!row) return new Response("not found", { status: 404 });
+
+  // Already generated: return the cached read, no AI call.
+  if (row.deep_read) return Response.json(row.deep_read);
+
+  let members: Member[] = [];
+  if (row.cluster_id != null) {
+    const { data } = await sb.from("stories")
+      .select("headline, source_name, source_url")
+      .eq("cluster_id", row.cluster_id).limit(12);
+    members = data ?? [];
+  }
+
+  // Article body: the story's own URL unless it's a GNews wrapper, else the
+  // first cluster member whose URL isn't one either.
+  let articleUrl = !isGNews(row.source_url) ? row.source_url : null;
+  if (!articleUrl) {
+    articleUrl = members.find((m) => !isGNews(m.source_url))?.source_url ?? null;
+  }
+  const articleText = articleUrl ? await fetchArticleText(articleUrl) : "";
+
+  const raw = await chat(prompt(row, members, articleText));
+  if (raw === null) return refusal(); // every lane down -> honest refusal, never a 500
+
+  let out: unknown;
+  try {
+    out = JSON.parse(raw);
+  } catch {
+    return refusal(); // bad JSON -> refusal, not cached
+  }
+
+  const rawPages = Array.isArray((out as { pages?: unknown })?.pages)
+    ? (out as { pages: unknown[] }).pages
+    : [];
+  const validated = rawPages
+    .filter((p): p is { heading?: unknown; body: string } =>
+      !!p && typeof p === "object" && typeof (p as { body?: unknown }).body === "string" &&
+      (p as { body: string }).body.trim().length > 0
+    )
+    .slice(0, 8)
+    .map((p) => ({
+      heading: typeof p.heading === "string" ? p.heading : null,
+      body: p.body,
+    }));
+
+  if (validated.length === 0) return refusal(); // refusal is never cached
+
+  const deepRead = { pages: validated };
+  await sb.from("stories").update({ deep_read: deepRead }).eq("id", storyId);
+  return Response.json(deepRead);
+});
