@@ -517,7 +517,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                                 }
                               },
                               itemBuilder: (context, i) => i < shown.length
-                                  ? StoryCard(story: shown[i])
+                                  ? StoryPager(story: shown[i])
                                   : const _EndOfFeed(),
                             ),
                           ),
@@ -1432,6 +1432,208 @@ class _Offline extends StatelessWidget {
           ]),
         ),
       );
+}
+
+/// Session memo of generated deep reads: re-encountering a card after the
+/// vertical PageView rebuilt its State is instant, no second round trip.
+final _deepReadMemo = <int, DeepRead>{};
+
+/// Page 0 is the story card; swiping LEFT reveals the AI-written whole story
+/// as newspaper pages (spec 2026-08-16). Generated on first open by the
+/// `deepread` edge function, which caches in stories.deep_read forever after —
+/// this widget always asks the function and lets it decide cache vs generate.
+/// Feed-only dress: detail/saved/stock screens keep the plain StoryCard.
+class StoryPager extends StatefulWidget {
+  const StoryPager({super.key, required this.story});
+  final Story story;
+
+  @override
+  State<StoryPager> createState() => _StoryPagerState();
+}
+
+class _StoryPagerState extends State<StoryPager> {
+  final _hpc = PageController();
+  DeepRead? _read;
+  bool _requested = false; // analytics + invoke fired for this story
+  bool _failed = false; // network failure — distinct from an AI refusal
+
+  @override
+  void initState() {
+    super.initState();
+    _read = _deepReadMemo[widget.story.id];
+    _hpc.addListener(_onScroll);
+  }
+
+  @override
+  void didUpdateWidget(StoryPager old) {
+    super.didUpdateWidget(old);
+    // The vertical PageView reuses this State across stories (same trap the
+    // media strip documents): land the new story on its card, not mid-read.
+    if (old.story.id != widget.story.id) {
+      _read = _deepReadMemo[widget.story.id];
+      _requested = false;
+      _failed = false;
+      if (_hpc.hasClients) _hpc.jumpToPage(0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _hpc.dispose();
+    super.dispose();
+  }
+
+  /// First pull past the card's edge is the "open": fire analytics once and
+  /// start writing before the page even settles.
+  void _onScroll() {
+    if ((_hpc.page ?? 0) > 0.5) _ensureRead();
+  }
+
+  Future<void> _ensureRead() async {
+    if (_requested || _read != null) return;
+    _requested = true;
+    final id = widget.story.id;
+    track('deep_read', {'story_id': id});
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('deepread', body: {'story_id': id});
+      final read = DeepRead.fromJson(
+          res.data is Map ? Map<String, dynamic>.from(res.data as Map) : null);
+      // A refusal isn't cached server-side either — leave it out of the memo
+      // so a later encounter retries against a possibly-richer story.
+      if (read.hasContent) _deepReadMemo[id] = read;
+      if (mounted && widget.story.id == id) setState(() => _read = read);
+    } catch (_) {
+      if (mounted && widget.story.id == id) {
+        _requested = false; // offline moment: the next swipe simply retries
+        setState(() => _failed = true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final read = _read;
+    final deepCount = (read?.hasContent ?? false) ? read!.pages.length : 1;
+    return PageView.builder(
+      controller: _hpc,
+      itemCount: 1 + deepCount,
+      itemBuilder: (context, i) {
+        if (i == 0) return StoryCard(story: widget.story);
+        if (read == null && !_failed) return const _WritingPage();
+        return DeepReadPages(
+          read: (read != null && read.hasContent) ? read : DeepRead(const []),
+          pageIndex: i - 1,
+          impactScore: widget.story.impactScore,
+          category: widget.story.category,
+        );
+      },
+    );
+  }
+}
+
+/// First-open state while the edge function writes the story (~2-3s once,
+/// instant from cache ever after).
+class _WritingPage extends StatelessWidget {
+  const _WritingPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      color: surface,
+      child: Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: green)),
+          const SizedBox(height: 14),
+          Text('writing your story…', style: mono.copyWith(fontSize: 11.5)),
+        ]),
+      ),
+    );
+  }
+}
+
+/// One newspaper page of a deep read: serif heading, serif body, mono
+/// metadata and page dots — the card's clay-black language in print dress.
+/// An empty [read] renders the honest fallback instead of a blank page.
+class DeepReadPages extends StatelessWidget {
+  const DeepReadPages(
+      {super.key,
+      required this.read,
+      required this.pageIndex,
+      this.impactScore,
+      this.category});
+  final DeepRead read;
+  final int pageIndex;
+  final int? impactScore;
+  final String? category;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!read.hasContent) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        color: surface,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Text('Full story unavailable — read the original below.',
+                textAlign: TextAlign.center,
+                style: mono.copyWith(fontSize: 12)),
+          ),
+        ),
+      );
+    }
+    final page = read.pages[pageIndex.clamp(0, read.pages.length - 1)];
+    final dots = [
+      for (var i = 0; i < read.pages.length; i++) i == pageIndex ? '●' : '○'
+    ].join(' ');
+    return SafeArea(
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        decoration: BoxDecoration(
+          color: surface,
+          border: const Border(left: BorderSide(color: border, width: 3)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Same clearance as the card, so the floating LIVE/filter tiles
+          // never sit on the text.
+          SizedBox(height: MediaQuery.of(context).padding.top + 20),
+          Center(
+            child: Text.rich(TextSpan(children: [
+              TextSpan(
+                  text: 'IMPACT ${impactScore ?? '–'}/10',
+                  style: mono.copyWith(
+                      color: impactColor(impactScore),
+                      fontWeight: FontWeight.w700)),
+              if (category != null)
+                TextSpan(text: '  ·  $category', style: mono),
+            ])),
+          ),
+          const SizedBox(height: 18),
+          if (page.heading != null) ...[
+            Text(page.heading!,
+                style:
+                    serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+          ],
+          Expanded(
+            child: SingleChildScrollView(
+              child: Text(page.body,
+                  style: serif.copyWith(fontSize: 16.5, height: 1.65)),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Center(child: Text(dots, style: mono.copyWith(fontSize: 10.5))),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
 }
 
 /// Quiet line marking the feed as a saved copy, so nothing on screen is
