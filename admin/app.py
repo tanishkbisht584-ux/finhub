@@ -3,6 +3,7 @@ Run: admin/launch.bat  ·  Deploy: Streamlit Community Cloud (free)."""
 from urllib.parse import quote
 
 import hmac
+import time
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -10,8 +11,10 @@ import streamlit as st
 
 st.set_page_config(page_title="FinSwipe Admin", layout="wide")
 
-if not hmac.compare_digest(st.text_input("Admin password", type="password"),
-                           st.secrets["ADMIN_PASSWORD"]):
+_pw = st.text_input("Admin password", type="password")
+if not hmac.compare_digest(_pw, st.secrets["ADMIN_PASSWORD"]):
+    if _pw:  # wrong guess (not the initial empty render): slow brute force
+        time.sleep(1)
     st.stop()
 
 URL = st.secrets["SUPABASE_URL"].rstrip("/")
