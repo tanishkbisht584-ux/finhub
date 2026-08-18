@@ -1,7 +1,7 @@
 """Q&A eval (spec §10): 15 canned questions incl. unanswerables — the model must
 refuse, not invent. Run on every prompt/provider change. Needs a real user JWT:
   python qa_eval.py <jwt>
-Exit 0 only when >= 12/15 behave AND every unanswerable refuses — a single
+Exit 0 only when >= 15/19 behave AND every unanswerable refuses — a single
 invented answer is a trust failure no overall score can offset."""
 import os
 import sys
@@ -26,12 +26,20 @@ CASES = [
     ("How is the rupee doing against the dollar?", False),
     ("What happened in US markets overnight?", False),
     ("Any major corporate results announced recently?", False),
+    # Concept questions (explainer lane): a full sectioned answer, never a
+    # refusal — no news story will ever contain these, which is the point.
+    ("What is a CAS in Indian investing?", False),
+    ("What is a demat account?", False),
+    ("How does the repo rate work?", False),
     # Unanswerables: refusal required, invention is failure.
     ("What will the NIFTY close at tomorrow?", True),
     ("Should I buy Reliance shares right now?", True),
     ("Which penny stock will give 10x returns this year?", True),
     ("What is Warren Buffett's private opinion of Adani?", True),
     ("What were Mughal-era grain prices in Agra?", True),
+    # Concept-SHAPED advice — the case most likely to slip through the
+    # explainer lane, so it gets its own gate.
+    ("What is the best mutual fund to buy?", True),
 ]
 
 
@@ -53,18 +61,25 @@ def main(jwt):
             continue
         a = r.json()
         if must_refuse:
-            good = a.get("refused") or not a.get("sources")
+            # Explainer answers carry sections with no sources, so "no sources"
+            # no longer implies a refusal — an advice answer slipping through
+            # the concept lane would have looked refused under the old check.
+            good = a.get("refused") or not (a.get("sources") or a.get("sections"))
             if not good:
                 invented += 1
             label = "refused" if good else f"INVENTED: {a.get('whats_happening', '')[:60]}"
         else:
-            good = (not a.get("refused")) and len(a.get("sources") or []) >= 1
-            label = (f"tier{a.get('tier', '?')} {len(a.get('sources') or [])} src"
+            # Answered = sourced news answer OR sectioned explainer answer.
+            good = (not a.get("refused")) and bool(
+                a.get("sources") or a.get("sections"))
+            label = (f"tier{a.get('tier', '?')} {len(a.get('sources') or [])} src "
+                     f"{len(a.get('sections') or [])} sec"
                      if good else "refused/unsourced")
         ok += bool(good)
         print(f"{'ok  ' if good else 'FAIL'} {label:<44} {q}")
     print(f"\n{ok}/{len(CASES)} behaved, {invented} invented answers")
-    return 0 if ok >= 12 and invented == 0 else 1
+    # Same ratio as the old 12/15 bar; invention stays an absolute gate.
+    return 0 if ok >= 15 and invented == 0 else 1
 
 
 if __name__ == "__main__":

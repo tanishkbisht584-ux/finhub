@@ -88,8 +88,88 @@ Sources:
 ${listing}
 
 Return JSON exactly:
-{"whats_happening": "1-2 sentences", "why": "1-2 sentences", "who_is_affected": "1-2 sentences", "what_to_watch": "1 sentence", "confidence": "high|medium|low", "cited": [1], "followups": ["question", "question"], "refused": false}
+{"whats_happening": "2-4 sentences", "why": "2-4 sentences", "who_is_affected": "2-4 sentences", "what_to_watch": "1-2 sentences", "confidence": "high|medium|low", "cited": [1], "followups": ["question", "question"], "refused": false}
 cited = source numbers you actually used. followups = 2 short related questions answerable from these sources.`;
+}
+
+// ---------- planner: one cheap call that routes the question ----------
+// Two failures shared one cause: a concept question ("what is a CAS?") can never
+// match a news archive, and a news question phrased in other words ("what did the
+// central bank decide?") missed the story that says "RBI". Classifying and
+// expanding the query up front fixes both, and lets an advice question refuse
+// before we spend a second call on it.
+type Plan = { kind: "news" | "concept" | "refuse"; terms: string[] };
+
+function plannerPrompt(question: string): string {
+  return `Classify one question from an Indian markets app, and extract search terms.
+
+The asker is an Indian retail investor typing on a phone: expect typos and
+shorthand ("wht is cas"). Interpret charitably before classifying.
+
+kind:
+  "refuse"  - investment advice, a recommendation, a prediction or a price target;
+              OR clearly not about finance, markets, banking, tax or economics;
+              OR unknowable (a private person's opinion, the future).
+  "concept" - asks what something IS or HOW it works: a term, abbreviation,
+              product, rule, process or institution. "what is X" is concept even
+              when X is unfamiliar to you - never refuse a term just because it
+              is ambiguous or misspelled.
+  "news"    - asks what happened, or why something moved.
+
+terms: 3-10 lowercase words to search a news archive with. INCLUDE synonyms and
+  expansions the question did not use itself ("central bank" -> rbi, reserve;
+  "borrowing cost" -> repo, rate, policy). Single words only, letters and digits
+  only, no phrases. Empty list when kind is "refuse".
+
+Question: ${question}
+
+Return JSON exactly: {"kind": "news", "terms": ["rbi", "repo", "rate"]}`;
+}
+
+async function plan(question: string): Promise<Plan | null> {
+  const raw = await chat(plannerPrompt(question));
+  if (raw === null) return null; // every provider down -> caller degrades
+  try {
+    const p = JSON.parse(raw);
+    return {
+      // An unrecognised kind must not silently refuse a real question — the news
+      // path is the safe default because it can only answer from sources.
+      kind: ["news", "concept", "refuse"].includes(p.kind) ? p.kind : "news",
+      // Sanitised as hard as tsQuery: these reach to_tsquery, which throws on
+      // its own syntax characters.
+      terms: (Array.isArray(p.terms) ? p.terms : [])
+        .map((t: unknown) => String(t).toLowerCase().replace(/[^a-z0-9]/g, ""))
+        .filter((t: string) => t.length > 1)
+        .slice(0, 10),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// The explainer lane. This one IS allowed to use the model's own knowledge —
+// the deliberate exception to the sourced-answer contract, because no news story
+// will ever contain "what is a Consolidated Account Statement". The hard rules
+// below are what keeps that exception honest.
+function conceptPrompt(question: string, sources: Source[]): string {
+  const listing = sources.length
+    ? `\n\nRecent stories from our feed. Mention them only if they are directly relevant:\n` +
+      sources.map((s, i) => `[${i + 1}] ${s.title}\n${s.body}`).join("\n\n")
+    : "";
+  return `You explain finance to Indian retail investors who know nothing about the topic. Explain the question fully and plainly, in as much detail as it deserves. Short sentences, no jargon without unpacking it.
+
+HARD RULES:
+- Finance, markets, banking, tax and economics ONLY. Anything else, set refused=true.
+- Never give advice, a recommendation, a prediction or a price target. A question like "what should I buy" or "which fund is best" sets refused=true even though it sounds like a concept question.
+- Do NOT state specific rates, fees, limits or thresholds as current fact — they change and your knowledge is dated. Explain how the thing works, and say the current figure should be checked with the provider or regulator.
+- The question may have typos or shorthand — answer what was clearly meant.
+- Ambiguous term or abbreviation: explain the meaning an Indian retail investor most likely wants (CAS = Consolidated Account Statement, not other expansions), and note other common meanings in one sentence at the end. NEVER invent an expansion for an abbreviation you do not actually know — a wrong confident expansion is the worst possible answer. If you genuinely do not know the term, set refused=true.
+
+Question: ${question}${listing}
+
+Return JSON exactly:
+{"sections": [{"heading": "short heading", "body": "2-5 sentences"}], "confidence": "high|medium|low", "followups": ["question", "question"], "refused": false}
+3 to 6 sections, ordered so a beginner can follow. followups = 2 short related finance questions.`;
 }
 
 // Question words that carry no search signal. websearch mode ANDs every term,
@@ -117,8 +197,11 @@ function tsQuery(question: string): string {
   return (terms.length ? terms : words).join(" | ");
 }
 
-async function tier1(question: string): Promise<Source[]> {
-  const tsq = tsQuery(question);
+/** `terms` come from the planner and already carry synonyms; tsQuery is the
+ *  fallback for when that call failed, so a provider outage costs answer
+ *  quality and not the search itself. */
+async function tier1(question: string, terms: string[] = []): Promise<Source[]> {
+  const tsq = terms.length ? terms.join(" | ") : tsQuery(question);
   if (!tsq) return [];
   // Ranked retrieval lives in Postgres (search_stories, migration 005):
   // PostgREST cannot order by ts_rank, and without ranking the OR-match handed
@@ -154,9 +237,66 @@ async function tier2(question: string): Promise<Source[]> {
   }
 }
 
+function refusal() {
+  return {
+    whats_happening: REFUSAL, why: "", who_is_affected: "", what_to_watch: "",
+    confidence: "low", sources: [], followups: [], sections: [], tier: 2,
+    refused: true,
+  };
+}
+
+/** The explainer answer. `sections` is the new field; `whats_happening` is filled
+ *  from the first section so an app build that predates sections still renders a
+ *  real answer instead of four blanks. */
+async function conceptAnswer(question: string, terms: string[]) {
+  const sources = await tier1(question, terms); // free: a DB query, not an AI call
+  const raw = await chat(conceptPrompt(question, sources));
+  if (raw === null) return { error: 503 as const };
+  let out;
+  try {
+    out = JSON.parse(raw);
+  } catch {
+    return null; // bad JSON -> caller falls through to the news lane
+  }
+  if (out.refused) return null;
+  const sections = (Array.isArray(out.sections) ? out.sections : [])
+    .filter((s: { body?: unknown }) =>
+      !!s && typeof s.body === "string" && s.body.trim().length > 0
+    )
+    .slice(0, 8)
+    .map((s: { heading?: unknown; body: string }) => ({
+      heading: typeof s.heading === "string" ? s.heading : "",
+      body: s.body,
+    }));
+  if (!sections.length) return null;
+  return {
+    whats_happening: sections[0].body,
+    why: "", who_is_affected: "", what_to_watch: "",
+    confidence: ["high", "medium", "low"].includes(out.confidence) ? out.confidence : "low",
+    // Attached as further reading, never as the basis of the explanation — so
+    // they are not run through the citation contract the news lane uses.
+    sources: sources.slice(0, 3).map(({ title, url, source_name }) => ({
+      title, url, source_name,
+    })),
+    followups: (Array.isArray(out.followups) ? out.followups : []).slice(0, 3).map(String),
+    sections,
+    tier: 0,
+    refused: false,
+  };
+}
+
 async function answer(question: string) {
-  for (const [tier, fetchSources] of [[1, tier1], [2, tier2]] as const) {
-    const sources = await fetchSources(question);
+  const plan_ = await plan(question);
+  if (plan_?.kind === "refuse") return refusal(); // advice/off-topic: no second call
+  const terms = plan_?.terms ?? [];
+
+  if (plan_?.kind === "concept") {
+    const out = await conceptAnswer(question, terms);
+    if (out) return out; // null -> explainer declined; the news lanes still get a go
+  }
+
+  for (const tier of [1, 2] as const) {
+    const sources = tier === 1 ? await tier1(question, terms) : await tier2(question);
     if (!sources.length) continue;
     const raw = await chat(prompt(question, sources));
     if (raw === null) return { error: 503 as const };
@@ -187,14 +327,14 @@ async function answer(question: string) {
       confidence: ["high", "medium", "low"].includes(out.confidence) ? out.confidence : "low",
       sources: picked.map(({ title, url, source_name }) => ({ title, url, source_name })),
       followups: (Array.isArray(out.followups) ? out.followups : []).slice(0, 3).map(String),
+      // Empty on this lane: sections are what marks an answer as an explainer,
+      // and the app picks its disclaimer off exactly that.
+      sections: [],
       tier,
       refused: false,
     };
   }
-  return {
-    whats_happening: REFUSAL, why: "", who_is_affected: "", what_to_watch: "",
-    confidence: "low", sources: [], followups: [], tier: 2, refused: true,
-  };
+  return refusal();
 }
 
 Deno.serve(async (req) => {

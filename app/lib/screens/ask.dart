@@ -157,8 +157,12 @@ class _AskScreenState extends State<AskScreen> {
             ),
           if (_answer != null) AnswerCard(answer: _answer!, onFollowup: _ask),
           const SizedBox(height: 24),
-          Text('Answers come only from our sources. Not investment advice.',
-              textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11)),
+          // Only the empty state makes this blanket promise now. Once an answer
+          // is on screen the disclaimer travels with it, because an explainer
+          // answer is NOT from our sources and saying otherwise would be a lie.
+          if (_answer == null)
+            Text('Answers come only from our sources. Not investment advice.',
+                textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11)),
         ],
       ),
     );
@@ -179,13 +183,21 @@ class AnswerCard extends StatelessWidget {
             textAlign: TextAlign.center, style: serif.copyWith(fontSize: 18)),
       );
     }
+    // An explainer answer carries its own headings; a news answer uses the four
+    // fixed ones. Same `_section` widget either way.
+    final isExplainer = answer.sections.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _section("WHAT'S HAPPENING", answer.whatsHappening),
-        _section('WHY', answer.why),
-        _section("WHO'S AFFECTED", answer.whoIsAffected),
-        _section('WHAT TO WATCH', answer.whatToWatch),
+        if (isExplainer)
+          for (final s in answer.sections)
+            _section(s.heading.toUpperCase(), s.body)
+        else ...[
+          _section("WHAT'S HAPPENING", answer.whatsHappening),
+          _section('WHY', answer.why),
+          _section("WHO'S AFFECTED", answer.whoIsAffected),
+          _section('WHAT TO WATCH', answer.whatToWatch),
+        ],
         if (answer.confidence != 'high')
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -212,6 +224,13 @@ class AnswerCard extends StatelessWidget {
                 .toList(),
           ),
         ],
+        const SizedBox(height: 16),
+        Text(
+            isExplainer
+                ? 'General explainer, not from our newsroom. Verify current '
+                    'rules and rates. Not investment advice.'
+                : 'Answers come only from our sources. Not investment advice.',
+            textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11)),
       ],
     );
   }

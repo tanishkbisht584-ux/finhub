@@ -94,6 +94,12 @@ class QaAnswer {
   final List<String> followups;
   final bool refused;
 
+  /// Explainer answers ("what is a CAS?") come back as a free-form section list
+  /// instead of the four fixed news fields — a concept needs as many headings as
+  /// it needs. Empty on a news answer, which is also how the screen knows which
+  /// disclaimer to print.
+  final List<({String heading, String body})> sections;
+
   QaAnswer.fromJson(Map<String, dynamic> j)
       : whatsHappening = j['whats_happening'] ?? '',
         why = j['why'] ?? '',
@@ -104,6 +110,11 @@ class QaAnswer {
             .map((s) => QaSource.fromJson(Map<String, dynamic>.from(s)))
             .toList(),
         followups = List<String>.from(j['followups'] ?? const []),
+        sections = [
+          for (final s in (j['sections'] ?? const []) as List)
+            if ((s['body'] ?? '') != '')
+              (heading: (s['heading'] ?? '') as String, body: s['body'] as String)
+        ],
         refused = j['refused'] == true;
 }
 

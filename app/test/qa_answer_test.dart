@@ -17,6 +17,26 @@ const _full = {
   'refused': false,
 };
 
+const _explainer = {
+  'whats_happening': 'A CAS is a consolidated statement.',
+  'why': '',
+  'who_is_affected': '',
+  'what_to_watch': '',
+  'confidence': 'high',
+  'sources': [
+    {'title': 'MF folio rules updated', 'url': 'https://e.co/2', 'source_name': 'Mint'}
+  ],
+  'followups': ['What is a demat account?'],
+  'sections': [
+    {'heading': 'What it is', 'body': 'A CAS is a consolidated statement.'},
+    {'heading': 'Who sends it', 'body': 'Depositories send it monthly.'},
+    {'heading': '', 'body': 'Headingless sections must still render.'},
+    {'heading': 'Empty body is dropped', 'body': ''},
+  ],
+  'tier': 0,
+  'refused': false,
+};
+
 const _refusal = {
   'whats_happening': "Our sources don't clearly explain this yet.",
   'why': '',
@@ -44,6 +64,15 @@ void main() {
     expect(a.sources, isEmpty);
   });
 
+  test('QaAnswer parses sections and drops empty bodies', () {
+    final a = QaAnswer.fromJson(Map<String, dynamic>.from(_explainer));
+    expect(a.sections.length, 3); // empty-body section dropped
+    expect(a.sections.first.heading, 'What it is');
+    // Pre-sections payloads (old cache rows) must keep parsing as news answers.
+    final news = QaAnswer.fromJson(Map<String, dynamic>.from(_full));
+    expect(news.sections, isEmpty);
+  });
+
   test('QaAnswer survives a truncated payload', () {
     // A provider can return valid JSON missing fields; the app must render
     // something rather than throw on a null.
@@ -68,6 +97,32 @@ void main() {
     expect(find.text('confidence: medium'), findsOneWidget);
     await tester.tap(find.text('Why are FIIs selling?'));
     expect(tapped, 'Why are FIIs selling?');
+  });
+
+  testWidgets('AnswerCard explainer renders sections + its own disclaimer',
+      (tester) async {
+    final answer = QaAnswer.fromJson(Map<String, dynamic>.from(_explainer));
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: SingleChildScrollView(
+                child: AnswerCard(answer: answer, onFollowup: (_) {})))));
+    expect(find.text('WHAT IT IS'), findsOneWidget);
+    expect(find.text('Depositories send it monthly.'), findsOneWidget);
+    // The four fixed news headings must NOT appear alongside sections.
+    expect(find.text("WHAT'S HAPPENING"), findsNothing);
+    expect(find.textContaining('not from our newsroom'), findsOneWidget);
+    expect(find.textContaining('only from our sources'), findsNothing);
+  });
+
+  testWidgets('AnswerCard news answer keeps the sourced disclaimer',
+      (tester) async {
+    final answer = QaAnswer.fromJson(Map<String, dynamic>.from(_full));
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: SingleChildScrollView(
+                child: AnswerCard(answer: answer, onFollowup: (_) {})))));
+    expect(find.textContaining('only from our sources'), findsOneWidget);
+    expect(find.textContaining('not from our newsroom'), findsNothing);
   });
 
   testWidgets('AnswerCard refusal shows only the refusal line', (tester) async {
