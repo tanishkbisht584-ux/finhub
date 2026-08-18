@@ -1356,7 +1356,12 @@ def main():
         sb("PATCH", f"sources?id=in.({ids})",
            json={"last_fetched_at": datetime.now(timezone.utc).isoformat()})
 
-    releveled = chief_editor(editor_pass)
+    # The digest only moves when a pending/approved card lands, and 32% of
+    # cycles (measured 2026-08-17) insert nothing but duplicates — the editor
+    # was re-reading the same 100 rows every 3.2 min for ~20% of the daily call
+    # budget. Skipping those costs no coverage: a relevel or a merge can only
+    # become available once a new card enters the window.
+    releveled = chief_editor(editor_pass) if processed else 0
     alerted = alert_engine({s["name"]: s["authority"] for s in sources})
     personal = personal_alert_engine()
     videos = match_videos(yt_sources, recent, seen_images, video_match)
