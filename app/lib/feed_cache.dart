@@ -23,8 +23,13 @@ class FeedCache {
     final raw = prefs.getString(_key);
     if (raw == null) return null;
     try {
-      return (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
-    } on FormatException {
+      // Materialize eagerly: .cast() is a lazy view whose element-type errors
+      // would escape this try and detonate later in Story.fromJson, where the
+      // self-heal below can't reach them.
+      return [
+        for (final e in jsonDecode(raw) as List) Map<String, dynamic>.from(e as Map)
+      ];
+    } catch (_) {
       await prefs.remove(_key); // corrupt cache heals itself on next refresh
       return null;
     }

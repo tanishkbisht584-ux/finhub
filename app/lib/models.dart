@@ -45,7 +45,7 @@ class Story {
   Story.fromJson(Map<String, dynamic> j)
       : id = j['id'],
         hook = j['hook'],
-        headline = j['headline'],
+        headline = j['headline'] ?? '',
         summary = j['summary'],
         impactDirection = j['impact_direction'],
         impactStrength = j['impact_strength'],
@@ -53,8 +53,10 @@ class Story {
         impactScore = j['impact_score'],
         severityLevel = j['severity_level'],
         confidence = j['confidence'],
-        sourceName = j['source_name'],
-        sourceUrl = j['source_url'],
+        // '' not null: one bad row must not take down Story.fromJson for the
+        // whole page (a null source_url did exactly that pre-0.17.1).
+        sourceName = j['source_name'] ?? '',
+        sourceUrl = j['source_url'] ?? '',
         category = j['category'],
         sectors = List<String>.from(j['sectors'] ?? const []),
         imageUrl = j['image_url'],
@@ -116,6 +118,16 @@ class QaAnswer {
               (heading: (s['heading'] ?? '') as String, body: s['body'] as String)
         ],
         refused = j['refused'] == true;
+
+  /// A 200 whose body defaulted to nothing everywhere. Rendering it would be a
+  /// bare divider and a disclaimer — treat it as a failure upstream instead.
+  bool get isBlank =>
+      !refused &&
+      whatsHappening.isEmpty &&
+      why.isEmpty &&
+      whoIsAffected.isEmpty &&
+      whatToWatch.isEmpty &&
+      sections.isEmpty;
 }
 
 class Company {
