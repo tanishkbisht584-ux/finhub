@@ -9,7 +9,10 @@ import '../models.dart';
 import '../theme.dart';
 
 final savedProvider = FutureProvider<List<Story>>((ref) async {
-  final uid = Supabase.instance.client.auth.currentUser!.id;
+  // Sign-out can re-run this while the Saved route is still pushed (it lives
+  // on the root navigator) — an empty list beats a null-check crash.
+  final uid = Supabase.instance.client.auth.currentUser?.id;
+  if (uid == null) return const [];
   final rows = await Supabase.instance.client
       .from('saves')
       .select('stories(*)')
@@ -25,8 +28,12 @@ final savedProvider = FutureProvider<List<Story>>((ref) async {
 /// Removing a save, with an undo — a mis-tap on a list you curated by hand
 /// should cost a tap to fix, not a hunt back through the feed.
 Future<void> _unsave(BuildContext context, WidgetRef ref, Story s) async {
-  final uid = Supabase.instance.client.auth.currentUser!.id;
+  final uid = Supabase.instance.client.auth.currentUser?.id;
+  if (uid == null) return;
   final messenger = ScaffoldMessenger.of(context);
+  // The root container outlives this screen; `ref` does not, and both the
+  // finally below and the Undo run after awaits that can outlive it.
+  final container = ProviderScope.containerOf(context, listen: false);
   try {
     await Supabase.instance.client
         .from('saves')
@@ -37,7 +44,7 @@ Future<void> _unsave(BuildContext context, WidgetRef ref, Story s) async {
     messenger.showSnackBar(SnackBar(content: Text('Could not remove: $e')));
     return;
   } finally {
-    ref.invalidate(savedProvider); // keeps the feed's bookmark honest too
+    container.invalidate(savedProvider); // keeps the feed's bookmark honest too
   }
   // Clear first: removing several in a row queued the toasts, so each waited
   // its turn and the last sat on screen long after the action.
@@ -48,18 +55,29 @@ Future<void> _unsave(BuildContext context, WidgetRef ref, Story s) async {
     action: SnackBarAction(
       label: 'Undo',
       onPressed: () async {
-        await Supabase.instance.client
-            .from('saves')
-            .upsert({'user_id': uid, 'story_id': s.id});
-        track('save', {'story_id': s.id});
-        ref.invalidate(savedProvider);
+        try {
+          await Supabase.instance.client
+              .from('saves')
+              .upsert({'user_id': uid, 'story_id': s.id});
+          track('save', {'story_id': s.id});
+        } catch (_) {
+          messenger.showSnackBar(const SnackBar(
+              content: Text('Could not undo — try saving again')));
+        }
+        container.invalidate(savedProvider);
       },
     ),
   ));
   // `duration` alone is not enough: Flutter skips the dismiss timer entirely
   // for a SnackBar that has an action while an accessibility service is
   // running, so the undo sat on screen indefinitely. Own the timer.
-  Timer(const Duration(seconds: 4), toast.close);
+  // Close only if still up; removing two items ~1s apart otherwise let the
+  // first timer cut the second toast's undo window short.
+  Timer(const Duration(seconds: 4), () {
+    try {
+      toast.close();
+    } catch (_) {}
+  });
 }
 
 /// Saved — a table, not a card wall (minimal mockup).
@@ -70,9 +88,23 @@ class SavedScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final saved = ref.watch(savedProvider);
     return SafeArea(
+      // skipLoadingOnRefresh false: the invalidate after a dismiss otherwise
+      // rebuilds with the previous list, leaving the dismissed Dismissible in
+      // the tree (debug throw, ghost row in release).
       child: saved.when(
+        skipLoadingOnRefresh: false,
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load saves\n$e')),
+        // Scrollable like the empty state: pull-to-refresh while offline put
+        // raw exception text here that could not be pulled on — the one moment
+        // you most want to retry was the one moment you could not.
+        error: (e, _) => RefreshIndicator(
+          onRefresh: () =>
+              ref.refresh(savedProvider.future).then((_) {}, onError: (_) {}),
+          child: ListView(children: const [
+            SizedBox(height: 120),
+            Center(child: Text('Could not load saves — pull to retry')),
+          ]),
+        ),
         data: (list) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -93,53 +125,57 @@ class SavedScreen extends ConsumerWidget {
               // "nothing saved" state is a list too — otherwise the one moment
               // you most want to retry is the one moment you cannot.
               child: RefreshIndicator(
-                onRefresh: () => ref.refresh(savedProvider.future),
+                // The rejection is already rendered by .when — an unhandled
+                // async error on top helps nobody.
+                onRefresh: () => ref
+                    .refresh(savedProvider.future)
+                    .then((_) {}, onError: (_) {}),
                 child: list.isEmpty
-                  ? ListView(children: const [
-                      SizedBox(height: 120),
-                      Center(child: Text('Nothing saved yet')),
-                    ])
-                  : ListView.separated(
-                      itemCount: list.length,
-                      separatorBuilder: (_, i) => const Divider(height: 1),
-                      itemBuilder: (context, i) {
-                        final s = list[i];
-                        return Dismissible(
-                          key: ValueKey(s.id),
-                          direction: DismissDirection.endToStart,
-                          onDismissed: (_) => _unsave(context, ref, s),
-                          background: Container(
-                              color: red.withValues(alpha: 0.2),
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.only(right: 20),
-                              child: const Icon(Icons.delete_outline)),
-                          child: ListTile(
-                            title: Text(s.hook ?? s.headline,
-                                style:
-                                    const TextStyle(fontWeight: FontWeight.w600)),
-                            subtitle: Text.rich(TextSpan(children: [
-                              TextSpan(
-                                  text: 'Impact ${s.impactScore ?? '–'}/10',
-                                  style: mono.copyWith(
-                                      fontSize: 12,
-                                      color: impactColor(s.impactScore))),
-                              TextSpan(
-                                  text: '  ${s.sourceName}',
-                                  style: mono.copyWith(fontSize: 12)),
-                            ])),
-                            // Swipe-to-remove is invisible until you try it;
-                            // a filled bookmark you can tap off is not.
-                            trailing: IconButton(
-                              icon: const Icon(Icons.bookmark_rounded,
-                                  color: green, size: 20),
-                              tooltip: 'Remove from saved',
-                              onPressed: () => _unsave(context, ref, s),
+                    ? ListView(children: const [
+                        SizedBox(height: 120),
+                        Center(child: Text('Nothing saved yet')),
+                      ])
+                    : ListView.separated(
+                        itemCount: list.length,
+                        separatorBuilder: (_, i) => const Divider(height: 1),
+                        itemBuilder: (context, i) {
+                          final s = list[i];
+                          return Dismissible(
+                            key: ValueKey(s.id),
+                            direction: DismissDirection.endToStart,
+                            onDismissed: (_) => _unsave(context, ref, s),
+                            background: Container(
+                                color: red.withValues(alpha: 0.2),
+                                alignment: Alignment.centerRight,
+                                padding: const EdgeInsets.only(right: 20),
+                                child: const Icon(Icons.delete_outline)),
+                            child: ListTile(
+                              title: Text(s.hook ?? s.headline,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w600)),
+                              subtitle: Text.rich(TextSpan(children: [
+                                TextSpan(
+                                    text: 'Impact ${s.impactScore ?? '–'}/10',
+                                    style: mono.copyWith(
+                                        fontSize: 12,
+                                        color: impactColor(s.impactScore))),
+                                TextSpan(
+                                    text: '  ${s.sourceName}',
+                                    style: mono.copyWith(fontSize: 12)),
+                              ])),
+                              // Swipe-to-remove is invisible until you try it;
+                              // a filled bookmark you can tap off is not.
+                              trailing: IconButton(
+                                icon: const Icon(Icons.bookmark_rounded,
+                                    color: green, size: 20),
+                                tooltip: 'Remove from saved',
+                                onPressed: () => _unsave(context, ref, s),
+                              ),
+                              onTap: () => openExternal(context, s.sourceUrl),
                             ),
-                            onTap: () => openExternal(context, s.sourceUrl),
-                          ),
-                        );
-                      },
-                    ),
+                          );
+                        },
+                      ),
               ),
             ),
           ],
