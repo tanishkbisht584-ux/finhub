@@ -595,7 +595,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                           ),
                     if (_refreshing)
                       Positioned(
-                          top: inset,
+                          // banner up = the Stack starts below the notch
+                          // already; don't push the bar down a second time
+                          top: cachedAt != null ? 0 : inset,
                           left: 0,
                           right: 0,
                           child: const LinearProgressIndicator(
@@ -603,9 +605,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                               color: green,
                               backgroundColor: Colors.transparent)),
                     Positioned(
-                        top: inset + 8, left: 16, child: const LiveButton()),
+                        top: cachedAt != null ? 8 : inset + 8,
+                        left: 16,
+                        child: const LiveButton()),
                     Positioned(
-                        top: inset + 8,
+                        top: cachedAt != null ? 8 : inset + 8,
                         right: 16,
                         child: const FeedFilterButton()),
                   ]),
@@ -783,7 +787,7 @@ void showFeedFilterSheet(BuildContext context) {
                       style: mono.copyWith(
                           fontSize: 12, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 10),
-                  Wrap(spacing: 8, children: [
+                  Wrap(spacing: 8, runSpacing: 8, children: [
                     pill('ANY', minImp == 0, green, () => setMinImpact(0)),
                     pill('4+', minImp == 4, amber, () => setMinImpact(4)),
                     pill('6+', minImp == 6, amber, () => setMinImpact(6)),
@@ -1142,7 +1146,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
             // Clear the floating LIVE/filter tiles (feed paints edge-to-edge,
             // so the status inset tells us how far down they reach; on the
             // detail screen the AppBar consumes it and this collapses to 20).
-            SizedBox(height: MediaQuery.of(context).padding.top + 20),
+            // SafeArea above already consumed the status inset — adding it again
+            // opened a ~47px dead band over every card.
+            const SizedBox(height: 28),
             // IMPACT 9/10 · SHORT + LONG — monospace ledger line, centered
             // between the two tiles' row (owner 2026-08-14).
             Center(
@@ -1157,12 +1163,19 @@ class _StoryCardState extends ConsumerState<StoryCard>
               ])),
             ),
             const SizedBox(height: 14),
-            if (story.hook != null)
+            // maxLines: a 4-line hook + 3-line headline + media strip on a
+            // small phone was driving the Expanded to a RenderFlex overflow.
+            if (story.hook != null) ...[
               Text(story.hook!,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
                   style: serif.copyWith(
                       fontSize: 30, fontWeight: FontWeight.w700, height: 1.2)),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
+            ],
             Text(story.headline,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600, height: 1.35)),
             const SizedBox(height: 12),
@@ -1308,9 +1321,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
   void _showOutlets() {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: surface,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      // Same language as the filter sheet: clay-black, deliberately square.
+      backgroundColor: bg,
+      shape: const RoundedRectangleBorder(),
       builder: (sheet) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Padding(
@@ -1782,7 +1795,9 @@ class DeepReadPages extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Same clearance as the card, so the floating LIVE/filter tiles
           // never sit on the text.
-          SizedBox(height: MediaQuery.of(context).padding.top + 20),
+          // SafeArea above already consumed the status inset — adding it again
+          // opened a ~47px dead band over every card.
+          const SizedBox(height: 28),
           Center(
             child: Text.rich(TextSpan(children: [
               TextSpan(
@@ -1834,7 +1849,10 @@ class _CacheBanner extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         width: double.infinity,
         color: amber.withValues(alpha: 0.12),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        // The banner is the topmost thing on screen: it clears the notch
+        // itself so the Stack below starts at an honest y=0.
+        padding: EdgeInsets.fromLTRB(
+            16, MediaQuery.of(context).padding.top + 6, 16, 6),
         child: Text('Offline — showing stories saved $_age. Pull to retry.',
             style: mono.copyWith(fontSize: 11, color: amber)),
       );
