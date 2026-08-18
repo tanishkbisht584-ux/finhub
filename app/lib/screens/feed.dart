@@ -62,7 +62,10 @@ const _categoriesPrefsKey = 'feed_categories_v1';
 Future<void> loadEnabledCategories() async {
   final prefs = await SharedPreferences.getInstance();
   final saved = prefs.getStringList(_categoriesPrefsKey);
-  if (saved != null) enabledCategories.value = saved.toSet();
+  // A persisted [] would open every launch on "Nothing matches your filters".
+  // All-off is legal within a session (it has its own guidance text) but must
+  // not be the state the app wakes up in.
+  if (saved != null && saved.isNotEmpty) enabledCategories.value = saved.toSet();
 }
 
 Future<void> toggleCategory(String cat) async {
@@ -110,6 +113,12 @@ Future<void> setMinImpact(int v) async {
 void resetFilterForAlert() {
   enabledCategories.value = {...feedCategories};
   minImpact.value = 0;
+  // Persist too, or the narrow filter resurrects on next launch. Not routed
+  // through setMinImpact: that would log a filter_impact event per alert.
+  SharedPreferences.getInstance().then((p) {
+    p.remove(_categoriesPrefsKey);
+    p.remove(_minImpactPrefsKey);
+  });
 }
 
 /// True when any filter is narrowing the feed — the tune button glows so a
@@ -289,7 +298,8 @@ class FeedScreen extends ConsumerStatefulWidget {
   ConsumerState<FeedScreen> createState() => _FeedScreenState();
 }
 
-class _FeedScreenState extends ConsumerState<FeedScreen> {
+class _FeedScreenState extends ConsumerState<FeedScreen>
+    with WidgetsBindingObserver {
   final _pc = PageController();
 
   /// The one owned feed list: seeded from the provider's first page, grows
@@ -311,11 +321,27 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     liveMode.addListener(_onLiveToggle);
     loadEnabledCategories();
     loadMinImpact();
+    WidgetsBinding.instance.addObserver(this);
     _startFreshTimer();
+  }
+
+  /// The feed lives in an IndexedStack and never disposes, so the poll would
+  /// otherwise keep hitting Supabase from the background all day. Pause kills
+  /// the timer; resume refreshes immediately (a returning reader shouldn't
+  /// stare at hours-old cards for up to 90s) and restarts it.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _freshTimer?.cancel();
+    } else if (state == AppLifecycleState.resumed) {
+      _pullFresh();
+      _startFreshTimer();
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _freshTimer?.cancel();
     pendingStory.removeListener(_rebuild);
     enabledCategories.removeListener(_onFilterChanged);
@@ -403,7 +429,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Future<void> _pullFresh() async {
-    if (!mounted || _feed.isEmpty) return;
+    if (!mounted) return;
+    // Alive-but-hidden on another tab: don't poll into the void.
+    if (homeTab.value != 0) return;
+    // An empty feed has no newest-stamp to poll from; the full refresh is the
+    // only way it can ever recover (pipeline stall, quiet-hour install).
+    if (_feed.isEmpty) {
+      _manualRefresh();
+      return;
+    }
     DateTime? newest;
     for (final s in _feed) {
       if (s.publishedAt != null &&
@@ -501,7 +535,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                             // card IS the pull — trigger the refresh
                             // directly, no arbitration to lose.
                             onNotification: (n) {
-                              if (n.overscroll < -6 &&
+                              // depth 0 = the PageView itself; a card's inner
+                              // summary scroll must not refresh the feed.
+                              if (n.depth == 0 &&
+                                  n.overscroll < -6 &&
                                   _pc.hasClients &&
                                   (_pc.page ?? 1) < 0.5) {
                                 _manualRefresh();
@@ -848,7 +885,14 @@ class _StoryCardState extends ConsumerState<StoryCard>
     track('share', {'story_id': story.id});
   }
 
+  bool _sharing = false;
+
   Future<void> _fire(String targetId) async {
+    // Two quick hold-releases would overlap captures: the first one's finally
+    // drops shareCapture mid-flight and the press photo gets baked into the
+    // second PNG. Serialize instead.
+    if (_sharing) return;
+    _sharing = true;
     try {
       final toast = await runShareTarget(targetId, story, _renderCard);
       _logShare();
@@ -860,6 +904,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Could not share')));
+    } finally {
+      _sharing = false;
     }
   }
 
