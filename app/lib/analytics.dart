@@ -28,15 +28,19 @@ String analyticsDistinctId() =>
 /// Fire-and-forget: analytics must never slow a swipe or surface an error.
 void track(String event, [Map<String, Object?> props = const {}]) {
   () async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
       final req = await client.postUrl(Uri.https(_phHost, '/capture/'));
       req.headers.contentType = ContentType.json;
       req.write(jsonEncode(buildCapture(event, analyticsDistinctId(), props)));
-      await (await req.close()).drain<void>();
-      client.close();
+      // connectionTimeout only bounds the connect; a stalled response held
+      // the socket forever, and every failed capture leaked the client.
+      await (await req.close().timeout(const Duration(seconds: 10)))
+          .drain<void>();
     } catch (_) {
       // Offline or PostHog down: the Supabase events table still has it.
+    } finally {
+      client.close(force: true);
     }
   }();
 }
