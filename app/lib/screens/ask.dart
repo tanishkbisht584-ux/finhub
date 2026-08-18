@@ -187,9 +187,6 @@ class _AskScreenState extends State<AskScreen> {
                 const SizedBox(height: 12),
                 OutlinedButton(
                   onPressed: () => _ask(_controller.text),
-                  style: OutlinedButton.styleFrom(
-                      foregroundColor: ink,
-                      side: const BorderSide(color: border)),
                   child: const Text('Try again'),
                 ),
               ]),

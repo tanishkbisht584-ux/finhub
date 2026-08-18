@@ -47,16 +47,21 @@ bool jumpToStory(PageController pc, List<Story> list, int id) {
 /// The pipeline's fixed 8 (ai.py CATEGORIES). Strip order is fixed, not
 /// data-driven — a stable strip beats one that jumps as stories churn.
 const feedCategories = [
-  'Markets', 'Economy', 'IPO', 'Corporate', 'Policy', 'Global',
-  'Commodities', 'Geopolitics',
+  'Markets',
+  'Economy',
+  'IPO',
+  'Corporate',
+  'Policy',
+  'Global',
+  'Commodities',
+  'Geopolitics',
 ];
 
 /// The one feed's composition (owner's call 2026-08-12: "only one feed to
 /// scroll, with a filter to add categories, subtract them, or all"). Chips
 /// toggle a category in or out of the single feed; this is a lasting
 /// customization, persisted on-device. Default: everything.
-final enabledCategories =
-    ValueNotifier<Set<String>>({...feedCategories});
+final enabledCategories = ValueNotifier<Set<String>>({...feedCategories});
 const _categoriesPrefsKey = 'feed_categories_v1';
 
 Future<void> loadEnabledCategories() async {
@@ -65,7 +70,9 @@ Future<void> loadEnabledCategories() async {
   // A persisted [] would open every launch on "Nothing matches your filters".
   // All-off is legal within a session (it has its own guidance text) but must
   // not be the state the app wakes up in.
-  if (saved != null && saved.isNotEmpty) enabledCategories.value = saved.toSet();
+  if (saved != null && saved.isNotEmpty) {
+    enabledCategories.value = saved.toSet();
+  }
 }
 
 Future<void> toggleCategory(String cat) async {
@@ -133,7 +140,10 @@ bool filtersActive() =>
 List<Story> mergeStories(List<Story> current, List<Story> incoming,
     {bool atTop = false}) {
   final have = {for (final s in current) s.id};
-  final fresh = [for (final s in incoming) if (!have.contains(s.id)) s];
+  final fresh = [
+    for (final s in incoming)
+      if (!have.contains(s.id)) s
+  ];
   return atTop ? [...fresh, ...current] : [...current, ...fresh];
 }
 
@@ -143,11 +153,12 @@ List<Story> mergeStories(List<Story> current, List<Story> incoming,
 /// (feed not started, card gone) falls back to the top.
 List<Story> insertFresh(List<Story> feed, List<Story> fresh, int? anchorId) {
   final have = {for (final s in feed) s.id};
-  final add = [for (final s in fresh) if (!have.contains(s.id)) s];
+  final add = [
+    for (final s in fresh)
+      if (!have.contains(s.id)) s
+  ];
   if (add.isEmpty) return feed;
-  final at = anchorId == null
-      ? -1
-      : feed.indexWhere((s) => s.id == anchorId);
+  final at = anchorId == null ? -1 : feed.indexWhere((s) => s.id == anchorId);
   return [...feed.sublist(0, at + 1), ...add, ...feed.sublist(at + 1)];
 }
 
@@ -216,8 +227,8 @@ Future<List<Story>> fetchFeedPage({DateTime? before, DateTime? after}) async {
   final rows = await q
       .order('published_at', ascending: false)
       .limit(after != null ? 20 : 50);
-  final hydrated =
-      await _attachCompanies(await _attachOutlets(rows.cast<Map<String, dynamic>>()));
+  final hydrated = await _attachCompanies(
+      await _attachOutlets(rows.cast<Map<String, dynamic>>()));
   return hydrated.map(Story.fromJson).toList();
 }
 
@@ -452,8 +463,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       // Anchor on the card being read RIGHT NOW: the fresh cards become the
       // very next swipe, seamlessly — never a jump, never behind the reader.
       int? anchorId;
-      final shown = visibleStories(
-          _feed, enabledCategories.value, minImpact.value);
+      final shown =
+          visibleStories(_feed, enabledCategories.value, minImpact.value);
       final page = _pc.hasClients ? _pc.page?.round() : null;
       if (page != null && shown.isNotEmpty) {
         anchorId = shown[page.clamp(0, shown.length - 1)].id;
@@ -512,8 +523,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
           WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
         }
         final combined = _seeded(list);
-        final shown = visibleStories(
-            combined, enabledCategories.value, minImpact.value);
+        final shown =
+            visibleStories(combined, enabledCategories.value, minImpact.value);
         // A short visible list can't reach onPageChanged's load trigger (one
         // card can't swipe at all), so pull older pages until the filter has
         // enough to show or the 48h window is drained. Each round either grows
@@ -537,10 +548,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                 const SizedBox(height: 20),
                 OutlinedButton(
                   onPressed: _manualRefresh,
-                  style: OutlinedButton.styleFrom(
-                      foregroundColor: ink,
-                      side: const BorderSide(color: border)),
-                  child: const Text('Refresh'),
+                  child: const Text('Try again'),
                 ),
               ]))
             : Column(children: [
@@ -571,8 +579,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                             child: PageView.builder(
                               controller: _pc,
                               scrollDirection: Axis.vertical,
-                              itemCount:
-                                  shown.length + (_exhausted ? 1 : 0),
+                              itemCount: shown.length + (_exhausted ? 1 : 0),
                               onPageChanged: (i) {
                                 if (i < shown.length) _logView(shown[i].id);
                                 // A few cards from the bottom: fetch the
@@ -596,9 +603,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                               color: green,
                               backgroundColor: Colors.transparent)),
                     Positioned(
-                        top: inset + 8,
-                        left: 16,
-                        child: const LiveButton()),
+                        top: inset + 8, left: 16, child: const LiveButton()),
                     Positioned(
                         top: inset + 8,
                         right: 16,
@@ -615,8 +620,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     if (uid == null) return;
     Supabase.instance.client
         .from('events')
-        .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'})
-        .then((_) {}, onError: (_) {});
+        .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'}).then(
+            (_) {},
+            onError: (_) {});
     track('view', {'story_id': storyId});
   }
 }
@@ -633,8 +639,7 @@ class _EndOfFeed extends StatelessWidget {
         const Icon(Icons.done_all_rounded, size: 30, color: inkDim),
         const SizedBox(height: 12),
         Text("You're all caught up",
-            style:
-                serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
+            style: serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
         const SizedBox(height: 6),
         Text("That's the last 48 hours of market news.",
             style: mono.copyWith(fontSize: 11.5)),
@@ -663,8 +668,7 @@ class LiveButton extends StatelessWidget {
                 ? red.withValues(alpha: 0.18)
                 : surface.withValues(alpha: 0.96),
             borderRadius: BorderRadius.circular(20),
-            border:
-                Border.all(color: on ? red : border, width: on ? 1.5 : 1),
+            border: Border.all(color: on ? red : border, width: on ? 1.5 : 1),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.sensors, size: 16, color: on ? red : inkDim),
@@ -711,8 +715,7 @@ class FeedFilterButton extends StatelessWidget {
                 border: Border.all(
                     color: live ? green : border, width: live ? 1.5 : 1),
               ),
-              child:
-                  Icon(Icons.tune, size: 18, color: live ? green : inkDim),
+              child: Icon(Icons.tune, size: 18, color: live ? green : inkDim),
             ),
           );
         },
@@ -734,8 +737,7 @@ void showFeedFilterSheet(BuildContext context) {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
           decoration: BoxDecoration(
             color: on ? tint.withValues(alpha: 0.18) : surface,
-            border:
-                Border.all(color: on ? tint : border, width: on ? 1.5 : 1),
+            border: Border.all(color: on ? tint : border, width: on ? 1.5 : 1),
           ),
           child: Text(label,
               style: mono.copyWith(
@@ -756,38 +758,39 @@ void showFeedFilterSheet(BuildContext context) {
         builder: (context, minImp, _) => SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child:
-                Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
-                    CrossAxisAlignment.start, children: [
-              Row(children: [
-                Text('YOUR FEED',
-                    style: mono.copyWith(
-                        fontSize: 12, fontWeight: FontWeight.w700)),
-                const Spacer(),
-                pill('Reset', filtersActive(), green, resetFilterForAlert,
-                    fontSize: 10),
-              ]),
-              const SizedBox(height: 14),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                pill('All', enabled.length == feedCategories.length, green,
-                    enableAllCategories),
-                for (final c in feedCategories)
-                  pill(c, enabled.contains(c), green,
-                      () => toggleCategory(c)),
-              ]),
-              const SizedBox(height: 18),
-              Text('MIN IMPACT',
-                  style: mono.copyWith(
-                      fontSize: 12, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 10),
-              Wrap(spacing: 8, children: [
-                pill('ANY', minImp == 0, green, () => setMinImpact(0)),
-                pill('4+', minImp == 4, amber, () => setMinImpact(4)),
-                pill('6+', minImp == 6, amber, () => setMinImpact(6)),
-                // 8+ burns ember, same as the card's IMPACT line
-                pill('8+', minImp == 8, red, () => setMinImpact(8)),
-              ]),
-            ]),
+            child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Text('YOUR FEED',
+                        style: mono.copyWith(
+                            fontSize: 12, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    pill('Reset', filtersActive(), green, resetFilterForAlert,
+                        fontSize: 10),
+                  ]),
+                  const SizedBox(height: 14),
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    pill('All', enabled.length == feedCategories.length, green,
+                        enableAllCategories),
+                    for (final c in feedCategories)
+                      pill(c, enabled.contains(c), green,
+                          () => toggleCategory(c)),
+                  ]),
+                  const SizedBox(height: 18),
+                  Text('MIN IMPACT',
+                      style: mono.copyWith(
+                          fontSize: 12, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
+                  Wrap(spacing: 8, children: [
+                    pill('ANY', minImp == 0, green, () => setMinImpact(0)),
+                    pill('4+', minImp == 4, amber, () => setMinImpact(4)),
+                    pill('6+', minImp == 6, amber, () => setMinImpact(6)),
+                    // 8+ burns ember, same as the card's IMPACT line
+                    pill('8+', minImp == 8, red, () => setMinImpact(8)),
+                  ]),
+                ]),
           ),
         ),
       ),
@@ -806,6 +809,7 @@ class StoryCard extends ConsumerStatefulWidget {
 class _StoryCardState extends ConsumerState<StoryCard>
     with TickerProviderStateMixin {
   Story get story => widget.story;
+
   /// This session's optimistic intent; null means "trust the saved list".
   /// A plain bool could only ever express saving — there was no way to say
   /// "I just unsaved this" without the server list overriding it back.
@@ -822,6 +826,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
 
   static const _tileSize = 46.0;
   static const _tileGap = 10.0;
+
   /// Travel per tile for the vertical ribbon: wide, because a stray flick
   /// there navigates away.
   static const _stepPx = 84.0;
@@ -835,7 +840,6 @@ class _StoryCardState extends ConsumerState<StoryCard>
   Offset? _pressOrigin;
   final _bookmarkKey = GlobalKey();
   bool _holdIsRibbon = false;
-
 
   late final AnimationController _burst = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 550));
@@ -882,8 +886,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
     } catch (e) {
       if (!mounted) return;
       setState(() => _pendingSave = was); // never leave a lie on screen
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Could not ${was ? 'remove' : 'save'}: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not ${was ? 'remove' : 'save'}: $e')));
     }
   }
 
@@ -911,8 +915,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
     if (uid == null) return;
     Supabase.instance.client
         .from('events')
-        .insert({'user_id': uid, 'story_id': story.id, 'type': 'share'})
-        .then((_) {}, onError: (_) {});
+        .insert({'user_id': uid, 'story_id': story.id, 'type': 'share'}).then(
+            (_) {},
+            onError: (_) {});
     track('share', {'story_id': story.id});
   }
 
@@ -929,7 +934,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
       _logShare();
       if (toast != null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            duration: const Duration(milliseconds: 1100), content: Text(toast)));
+            duration: const Duration(milliseconds: 1100),
+            content: Text(toast)));
       }
     } catch (_) {
       if (!mounted) return;
@@ -952,7 +958,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
                   surfaceTintColor: bg,
                   elevation: 0,
                   leading: const BackButton(color: ink)),
-              body: id == 'saved' ? const SavedScreen() : const WatchlistScreen(),
+              body:
+                  id == 'saved' ? const SavedScreen() : const WatchlistScreen(),
             )));
   }
 
@@ -1047,7 +1054,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
     // The optimistic flag only knows about taps in this session; the saved list
     // is the source of truth, so a story saved earlier still shows filled.
     final known = ref.watch(savedProvider).valueOrNull;
-    final isSaved = _pendingSave ?? (known?.any((s) => s.id == story.id) ?? false);
+    final isSaved =
+        _pendingSave ?? (known?.any((s) => s.id == story.id) ?? false);
     return SafeArea(
       child: GestureDetector(
         // Plain detector on purpose: LongPressGestureRecognizer already allows
@@ -1166,7 +1174,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
                   children: [
                     Text(story.summary ?? '',
                         style: TextStyle(
-                            fontSize: 15, height: 1.55, color: ink.withValues(alpha: 0.8))),
+                            fontSize: 15,
+                            height: 1.55,
+                            color: ink.withValues(alpha: 0.8))),
                     if (story.companies.isNotEmpty) ...[
                       const SizedBox(height: 14),
                       Wrap(
@@ -1261,7 +1271,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600, height: 1.2)),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        height: 1.2)),
                 Row(mainAxisSize: MainAxisSize.min, children: [
                   Text('Read original', style: mono.copyWith(fontSize: 10.5)),
                   const SizedBox(width: 3),
@@ -1285,9 +1297,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
             padding: const EdgeInsets.fromLTRB(8, 6, 2, 6),
             child: Text('+$others more',
                 style: mono.copyWith(
-                    fontSize: 10.5,
-                    color: dir,
-                    fontWeight: FontWeight.w600)),
+                    fontSize: 10.5, color: dir, fontWeight: FontWeight.w600)),
           ),
         ),
     ]);
@@ -1315,7 +1325,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text('Earliest first', style: mono.copyWith(fontSize: 10.5)),
+              child:
+                  Text('Earliest first', style: mono.copyWith(fontSize: 10.5)),
             ),
           ),
           Flexible(
@@ -1390,8 +1401,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
         radius: 26,
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 160),
-          transitionBuilder: (child, a) =>
-              ScaleTransition(scale: a, child: FadeTransition(opacity: a, child: child)),
+          transitionBuilder: (child, a) => ScaleTransition(
+              scale: a, child: FadeTransition(opacity: a, child: child)),
           child: Icon(icon, key: ValueKey(icon), size: 24, color: tint),
         ),
       ),
@@ -1497,15 +1508,15 @@ class _Offline extends StatelessWidget {
             const Icon(Icons.cloud_off, size: 40, color: inkDim),
             const SizedBox(height: 14),
             Text("Can't reach FinSwipe",
-                style: serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
+                style:
+                    serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             Text('Check your connection — your saved stories still work.',
-                textAlign: TextAlign.center, style: mono.copyWith(fontSize: 12)),
+                textAlign: TextAlign.center,
+                style: mono.copyWith(fontSize: 12)),
             const SizedBox(height: 20),
             OutlinedButton(
               onPressed: onRetry,
-              style: OutlinedButton.styleFrom(
-                  foregroundColor: ink, side: const BorderSide(color: border)),
               child: const Text('Try again'),
             ),
           ]),
@@ -1577,9 +1588,8 @@ class _StoryPagerState extends State<StoryPager> {
     _requested = true;
     final id = widget.story.id;
     try {
-      final res = await Supabase.instance.client.functions
-          .invoke('deepread', body: {'story_id': id})
-          .timeout(const Duration(seconds: 20));
+      final res = await Supabase.instance.client.functions.invoke('deepread',
+          body: {'story_id': id}).timeout(const Duration(seconds: 20));
       final read = DeepRead.fromJson(
           res.data is Map ? Map<String, dynamic>.from(res.data as Map) : null);
       // A refusal isn't cached server-side either — leave it out of the memo
@@ -1626,24 +1636,24 @@ class _StoryPagerState extends State<StoryPager> {
         }
       },
       child: PageView.builder(
-      controller: _hpc,
-      itemCount: 1 + deepCount,
-      itemBuilder: (context, i) {
-        if (i == 0) return StoryCard(story: widget.story);
-        // Network failure and AI refusal are different stories: one deserves
-        // a retry button, the other the honest fallback in DeepReadPages.
-        if (_failed) return _FailedPage(onRetry: _retryRead);
-        if (read == null) return const _WritingPage();
-        return DeepReadPages(
-          read: read.hasContent ? read : DeepRead(const []),
-          pageIndex: i - 1,
-          impactScore: widget.story.impactScore,
-          category: widget.story.category,
-          sourceUrl: widget.story.sourceUrl,
-          sourceName: widget.story.sourceName,
-        );
-      },
-    ),
+        controller: _hpc,
+        itemCount: 1 + deepCount,
+        itemBuilder: (context, i) {
+          if (i == 0) return StoryCard(story: widget.story);
+          // Network failure and AI refusal are different stories: one deserves
+          // a retry button, the other the honest fallback in DeepReadPages.
+          if (_failed) return _FailedPage(onRetry: _retryRead);
+          if (read == null) return const _WritingPage();
+          return DeepReadPages(
+            read: read.hasContent ? read : DeepRead(const []),
+            pageIndex: i - 1,
+            impactScore: widget.story.impactScore,
+            category: widget.story.category,
+            sourceUrl: widget.story.sourceUrl,
+            sourceName: widget.story.sourceName,
+          );
+        },
+      ),
     );
   }
 }
@@ -1687,12 +1697,11 @@ class _FailedPage extends StatelessWidget {
       child: Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text("Couldn't load the full story — check your connection.",
-              textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11.5)),
+              textAlign: TextAlign.center,
+              style: mono.copyWith(fontSize: 11.5)),
           const SizedBox(height: 16),
           OutlinedButton(
             onPressed: onRetry,
-            style: OutlinedButton.styleFrom(
-                foregroundColor: ink, side: const BorderSide(color: border)),
             child: const Text('Try again'),
           ),
         ]),

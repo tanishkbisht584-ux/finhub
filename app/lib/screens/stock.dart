@@ -139,11 +139,11 @@ class _StockScreenState extends State<StockScreen> {
     return Scaffold(
       backgroundColor: bg,
       appBar: AppBar(
-        backgroundColor: bg,
-        surfaceTintColor: bg,
-        elevation: 0,
-        leading: const BackButton(color: ink),
-        title: Text(widget.company.name, style: serif.copyWith(fontSize: 18)),
+        leading: const BackButton(),
+        title: Text(widget.company.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: serif.copyWith(fontSize: 18)),
         actions: [
           IconButton(
             onPressed: _toggleFollow,

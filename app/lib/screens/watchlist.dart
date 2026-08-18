@@ -103,10 +103,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                   setState(() => _error = null);
                   _load();
                 },
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: ink,
-                    side: const BorderSide(color: border)),
-                child: const Text('Retry'),
+                child: const Text('Try again'),
               ),
             ]),
           ),

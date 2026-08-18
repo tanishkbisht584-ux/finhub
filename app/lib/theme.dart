@@ -44,6 +44,18 @@ Color impactColor(int? score) => (score ?? 0) >= 8 ? red : inkDim;
 const serif = TextStyle(fontFamily: 'serif', color: ink);
 const mono = TextStyle(fontFamily: 'monospace', color: inkDim);
 
+/// Section headers ("APP", "RECENT STORIES", explainer headings) — one style,
+/// three screens were drifting between weights/sizes/letter-spacing.
+final monoLabel = mono.copyWith(
+    fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2);
+
+/// The one spinner: 20px, hairline, green — the default 36px Material wheel
+/// reads loud against the minimal ledger.
+Widget appSpinner() => const SizedBox(
+    width: 20,
+    height: 20,
+    child: CircularProgressIndicator(strokeWidth: 2, color: green));
+
 final appTheme = ThemeData(
   brightness: Brightness.dark,
   scaffoldBackgroundColor: bg,
@@ -51,6 +63,38 @@ final appTheme = ThemeData(
     surface: bg,
     primary: green,
     error: red,
+    // Without these, M3's lilac-tinted defaults leak: lavender nav-bar
+    // labels and a light-grey SnackBar over the clay-black feed.
+    onSurface: ink,
+    onSurfaceVariant: inkDim,
+  ),
+  // Unstyled Text otherwise inherits pure #FFF — a colder, brighter second
+  // ink next to everything that is explicitly `ink`.
+  textTheme:
+      Typography.material2021().white.apply(bodyColor: ink, displayColor: ink),
+  snackBarTheme: SnackBarThemeData(
+    backgroundColor: surface,
+    contentTextStyle: mono.copyWith(color: ink, fontSize: 13),
+    behavior: SnackBarBehavior.floating,
+    shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(6),
+        side: const BorderSide(color: border)),
+  ),
+  appBarTheme: const AppBarTheme(
+    backgroundColor: bg,
+    surfaceTintColor: bg,
+    elevation: 0,
+    iconTheme: IconThemeData(color: ink),
+    titleTextStyle: TextStyle(fontFamily: 'serif', color: ink, fontSize: 18),
+  ),
+  // The app's actual button. Hand-styled copies at six call sites had
+  // already split into two shapes; the theme is the single source now.
+  outlinedButtonTheme: OutlinedButtonThemeData(
+    style: OutlinedButton.styleFrom(
+      foregroundColor: ink,
+      side: const BorderSide(color: border),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+    ),
   ),
   dividerColor: border,
   useMaterial3: true,

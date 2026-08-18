@@ -19,7 +19,8 @@ import 'theme.dart';
 
 // Injected at build time: flutter build apk --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_PUBLISHABLE_KEY=...
 const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
-const supabasePublishableKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY');
+const supabasePublishableKey =
+    String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY');
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -28,9 +29,11 @@ void _openStory(RemoteMessage m) {
   if (id == null) return;
   final uid = Supabase.instance.client.auth.currentUser?.id;
   if (uid != null) {
-    Supabase.instance.client.from('events')
-        .insert({'user_id': uid, 'story_id': id, 'type': 'alert_open'})
-        .then((_) {}, onError: (_) {});
+    Supabase.instance.client
+        .from('events')
+        .insert({'user_id': uid, 'story_id': id, 'type': 'alert_open'}).then(
+            (_) {},
+            onError: (_) {});
     track('alert_open', {'story_id': id});
   }
   // Land in the feed itself, on that card, so the next swipe carries straight
@@ -52,10 +55,13 @@ Future<void> _maybeSpeak(RemoteMessage m) async {
   final uid = Supabase.instance.client.auth.currentUser?.id;
   if (uid != null) {
     try {
-      final row = await Supabase.instance.client.from('profiles')
-          .select('alert_settings').eq('id', uid).maybeSingle();
+      final row = await Supabase.instance.client
+          .from('profiles')
+          .select('alert_settings')
+          .eq('id', uid)
+          .maybeSingle();
       if (row?['alert_settings']?['voice_l1'] == false) return;
-    } catch (_) {}  // can't read the toggle -> default on (it's L1-rare)
+    } catch (_) {} // can't read the toggle -> default on (it's L1-rare)
   }
   await _tts.speak(hook);
 }
@@ -73,11 +79,12 @@ Future<void> _saveFcmToken() async {
   try {
     final token = await FirebaseMessaging.instance.getToken();
     if (token != null) {
-      await Supabase.instance.client.from('profiles')
+      await Supabase.instance.client
+          .from('profiles')
           .update({'fcm_token': token}).eq('id', uid);
       _fcmTokenSaved = true;
     }
-  } catch (_) {}  // no Firebase on this build/device — personalized just stays off
+  } catch (_) {} // no Firebase on this build/device — personalized just stays off
 }
 
 Future<void> main() async {
@@ -88,14 +95,15 @@ Future<void> main() async {
   } catch (_) {
     // A broken build (missing --dart-define) or hostile boot environment:
     // a message beats the native crash screen.
-    runApp(const MaterialApp(
-        home: Scaffold(
+    runApp(MaterialApp(
+        theme: appTheme, // not a full-white Material-light crash screen
+        home: const Scaffold(
             body: Center(
                 child: Padding(
-      padding: EdgeInsets.all(32),
-      child: Text('FinSwipe could not start — check for an update.',
-          textAlign: TextAlign.center),
-    )))));
+          padding: EdgeInsets.all(32),
+          child: Text('FinSwipe could not start — check for an update.',
+              textAlign: TextAlign.center),
+        )))));
     return;
   }
   RemoteMessage? initial;
@@ -256,8 +264,9 @@ class _HomeShellState extends State<HomeShell>
 
   void _track(Offset global) {
     if (_origin == null) return;
-    final next = (defaultRibbonTarget + ((global.dy - _origin!.dy) / _stepPx).round())
-        .clamp(0, ribbonTargets.length - 1);
+    final next =
+        (defaultRibbonTarget + ((global.dy - _origin!.dy) / _stepPx).round())
+            .clamp(0, ribbonTargets.length - 1);
     if (next != _active) {
       HapticFeedback.selectionClick();
       setState(() => _active = next);
@@ -279,7 +288,8 @@ class _HomeShellState extends State<HomeShell>
                   surfaceTintColor: bg,
                   elevation: 0,
                   leading: const BackButton(color: ink)),
-              body: id == 'saved' ? const SavedScreen() : const WatchlistScreen(),
+              body:
+                  id == 'saved' ? const SavedScreen() : const WatchlistScreen(),
             )));
   }
 
@@ -294,55 +304,53 @@ class _HomeShellState extends State<HomeShell>
         if (!didPop && _tab != 0) homeTab.value = 0;
       },
       child: Scaffold(
-      body: Stack(children: [
-        IndexedStack(
-          index: _tab,
-          children: const [FeedScreen(), AskScreen(), ProfileScreen()],
-        ),
-        IgnorePointer(
-          child: FadeTransition(
-            opacity: Tween<double>(begin: 0, end: 0.55).animate(_ribbon),
-            child: Container(color: bg),
+        body: Stack(children: [
+          IndexedStack(
+            index: _tab,
+            children: const [FeedScreen(), AskScreen(), ProfileScreen()],
           ),
-        ),
-        Positioned(
-          left: 22,
-          bottom: 12,
-          child: IgnorePointer(
-            child: RibbonColumn(
-              animation: _ribbon,
-              activeIndex: _active,
-              tileSize: _tileSize,
-              gap: _tileGap,
+          IgnorePointer(
+            child: FadeTransition(
+              opacity: Tween<double>(begin: 0, end: 0.55).animate(_ribbon),
+              child: Container(color: bg),
             ),
           ),
-        ),
-      ]),
-      // Three destinations, not four: Saved is a place you visit occasionally,
-      // not a peer of the feed. It now hangs off the bookmark on a card, where
-      // the thought "I want my saved ones" actually occurs.
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => homeTab.value = i,
-        destinations: [
-          NavigationDestination(
-              icon: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onLongPressStart: (d) => _open(d.globalPosition),
-                onLongPressMoveUpdate: (d) => _track(d.globalPosition),
-                onLongPressEnd: (_) => _close(commit: true),
-                onLongPressCancel: () => _close(),
-                child: Icon(_tab == 0
-                    ? Icons.newspaper
-                    : Icons.newspaper_outlined),
+          Positioned(
+            left: 22,
+            bottom: 12,
+            child: IgnorePointer(
+              child: RibbonColumn(
+                animation: _ribbon,
+                activeIndex: _active,
+                tileSize: _tileSize,
+                gap: _tileGap,
               ),
-              label: 'News'),
-          const NavigationDestination(
-              icon: Icon(Icons.search), label: 'Ask'),
-          NavigationDestination(icon: const _Avatar(), label: 'Profile'),
-        ],
+            ),
+          ),
+        ]),
+        // Three destinations, not four: Saved is a place you visit occasionally,
+        // not a peer of the feed. It now hangs off the bookmark on a card, where
+        // the thought "I want my saved ones" actually occurs.
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _tab,
+          onDestinationSelected: (i) => homeTab.value = i,
+          destinations: [
+            NavigationDestination(
+                icon: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onLongPressStart: (d) => _open(d.globalPosition),
+                  onLongPressMoveUpdate: (d) => _track(d.globalPosition),
+                  onLongPressEnd: (_) => _close(commit: true),
+                  onLongPressCancel: () => _close(),
+                  child: Icon(
+                      _tab == 0 ? Icons.newspaper : Icons.newspaper_outlined),
+                ),
+                label: 'News'),
+            const NavigationDestination(icon: Icon(Icons.search), label: 'Ask'),
+            NavigationDestination(icon: const _Avatar(), label: 'Profile'),
+          ],
+        ),
       ),
-    ),
     );
   }
 }
@@ -358,7 +366,8 @@ class _Avatar extends StatelessWidget {
     final user = Supabase.instance.client.auth.currentUser;
     final meta = user?.userMetadata ?? const {};
     final url = (meta['avatar_url'] ?? meta['picture']) as String?;
-    final name = (meta['full_name'] ?? meta['name'] ?? user?.email ?? '?') as String;
+    final name =
+        (meta['full_name'] ?? meta['name'] ?? user?.email ?? '?') as String;
     final initial = name.isEmpty ? '?' : name[0].toUpperCase();
 
     return ClipOval(

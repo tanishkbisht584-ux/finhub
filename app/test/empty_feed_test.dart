@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  testWidgets('an empty feed offers a Refresh button, not a dead end',
+  testWidgets('an empty feed offers a retry button, not a dead end',
       (tester) async {
     await tester.pumpWidget(ProviderScope(
       overrides: [
@@ -19,6 +19,6 @@ void main() {
     await tester.pump(); // resolve the future
     await tester.pump();
     expect(find.text('No stories yet — check back soon'), findsOneWidget);
-    expect(find.widgetWithText(OutlinedButton, 'Refresh'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Try again'), findsOneWidget);
   });
 }
