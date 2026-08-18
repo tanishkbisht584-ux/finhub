@@ -812,6 +812,14 @@ class _StoryCardState extends ConsumerState<StoryCard>
   bool? _pendingSave;
   final _shareKey = GlobalKey();
 
+  /// Same PageView-reuse trap _MediaStrip and StoryPager document: without
+  /// this, a save toggled on the last story paints this one's bookmark.
+  @override
+  void didUpdateWidget(StoryCard old) {
+    super.didUpdateWidget(old);
+    if (old.story.id != widget.story.id) _pendingSave = null;
+  }
+
   static const _tileSize = 46.0;
   static const _tileGap = 10.0;
   /// Travel per tile for the vertical ribbon: wide, because a stray flick
@@ -1566,7 +1574,8 @@ class _StoryPagerState extends State<StoryPager> {
     final id = widget.story.id;
     try {
       final res = await Supabase.instance.client.functions
-          .invoke('deepread', body: {'story_id': id});
+          .invoke('deepread', body: {'story_id': id})
+          .timeout(const Duration(seconds: 20));
       final read = DeepRead.fromJson(
           res.data is Map ? Map<String, dynamic>.from(res.data as Map) : null);
       // A refusal isn't cached server-side either — leave it out of the memo
@@ -1581,10 +1590,20 @@ class _StoryPagerState extends State<StoryPager> {
       if (mounted && widget.story.id == id) setState(() => _read = read);
     } catch (_) {
       if (mounted && widget.story.id == id) {
-        _requested = false; // offline moment: the next swipe simply retries
+        // _requested stays true: _onScroll fires per scroll pixel while the
+        // deep read is showing, and resetting here turned one offline moment
+        // into a burst of invokes. Retry is the button's job now.
         setState(() => _failed = true);
       }
     }
+  }
+
+  void _retryRead() {
+    setState(() {
+      _failed = false;
+      _requested = false;
+    });
+    _ensureRead();
   }
 
   @override
@@ -1596,9 +1615,12 @@ class _StoryPagerState extends State<StoryPager> {
       itemCount: 1 + deepCount,
       itemBuilder: (context, i) {
         if (i == 0) return StoryCard(story: widget.story);
-        if (read == null && !_failed) return const _WritingPage();
+        // Network failure and AI refusal are different stories: one deserves
+        // a retry button, the other the honest fallback in DeepReadPages.
+        if (_failed) return _FailedPage(onRetry: _retryRead);
+        if (read == null) return const _WritingPage();
         return DeepReadPages(
-          read: (read != null && read.hasContent) ? read : DeepRead(const []),
+          read: read.hasContent ? read : DeepRead(const []),
           pageIndex: i - 1,
           impactScore: widget.story.impactScore,
           category: widget.story.category,
@@ -1628,6 +1650,35 @@ class _WritingPage extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2, color: green)),
           const SizedBox(height: 14),
           Text('writing your story…', style: mono.copyWith(fontSize: 11.5)),
+        ]),
+      ),
+    );
+  }
+}
+
+/// The deep read couldn't be fetched (offline, hung function). Distinct from
+/// the AI-refusal fallback inside DeepReadPages — that one means "this story
+/// can't be written", this one means "try again".
+class _FailedPage extends StatelessWidget {
+  const _FailedPage({required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      color: surface,
+      child: Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text("Couldn't load the full story — check your connection.",
+              textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11.5)),
+          const SizedBox(height: 16),
+          OutlinedButton(
+            onPressed: onRetry,
+            style: OutlinedButton.styleFrom(
+                foregroundColor: ink, side: const BorderSide(color: border)),
+            child: const Text('Try again'),
+          ),
         ]),
       ),
     );
