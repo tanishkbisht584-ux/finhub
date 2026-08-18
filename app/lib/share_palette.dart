@@ -29,14 +29,14 @@ const shareTargets = <ShareTarget>[
   ShareTarget('reddit', 'Reddit', Icons.reddit_rounded, Color(0xFFFF4500)),
   ShareTarget('card', 'Card', Icons.image_rounded, green),
   ShareTarget('x', 'X', Icons.tag_rounded, Color(0xFFE8E6E3)),
-  ShareTarget('discord', 'Discord', Icons.headphones_rounded, Color(0xFF5865F2)),
+  ShareTarget(
+      'discord', 'Discord', Icons.headphones_rounded, Color(0xFF5865F2)),
   ShareTarget('copy', 'Copy', Icons.link_rounded, inkDim),
   ShareTarget('cancel', 'Cancel', Icons.close_rounded, red),
 ];
 
 /// The centre cell — what the palette opens on.
-final int defaultShareTarget =
-    shareTargets.indexWhere((t) => t.id == 'card');
+final int defaultShareTarget = shareTargets.indexWhere((t) => t.id == 'card');
 
 String shareText(Story s) =>
     '${s.hook ?? s.headline}\n\nvia FinSwipe · ${s.sourceUrl}';
@@ -67,8 +67,8 @@ Future<String?> runShareTarget(
     case 'cancel':
       return null; // deliberate no-op: the user backed out
     case 'messenger':
-      await tryScheme('fb-messenger://share/?link=$link',
-          'https://www.messenger.com/');
+      await tryScheme(
+          'fb-messenger://share/?link=$link', 'https://www.messenger.com/');
       return null;
     case 'reddit':
       await tryScheme('https://www.reddit.com/submit?url=$link&title=$title',
@@ -81,8 +81,8 @@ Future<String?> runShareTarget(
       await tryScheme('discord://', 'https://discord.com/channels/@me');
       return 'Copied — paste it in Discord';
     case 'whatsapp':
-      await tryScheme('whatsapp://send?text=$encoded',
-          'https://wa.me/?text=$encoded');
+      await tryScheme(
+          'whatsapp://send?text=$encoded', 'https://wa.me/?text=$encoded');
       return null;
     case 'telegram':
       await tryScheme('tg://msg?text=$encoded',
@@ -218,7 +218,7 @@ class _Tile extends StatelessWidget {
             opacity: active ? 1 : 0.4,
             child: Text(target.label,
                 style: mono.copyWith(
-                    fontSize: 9, color: active ? target.tint : inkDim)),
+                    fontSize: 10.5, color: active ? target.tint : inkDim)),
           ),
         ]),
       ),
@@ -270,7 +270,8 @@ class RibbonColumn extends StatelessWidget {
                 curve: Curves.easeOutCubic),
           );
           return Padding(
-            padding: EdgeInsets.only(bottom: i == ribbonTargets.length - 1 ? 0 : gap),
+            padding: EdgeInsets.only(
+                bottom: i == ribbonTargets.length - 1 ? 0 : gap),
             child: ScaleTransition(
               scale: Tween<double>(begin: 0.7, end: 1).animate(curve),
               child: AnimatedScale(
@@ -290,7 +291,8 @@ class RibbonColumn extends StatelessWidget {
                         color: active ? t.tint : border,
                         width: active ? 1.5 : 1),
                   ),
-                  child: Icon(t.icon, size: 22, color: active ? t.tint : inkDim),
+                  child:
+                      Icon(t.icon, size: 22, color: active ? t.tint : inkDim),
                 ),
               ),
             ),

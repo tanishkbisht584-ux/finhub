@@ -93,23 +93,25 @@ class SavedScreen extends ConsumerWidget {
       // the tree (debug throw, ghost row in release).
       child: saved.when(
         skipLoadingOnRefresh: false,
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => Center(child: appSpinner()),
         // Scrollable like the empty state: pull-to-refresh while offline put
         // raw exception text here that could not be pulled on — the one moment
         // you most want to retry was the one moment you could not.
         error: (e, _) => RefreshIndicator(
           onRefresh: () =>
               ref.refresh(savedProvider.future).then((_) {}, onError: (_) {}),
-          child: ListView(children: const [
-            SizedBox(height: 120),
-            Center(child: Text('Could not load saves — pull to retry')),
+          child: ListView(children: [
+            const SizedBox(height: 120),
+            Center(
+                child: Text('Could not load saves — pull to retry',
+                    style: mono.copyWith(fontSize: 13))),
           ]),
         ),
         data: (list) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -131,9 +133,11 @@ class SavedScreen extends ConsumerWidget {
                     .refresh(savedProvider.future)
                     .then((_) {}, onError: (_) {}),
                 child: list.isEmpty
-                    ? ListView(children: const [
-                        SizedBox(height: 120),
-                        Center(child: Text('Nothing saved yet')),
+                    ? ListView(children: [
+                        const SizedBox(height: 120),
+                        Center(
+                            child: Text('Nothing saved yet',
+                                style: mono.copyWith(fontSize: 13))),
                       ])
                     : ListView.separated(
                         itemCount: list.length,
@@ -151,6 +155,8 @@ class SavedScreen extends ConsumerWidget {
                                 child: const Icon(Icons.delete_outline)),
                             child: ListTile(
                               title: Text(s.hook ?? s.headline,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w600)),
                               subtitle: Text.rich(TextSpan(children: [

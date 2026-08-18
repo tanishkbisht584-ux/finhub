@@ -204,8 +204,7 @@ class _AuthGateState extends State<AuthGate> {
         _checkInterests(session.user);
         _saveFcmToken();
         if (_needsInterests == null) {
-          return const Scaffold(
-              body: Center(child: CircularProgressIndicator()));
+          return Scaffold(body: Center(child: appSpinner()));
         }
         if (_needsInterests == true) {
           return InterestsScreen(

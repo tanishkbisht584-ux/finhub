@@ -519,7 +519,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     final stories = ref.watch(storiesProvider);
     final cachedAt = ref.watch(servingCacheProvider);
     return stories.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => Center(child: appSpinner()),
       error: (e, _) => _Offline(onRetry: () => ref.refresh(storiesProvider)),
       data: (list) {
         if (pendingStory.value != null) {

@@ -109,7 +109,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
           ),
         );
       }
-      return const Center(child: CircularProgressIndicator());
+      return Center(child: appSpinner());
     }
     if (companies.isEmpty) {
       return Center(
@@ -124,7 +124,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
       );
     }
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
       children: [
         Wrap(
           spacing: 8,
@@ -134,7 +134,8 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
               ActionChip(
                 backgroundColor: surface,
                 side: const BorderSide(color: border),
-                label: Text(c.nseSymbol, style: mono.copyWith(color: ink)),
+                label: Text(c.nseSymbol,
+                    style: mono.copyWith(fontSize: 13, color: ink)),
                 // Reload on return: an unfollow on the stock page must not
                 // leave the chip (and its stories) ghosting here.
                 onPressed: () async {
@@ -149,11 +150,12 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         if (_error != null)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
-            child: GestureDetector(
-              onTap: _load,
-              child: Text('Could not load stories — tap to retry',
+            child: Column(children: [
+              Text('Could not load your stories',
                   style: mono.copyWith(fontSize: 13)),
-            ),
+              const SizedBox(height: 12),
+              OutlinedButton(onPressed: _load, child: const Text('Try again')),
+            ]),
           )
         else if (_stories.isEmpty)
           Padding(

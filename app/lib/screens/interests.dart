@@ -7,8 +7,14 @@ import '../theme.dart';
 /// The pipeline's category enum verbatim (ai.py CATEGORIES) — a follow row on
 /// a category the pipeline never emits would be a dead filter.
 const kCategories = [
-  'Markets', 'Economy', 'IPO', 'Global',
-  'Commodities', 'Corporate', 'Policy', 'Geopolitics',
+  'Markets',
+  'Economy',
+  'IPO',
+  'Global',
+  'Commodities',
+  'Corporate',
+  'Policy',
+  'Geopolitics',
 ];
 
 class InterestsScreen extends StatefulWidget {
@@ -53,9 +59,11 @@ class _InterestsScreenState extends State<InterestsScreen> {
             children: [
               const Spacer(),
               Text('What do you care about?',
-                  style: serif.copyWith(fontSize: 28, fontWeight: FontWeight.w700)),
+                  style: serif.copyWith(
+                      fontSize: 28, fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
-              Text('Pick at least three — your alerts and feed learn from this.',
+              Text(
+                  'Pick at least three — your alerts and feed learn from this.',
                   style: mono.copyWith(fontSize: 13)),
               const SizedBox(height: 24),
               Wrap(
@@ -71,8 +79,8 @@ class _InterestsScreenState extends State<InterestsScreen> {
                       checkmarkColor: green,
                       side: BorderSide(
                           color: _picked.contains(c) ? green : border),
-                      labelStyle: TextStyle(
-                          color: _picked.contains(c) ? green : ink),
+                      labelStyle:
+                          TextStyle(color: _picked.contains(c) ? green : ink),
                       onSelected: (_) => setState(() => _picked.contains(c)
                           ? _picked.remove(c)
                           : _picked.add(c)),
@@ -84,9 +92,8 @@ class _InterestsScreenState extends State<InterestsScreen> {
                 width: double.infinity,
                 child: FilledButton(
                   onPressed: _picked.length >= 3 && !_saving ? _save : null,
-                  child: Text(_saving
-                      ? 'Saving…'
-                      : 'Continue (${_picked.length}/3)'),
+                  child: Text(
+                      _saving ? 'Saving…' : 'Continue (${_picked.length}/3)'),
                 ),
               ),
             ],

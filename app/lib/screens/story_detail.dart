@@ -27,7 +27,7 @@ class StoryDetailScreen extends StatelessWidget {
         future: _fetch(),
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
+            return Center(child: appSpinner());
           }
           // An alert can outlive its story: rejected in the admin panel, or
           // aged past retention. Say so plainly instead of an empty screen.

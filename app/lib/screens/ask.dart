@@ -148,7 +148,7 @@ class _AskScreenState extends State<AskScreen> {
   Widget build(BuildContext context) {
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         children: [
           TextField(
             controller: _controller,
@@ -173,9 +173,9 @@ class _AskScreenState extends State<AskScreen> {
                   .toList(),
             ),
           if (_loading)
-            const Padding(
-              padding: EdgeInsets.only(top: 48),
-              child: Center(child: CircularProgressIndicator()),
+            Padding(
+              padding: const EdgeInsets.only(top: 48),
+              child: Center(child: appSpinner()),
             ),
           if (_error != null)
             Padding(
@@ -247,22 +247,15 @@ class AnswerCard extends StatelessWidget {
               dense: true,
               title:
                   Text(s.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-              subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
+              subtitle: Text(s.sourceName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: mono.copyWith(fontSize: 11)),
               trailing: const Icon(Icons.open_in_new, size: 16),
               onTap: () => openExternal(context, s.url),
             )),
-        if (answer.followups.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: answer.followups
-                .map((q) =>
-                    ActionChip(label: Text(q), onPressed: () => onFollowup(q)))
-                .toList(),
-          ),
-        ],
-        const SizedBox(height: 16),
+        // The caveat attaches to the answer it qualifies — chips used to sit
+        // between them, leaving legal text as the last thing on screen.
         Text(
             isExplainer
                 ? 'General explainer, not from our newsroom. Verify current '
@@ -270,6 +263,21 @@ class AnswerCard extends StatelessWidget {
                 : 'Answers come only from our sources. Not investment advice.',
             textAlign: TextAlign.center,
             style: mono.copyWith(fontSize: 11)),
+        if (answer.followups.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: answer.followups
+                .map((q) => ActionChip(
+                    label: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 280),
+                        child: Text(q,
+                            maxLines: 1, overflow: TextOverflow.ellipsis)),
+                    onPressed: () => onFollowup(q)))
+                .toList(),
+          ),
+        ],
       ],
     );
   }
@@ -277,13 +285,11 @@ class AnswerCard extends StatelessWidget {
   Widget _section(String label, String body) => body.isEmpty
       ? const SizedBox.shrink()
       : Padding(
-          padding: const EdgeInsets.only(bottom: 14),
+          padding: const EdgeInsets.only(bottom: 20),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label,
-                style:
-                    mono.copyWith(fontSize: 11, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 4),
+            Text(label, style: monoLabel),
+            const SizedBox(height: 6),
             Text(body, style: const TextStyle(fontSize: 15, height: 1.5)),
           ]),
         );

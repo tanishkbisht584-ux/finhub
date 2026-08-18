@@ -115,7 +115,10 @@ class QaAnswer {
         sections = [
           for (final s in (j['sections'] ?? const []) as List)
             if ((s['body'] ?? '') != '')
-              (heading: (s['heading'] ?? '') as String, body: s['body'] as String)
+              (
+                heading: (s['heading'] ?? '') as String,
+                body: s['body'] as String
+              )
         ],
         refused = j['refused'] == true;
 
@@ -160,7 +163,8 @@ class Quote {
         high52 = (r['meta']['fiftyTwoWeekHigh'] as num?)?.toDouble() ?? 0,
         low52 = (r['meta']['fiftyTwoWeekLow'] as num?)?.toDouble() ?? 0,
         closes = [
-          for (final c in (r['indicators']['quote'][0]['close'] as List? ?? const []))
+          for (final c
+              in (r['indicators']['quote'][0]['close'] as List? ?? const []))
             if (c != null) (c as num).toDouble()
         ];
 }
@@ -184,7 +188,9 @@ class DeepRead {
     if (raw is! List) return DeepRead(const []);
     return DeepRead([
       for (final p in raw)
-        if (p is Map && (p['body'] is String) && (p['body'] as String).trim().isNotEmpty)
+        if (p is Map &&
+            (p['body'] is String) &&
+            (p['body'] as String).trim().isNotEmpty)
           DeepPage(p['heading'] as String?, p['body'] as String)
     ]);
   }

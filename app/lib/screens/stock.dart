@@ -155,7 +155,7 @@ class _StockScreenState extends State<StockScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         children: [
           Text(widget.company.nseSymbol, style: mono.copyWith(fontSize: 12)),
           const SizedBox(height: 8),
@@ -187,13 +187,12 @@ class _StockScreenState extends State<StockScreen> {
                   style: mono.copyWith(fontSize: 13)),
             )
           else
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: Center(child: CircularProgressIndicator()),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: appSpinner()),
             ),
           const Divider(height: 40),
-          Text('RECENT STORIES',
-              style: mono.copyWith(fontSize: 11, fontWeight: FontWeight.w700)),
+          Text('RECENT STORIES', style: monoLabel),
           const SizedBox(height: 8),
           if (_stories.isEmpty)
             Padding(

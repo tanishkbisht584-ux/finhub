@@ -21,25 +21,36 @@ class ProfileScreen extends StatelessWidget {
         'Signed in';
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(20),
         children: [
           Row(children: [
             _photo(user, name),
-            const SizedBox(width: 14),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
-              if (user?.email != null)
-                Text(user!.email!, style: mono.copyWith(fontSize: 12)),
-            ]),
+            const SizedBox(width: 16),
+            // Expanded + ellipsis: a long Google full_name or email was an
+            // unconstrained Row child — yellow-stripe overflow.
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    if (user?.email != null)
+                      Text(user!.email!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: mono.copyWith(fontSize: 12)),
+                  ]),
+            ),
           ]),
           const SizedBox(height: 32),
-          Text('ALERTS',
-              style: mono.copyWith(fontSize: 12, letterSpacing: 1.2)),
+          Text('ALERTS', style: monoLabel),
           const SizedBox(height: 8),
           const Divider(height: 1),
           if (user != null) AlertSettingsSection(userId: user.id),
           const SizedBox(height: 32),
-          Text('APP', style: mono.copyWith(fontSize: 12, letterSpacing: 1.2)),
+          Text('APP', style: monoLabel),
           const SizedBox(height: 8),
           const Divider(height: 1),
           const SizedBox(height: 24),
