@@ -472,6 +472,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       final grown = insertFresh(_feed, fresh, anchorId);
       if (grown.length != _feed.length) {
         _feed = grown;
+        // LIVE promises freshness; a silent off-screen splice delivers
+        // nothing. One light tap is the honest minimum.
+        if (liveMode.value) HapticFeedback.lightImpact();
         setState(() {});
       }
     } catch (_) {
@@ -552,13 +555,29 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                 ),
               ]))
             : Column(children: [
-                if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 200),
+                  child: cachedAt != null
+                      ? _CacheBanner(savedAt: cachedAt)
+                      : const SizedBox(width: double.infinity),
+                ),
                 Expanded(
                   child: Stack(children: [
                     shown.isEmpty
-                        ? const Center(
-                            child: Text(
-                                'Nothing matches your filters — tap the dial'))
+                        ? Center(
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                const Icon(Icons.tune, size: 30, color: inkDim),
+                                const SizedBox(height: 12),
+                                Text('Nothing matches your filters',
+                                    style: serif.copyWith(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 6),
+                                Text('Tap the dial to widen them.',
+                                    style: mono.copyWith(fontSize: 11.5)),
+                              ]))
                         : NotificationListener<OverscrollNotification>(
                             // RefreshIndicator on a vertical PageView loses
                             // the gesture to the page snap (seen on device:
@@ -662,16 +681,19 @@ class LiveButton extends StatelessWidget {
     return ValueListenableBuilder<bool>(
       valueListenable: liveMode,
       builder: (context, on, _) => GestureDetector(
-        onTap: () => liveMode.value = !on,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          liveMode.value = !on;
+        },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 140),
-          height: 40,
+          height: 44,
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
             color: on
                 ? red.withValues(alpha: 0.18)
                 : surface.withValues(alpha: 0.96),
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(22),
             border: Border.all(color: on ? red : border, width: on ? 1.5 : 1),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -706,11 +728,14 @@ class FeedFilterButton extends StatelessWidget {
         builder: (context, _, __) {
           final live = filtersActive();
           return GestureDetector(
-            onTap: () => showFeedFilterSheet(context),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              showFeedFilterSheet(context);
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 140),
-              width: 40,
-              height: 40,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
                 color: live
                     ? green.withValues(alpha: 0.18)
@@ -734,11 +759,14 @@ void showFeedFilterSheet(BuildContext context) {
   Widget pill(String label, bool on, Color tint, VoidCallback onTap,
           {double fontSize = 11}) =>
       GestureDetector(
-        onTap: onTap,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 140),
           curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
             color: on ? tint.withValues(alpha: 0.18) : surface,
             border: Border.all(color: on ? tint : border, width: on ? 1.5 : 1),
@@ -1202,14 +1230,24 @@ class _StoryCardState extends ConsumerState<StoryCard>
                                           builder: (_) =>
                                               StockScreen(company: c))),
                                   child: Container(
+                                    // Taller than the inert sector chips and
+                                    // carrying the ↗ — this one navigates,
+                                    // and nothing else distinguished them.
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 3),
+                                        horizontal: 8, vertical: 8),
                                     decoration: BoxDecoration(
                                         color: surface,
                                         border: Border.all(color: border)),
-                                    child: Text('\$${c.nseSymbol}',
-                                        style: mono.copyWith(
-                                            fontSize: 12, color: ink)),
+                                    child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text('\$${c.nseSymbol}',
+                                              style: mono.copyWith(
+                                                  fontSize: 12, color: ink)),
+                                          const SizedBox(width: 3),
+                                          const Icon(Icons.north_east_rounded,
+                                              size: 10, color: inkDim),
+                                        ]),
                                   ),
                                 ))
                             .toList(),
@@ -1307,7 +1345,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
         InkWell(
           onTap: _showOutlets,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 6, 2, 6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
             child: Text('+$others more',
                 style: mono.copyWith(
                     fontSize: 10.5, color: dir, fontWeight: FontWeight.w600)),
@@ -1482,6 +1520,14 @@ class _MediaStripState extends State<_MediaStrip> {
         },
         loadingBuilder: (context, child, progress) =>
             progress == null ? child : Container(color: surface),
+        // Decoded frames fade in instead of hard-cutting over the surface
+        // placeholder.
+        frameBuilder: (context, child, frame, syncLoaded) => syncLoaded
+            ? child
+            : AnimatedOpacity(
+                opacity: frame == null ? 0 : 1,
+                duration: const Duration(milliseconds: 220),
+                child: child),
       ),
     );
     return Padding(
@@ -1662,6 +1708,7 @@ class _StoryPagerState extends State<StoryPager> {
             pageIndex: i - 1,
             impactScore: widget.story.impactScore,
             category: widget.story.category,
+            direction: widget.story.impactDirection,
             sourceUrl: widget.story.sourceUrl,
             sourceName: widget.story.sourceName,
           );
@@ -1733,12 +1780,14 @@ class DeepReadPages extends StatelessWidget {
       required this.pageIndex,
       this.impactScore,
       this.category,
+      this.direction,
       this.sourceUrl,
       this.sourceName});
   final DeepRead read;
   final int pageIndex;
   final int? impactScore;
   final String? category;
+  final String? direction;
   final String? sourceUrl;
   final String? sourceName;
 
@@ -1781,15 +1830,16 @@ class DeepReadPages extends StatelessWidget {
       );
     }
     final page = read.pages[pageIndex.clamp(0, read.pages.length - 1)];
-    final dots = [
-      for (var i = 0; i < read.pages.length; i++) i == pageIndex ? '●' : '○'
-    ].join(' ');
+
     return SafeArea(
       child: Container(
         margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         decoration: BoxDecoration(
           color: surface,
-          border: const Border(left: BorderSide(color: border, width: 3)),
+          // Keep the card's direction accent through the whole read — it's
+          // the one persistent color signal, and it vanished on swipe.
+          border: Border(
+              left: BorderSide(color: directionColor(direction), width: 3)),
         ),
         padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1823,7 +1873,22 @@ class DeepReadPages extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Center(child: Text(dots, style: mono.copyWith(fontSize: 10.5))),
+          Center(
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              // The one place the reader's position is shown — give the page
+              // turn actual motion instead of a reflowed character string.
+              for (var i = 0; i < read.pages.length; i++)
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  width: i == pageIndex ? 6 : 4,
+                  height: i == pageIndex ? 6 : 4,
+                  decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: i == pageIndex ? ink : inkDim),
+                ),
+            ]),
+          ),
           const SizedBox(height: 8),
         ]),
       ),
