@@ -23,10 +23,6 @@ const supabasePublishableKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY'
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
-/// Which HomeShell tab is showing. A notification tap has to reach the feed
-/// from wherever the app happens to be — Ask, Profile, or a pushed sub-screen.
-final homeTab = ValueNotifier<int>(0);
-
 void _openStory(RemoteMessage m) {
   final id = int.tryParse(m.data['story_id'] ?? '');
   if (id == null) return;
@@ -86,7 +82,22 @@ Future<void> _saveFcmToken() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Supabase.initialize(url: supabaseUrl, publishableKey: supabasePublishableKey);
+  try {
+    await Supabase.initialize(
+        url: supabaseUrl, publishableKey: supabasePublishableKey);
+  } catch (_) {
+    // A broken build (missing --dart-define) or hostile boot environment:
+    // a message beats the native crash screen.
+    runApp(const MaterialApp(
+        home: Scaffold(
+            body: Center(
+                child: Padding(
+      padding: EdgeInsets.all(32),
+      child: Text('FinSwipe could not start — check for an update.',
+          textAlign: TextAlign.center),
+    )))));
+    return;
+  }
   RemoteMessage? initial;
   try {
     await Firebase.initializeApp();
@@ -136,15 +147,18 @@ class _AuthGateState extends State<AuthGate> {
   /// null = unknown yet; checked once per signed-in session. Errors count as
   /// "has interests" — a flaky network must never re-run onboarding.
   bool? _needsInterests;
+  bool _profileEnsured = false;
 
   /// saves/events carry a foreign key to profiles, so without this row every
   /// save silently fails. Safe to call on each launch — it upserts.
   Future<void> _ensureProfile(User user) async {
+    if (_profileEnsured) return; // build() re-fires this on every rebuild
     try {
       await Supabase.instance.client.from('profiles').upsert({
         'id': user.id,
         'display_name': user.userMetadata?['full_name'] ?? user.email,
       }, onConflict: 'id');
+      _profileEnsured = true;
     } catch (_) {
       // offline or transient: saves retry the upsert themselves
     }
@@ -173,8 +187,9 @@ class _AuthGateState extends State<AuthGate> {
         if (session == null) {
           _needsInterests = null;
           // A device-shared user's next account must register its own token
-          // and not inherit whatever the previous account already pushed.
+          // and profile row, not inherit the previous account's.
           _fcmTokenSaved = false;
+          _profileEnsured = false;
           return const SignInScreen();
         }
         _ensureProfile(session.user);

@@ -29,6 +29,12 @@ final servingCacheProvider = StateProvider<DateTime?>((ref) => null);
 /// find a container with.
 final pendingStory = ValueNotifier<int?>(null);
 
+/// Which HomeShell tab is showing. A notification tap has to reach the feed
+/// from wherever the app happens to be — Ask, Profile, or a pushed sub-screen.
+/// Lives here (not main.dart) so the feed's poll can gate on it without a
+/// feed→main import cycle.
+final homeTab = ValueNotifier<int>(0);
+
 /// Put the feed on [id]'s card. False when the story isn't in the loaded list,
 /// so the caller can fall back to the standalone detail screen.
 bool jumpToStory(PageController pc, List<Story> list, int id) {
