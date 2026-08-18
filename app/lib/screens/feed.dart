@@ -1129,7 +1129,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
             const SizedBox(height: 12),
             _MediaStrip(story: story),
             Expanded(
-              child: SingleChildScrollView(
+              child: _FitScroll(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1703,7 +1703,7 @@ class DeepReadPages extends StatelessWidget {
             const SizedBox(height: 10),
           ],
           Expanded(
-            child: SingleChildScrollView(
+            child: _FitScroll(
               child: Text(page.body,
                   style: serif.copyWith(fontSize: 16.5, height: 1.65)),
             ),
@@ -1739,4 +1739,43 @@ class _CacheBanner extends StatelessWidget {
         child: Text('Offline — showing stories saved $_age. Pull to retry.',
             style: mono.copyWith(fontSize: 11, color: amber)),
       );
+}
+
+/// Scrolls only when its child actually overflows; otherwise the drag falls
+/// through to the feed's vertical PageView. A live inner vertical scrollable
+/// wins the gesture arena even with nothing to scroll, which made the summary
+/// — most of the card — dead ground for the app's one core gesture.
+class _FitScroll extends StatefulWidget {
+  const _FitScroll({required this.child});
+  final Widget child;
+
+  @override
+  State<_FitScroll> createState() => _FitScrollState();
+}
+
+class _FitScrollState extends State<_FitScroll> {
+  final _sc = ScrollController();
+  bool _overflows = false;
+
+  @override
+  void dispose() {
+    _sc.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Re-measure every build: the PageView reuses this State across stories,
+    // and maxScrollExtent is computed even under NeverScrollableScrollPhysics.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_sc.hasClients) return;
+      final o = _sc.position.maxScrollExtent > 0;
+      if (o != _overflows) setState(() => _overflows = o);
+    });
+    return SingleChildScrollView(
+      controller: _sc,
+      physics: _overflows ? null : const NeverScrollableScrollPhysics(),
+      child: widget.child,
+    );
+  }
 }
