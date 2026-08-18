@@ -124,8 +124,10 @@ void main() {
     tester.view.devicePixelRatio = 3.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(_app(_s(const {})));
-    expect(find.byType(AspectRatio), findsNothing);
+    expect(find.byType(Image), findsNothing);
     expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
+    // The hook takes the photo's slot — shown once, in the hero.
+    expect(find.text('RBI stands still'), findsOneWidget);
   });
 
   testWidgets('dead image URL collapses the strip silently', (tester) async {
@@ -135,9 +137,10 @@ void main() {
     await tester.pumpWidget(_app(_s({'image_url': 'https://x.invalid/a.jpg'})));
     await tester.pumpAndSettle();
     // Test HTTP fails outright (DNS/connection error) for every request:
-    // the errorBuilder path.
-    expect(find.byType(AspectRatio), findsNothing);
+    // the errorBuilder path. The hero drops to its compact face and the hook
+    // still renders exactly once (below the hero, image-card layout).
     expect(find.byIcon(Icons.broken_image), findsNothing);
+    expect(find.text('RBI stands still'), findsOneWidget);
   });
 
   testWidgets(
@@ -154,7 +157,7 @@ void main() {
     })));
     await tester.pumpAndSettle();
 
-    expect(find.byType(AspectRatio), findsOneWidget);
+    expect(find.byType(Image), findsOneWidget);
     expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
     expect(
         find.ancestor(
@@ -175,7 +178,7 @@ void main() {
     // failure) -> strip collapses and _dead latches true.
     await tester.pumpWidget(_app(_s({'image_url': 'https://x.invalid/a.jpg'})));
     await tester.pumpAndSettle();
-    expect(find.byType(AspectRatio), findsNothing);
+    expect(find.byType(Image), findsNothing);
 
     // Same widget position, no keys -> Flutter reuses the State, exactly
     // like PageView.builder swiping to the next card. A good image_url on
@@ -183,7 +186,7 @@ void main() {
     _withMockedImageTransport();
     await tester.pumpWidget(_app(_s({'image_url': 'https://cdn.et.com/b.jpg'})));
     await tester.pumpAndSettle();
-    expect(find.byType(AspectRatio), findsOneWidget);
+    expect(find.byType(Image), findsOneWidget);
     debugNetworkImageHttpClientProvider = null;
   });
 }

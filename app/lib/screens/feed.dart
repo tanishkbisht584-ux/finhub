@@ -831,8 +831,12 @@ void showFeedFilterSheet(BuildContext context) {
 }
 
 class StoryCard extends ConsumerStatefulWidget {
-  const StoryCard({super.key, required this.story});
+  const StoryCard({super.key, required this.story, this.onReadMore});
   final Story story;
+
+  /// Feed-only: the bottom "Read more" strip's tap, wired by StoryPager to the
+  /// same page-turn as a left swipe. Null (detail/saved/stock) hides the strip.
+  final VoidCallback? onReadMore;
 
   @override
   ConsumerState<StoryCard> createState() => _StoryCardState();
@@ -1073,13 +1077,6 @@ class _StoryCardState extends ConsumerState<StoryCard>
     }
   }
 
-  String get _horizon => switch (story.impactHorizon) {
-        'short_term' => 'SHORT',
-        'long_term' => 'LONG',
-        'both' => 'SHORT + LONG',
-        _ => '',
-      };
-
   @override
   Widget build(BuildContext context) {
     final dir = directionColor(story.impactDirection);
@@ -1088,7 +1085,10 @@ class _StoryCardState extends ConsumerState<StoryCard>
     final known = ref.watch(savedProvider).valueOrNull;
     final isSaved =
         _pendingSave ?? (known?.any((s) => s.id == story.id) ?? false);
+    // top: false — the hero bleeds behind the status bar; _CardHero pads the
+    // IMPACT line by the inset itself.
     return SafeArea(
+      top: false,
       child: GestureDetector(
         // Plain detector on purpose: LongPressGestureRecognizer already allows
         // unlimited drift before it accepts, so a hand-rolled one bought
@@ -1100,6 +1100,10 @@ class _StoryCardState extends ConsumerState<StoryCard>
         onLongPressCancel: () => _closePalette(),
         child: Stack(alignment: Alignment.center, children: [
           RepaintBoundary(key: _shareKey, child: _card(dir, isSaved)),
+
+          // Reels-style action rail on the right edge, over the card and
+          // outside the RepaintBoundary — share PNGs stay free of UI icons.
+          Positioned(right: 10, bottom: 116, child: _rail(isSaved)),
 
           // Dim the card while the palette is up, so the targets read as a
           // layer above rather than more card furniture.
@@ -1161,54 +1165,39 @@ class _StoryCardState extends ConsumerState<StoryCard>
   }
 
   Widget _card(Color dir, bool isSaved) {
-    return Container(
-        margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        decoration: BoxDecoration(
-          color: surface,
-          border: Border(left: BorderSide(color: dir, width: 3)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Clear the floating LIVE/filter tiles (feed paints edge-to-edge,
-            // so the status inset tells us how far down they reach; on the
-            // detail screen the AppBar consumes it and this collapses to 20).
-            // SafeArea above already consumed the status inset — adding it again
-            // opened a ~47px dead band over every card.
-            const SizedBox(height: 28),
-            // IMPACT 9/10 · SHORT + LONG — monospace ledger line, centered
-            // between the two tiles' row (owner 2026-08-14).
-            Center(
-              child: Text.rich(TextSpan(children: [
-                TextSpan(
-                    text: 'IMPACT ${story.impactScore ?? '–'}/10',
-                    style: mono.copyWith(
-                        color: impactColor(story.impactScore),
-                        fontWeight: FontWeight.w700)),
-                if (_horizon.isNotEmpty)
-                  TextSpan(text: '  ·  $_horizon', style: mono),
-              ])),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Hero zone (image-top template, owner 2026-08-18, mockup in
+        // docs/mockups/finswipe-card-mockup.html): photo full-bleed with the
+        // IMPACT line on a scrim, or the hook in the photo's slot when there
+        // is no image.
+        _CardHero(story: story),
+        Expanded(
+          child: Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: surface,
+              border: Border(left: BorderSide(color: dir, width: 3)),
             ),
-            const SizedBox(height: 14),
-            // maxLines: a 4-line hook + 3-line headline + media strip on a
-            // small phone was driving the Expanded to a RenderFlex overflow.
-            if (story.hook != null) ...[
-              Text(story.hook!,
-                  maxLines: 4,
-                  overflow: TextOverflow.ellipsis,
-                  style: serif.copyWith(
-                      fontSize: 30, fontWeight: FontWeight.w700, height: 1.2)),
-              const SizedBox(height: 12),
-            ],
-            Text(story.headline,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600, height: 1.35)),
-            const SizedBox(height: 12),
-            _MediaStrip(story: story),
-            Expanded(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Image cards carry the hook below the photo; text cards
+                // already showed it inside the hero. maxLines guards the
+                // small-phone RenderFlex overflow, as before.
+                if (story.imageUrl != null) ...[
+                  Text(story.hook ?? story.headline,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: serif.copyWith(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2)),
+                  const SizedBox(height: 12),
+                ],
+                Expanded(
               child: _FitScroll(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1274,15 +1263,66 @@ class _StoryCardState extends ConsumerState<StoryCard>
                 ),
               ),
             ),
-            const Divider(height: 20),
-            // Attribution left, actions right — the arrangement every social
-            // feed has trained thumbs to expect.
-            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Expanded(child: _attribution(dir)),
-              _rail(isSaved),
+                const Divider(height: 20),
+                // Attribution owns the full width now — the action rail
+                // floats on the card's right edge (see build).
+                _attribution(dir),
+              ],
+            ),
+          ),
+        ),
+        if (widget.onReadMore != null) _readMoreStrip(dir),
+      ],
+    );
+  }
+
+  /// Deep Read's visible front door: the strip mirrors the inspiration's
+  /// bottom teaser and fires the same page-turn as a left swipe. The teaser
+  /// text is the headline (freed up by the hook-only card); a hookless card
+  /// already shows the headline big, so fall back to the summary there.
+  Widget _readMoreStrip(Color dir) {
+    final teaser = story.hook != null ? story.headline : (story.summary ?? '');
+    return GestureDetector(
+      onTap: widget.onReadMore,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          border: const Border(top: BorderSide(color: border)),
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              dir.withValues(alpha: 0.05),
+              dir.withValues(alpha: 0.12),
+            ],
+          ),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (teaser.isNotEmpty) ...[
+              Text(teaser,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 13,
+                      height: 1.45,
+                      color: ink.withValues(alpha: 0.85))),
+              const SizedBox(height: 6),
+            ],
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('Read more',
+                  style: mono.copyWith(
+                      fontSize: 12, fontWeight: FontWeight.w700, color: dir)),
+              const SizedBox(width: 5),
+              Icon(Icons.arrow_forward_rounded, size: 14, color: dir),
             ]),
           ],
-        ));
+        ),
+      ),
+    );
   }
 
   /// Outlet identity, styled like a handle: monogram, name, and the link out.
@@ -1467,89 +1507,187 @@ class _StoryCardState extends ConsumerState<StoryCard>
 /// would be exactly the re-hosting the strip's own hotlink comment forbids.
 final shareCapture = ValueNotifier<bool>(false);
 
-/// 16:9 picture or video thumbnail between headline and summary (spec: M8).
-/// Hotlinked from the origin CDN — we never re-host. A dead URL collapses the
-/// whole strip: a blank card is fine, a broken-image icon is not.
-class _MediaStrip extends StatefulWidget {
-  const _MediaStrip({required this.story});
+/// The card's top zone (image-top template, spec M8 + owner 2026-08-18).
+/// Three faces, one widget, because the dead-image state lives here:
+///  - photo: full-bleed press image behind the status bar, IMPACT on a scrim.
+///    Hotlinked from the origin CDN — we never re-host; a dead URL falls back.
+///  - text: no image — the hook takes the photo's slot on plain feed bg.
+///  - compact: image exists but is dead or a share capture is in flight —
+///    just the IMPACT row, so the PNG keeps the ledger line but never the
+///    hotlinked photo, and the hook below the hero still shows exactly once.
+class _CardHero extends StatefulWidget {
+  const _CardHero({required this.story});
   final Story story;
 
   @override
-  State<_MediaStrip> createState() => _MediaStripState();
+  State<_CardHero> createState() => _CardHeroState();
 }
 
-class _MediaStripState extends State<_MediaStrip> {
+class _CardHeroState extends State<_CardHero> {
   bool _dead = false;
 
   @override
-  void didUpdateWidget(_MediaStrip old) {
+  void didUpdateWidget(_CardHero old) {
     super.didUpdateWidget(old);
     // PageView.builder reuses this State across stories (no keys); without
     // this, one dead image permanently hides every later story's image too.
     if (old.story.imageUrl != widget.story.imageUrl) _dead = false;
   }
 
+  String get _horizon => switch (widget.story.impactHorizon) {
+        'short_term' => 'SHORT',
+        'long_term' => 'LONG',
+        'both' => 'SHORT + LONG',
+        _ => '',
+      };
+
+  /// IMPACT 9/10 · SHORT + LONG — monospace ledger line, centered between the
+  /// floating LIVE/filter tiles' 44px row (owner 2026-08-14). The card paints
+  /// edge-to-edge now, so the status inset is handled here on every face.
+  Widget _impactRow(BuildContext context) {
+    final s = widget.story;
+    return Padding(
+      padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 8),
+      child: SizedBox(
+        height: 44,
+        child: Center(
+          child: Text.rich(TextSpan(children: [
+            TextSpan(
+                text: 'IMPACT ${s.impactScore ?? '–'}/10',
+                style: mono.copyWith(
+                    color: impactColor(s.impactScore),
+                    fontWeight: FontWeight.w700)),
+            if (_horizon.isNotEmpty)
+              TextSpan(text: '  ·  $_horizon', style: mono),
+          ])),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
       valueListenable: shareCapture,
-      builder: (context, capturing, _) =>
-          capturing ? const SizedBox.shrink() : _buildStrip(context),
-    );
-  }
+      builder: (context, capturing, _) {
+        final s = widget.story;
+        final url = s.imageUrl;
+        final heroH = MediaQuery.sizeOf(context).height * 0.35;
 
-  Widget _buildStrip(BuildContext context) {
-    final s = widget.story;
-    final url = s.imageUrl;
-    if (url == null || _dead) return const SizedBox.shrink();
-    // 2x logical width: crisp on device without decoding a 4000px press photo
-    // into memory on a budget phone.
-    final cacheW = (MediaQuery.of(context).size.width * 2).round();
-    final img = AspectRatio(
-      aspectRatio: 16 / 9,
-      child: Image.network(
-        url,
-        fit: BoxFit.cover,
-        cacheWidth: cacheW,
-        // errorBuilder alone leaves a 16:9 hole; flag + rebuild collapses it.
-        errorBuilder: (_, __, ___) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && !_dead) setState(() => _dead = true);
-          });
-          return const SizedBox.shrink();
-        },
-        loadingBuilder: (context, child, progress) =>
-            progress == null ? child : Container(color: surface),
-        // Decoded frames fade in instead of hard-cutting over the surface
-        // placeholder.
-        frameBuilder: (context, child, frame, syncLoaded) => syncLoaded
-            ? child
-            : AnimatedOpacity(
-                opacity: frame == null ? 0 : 1,
-                duration: const Duration(milliseconds: 220),
-                child: child),
-      ),
-    );
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Container(
-        decoration: BoxDecoration(border: Border.all(color: border)),
-        child: s.videoUrl == null
-            ? img
-            : InkWell(
+        if (url == null) {
+          // Text face: the hook lives where the photo would be. minHeight,
+          // not a fixed height — a 4-line hook on a small phone grows the
+          // zone instead of overflowing it; _FitScroll below absorbs it.
+          return Container(
+            width: double.infinity,
+            color: bg,
+            constraints: BoxConstraints(minHeight: heroH * 0.9),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _impactRow(context),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 22),
+                  child: Text(s.hook ?? s.headline,
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                      style: serif.copyWith(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2)),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (capturing || _dead) {
+          // Compact face: ledger line only. The hook renders below the hero
+          // for every image-bearing story, so nothing is lost.
+          return Container(
+            width: double.infinity,
+            color: bg,
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _impactRow(context),
+          );
+        }
+
+        // Photo face.
+        // 2x logical width: crisp on device without decoding a 4000px press
+        // photo into memory on a budget phone.
+        final cacheW = (MediaQuery.of(context).size.width * 2).round();
+        final img = Image.network(
+          url,
+          fit: BoxFit.cover,
+          cacheWidth: cacheW,
+          // errorBuilder alone leaves a hole; flag + rebuild swaps the face.
+          errorBuilder: (_, __, ___) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && !_dead) setState(() => _dead = true);
+            });
+            return const SizedBox.shrink();
+          },
+          loadingBuilder: (context, child, progress) =>
+              progress == null ? child : Container(color: surface),
+          // Decoded frames fade in instead of hard-cutting over the surface
+          // placeholder.
+          frameBuilder: (context, child, frame, syncLoaded) => syncLoaded
+              ? child
+              : AnimatedOpacity(
+                  opacity: frame == null ? 0 : 1,
+                  duration: const Duration(milliseconds: 220),
+                  child: child),
+        );
+
+        return SizedBox(
+          width: double.infinity,
+          height: heroH,
+          child: Stack(fit: StackFit.expand, children: [
+            img,
+            if (s.videoUrl != null)
+              InkWell(
                 onTap: () => openExternal(context, s.videoUrl!),
-                child: Stack(alignment: Alignment.center, children: [
-                  img,
-                  Container(
+                child: Center(
+                  child: Container(
                     padding: const EdgeInsets.all(10),
                     decoration:
                         BoxDecoration(color: bg.withValues(alpha: 0.65)),
                     child: const Icon(Icons.play_arrow_rounded,
                         color: ink, size: 34),
                   ),
-                ]),
+                ),
               ),
-      ),
+            // Top scrim so the ledger line reads on any photo.
+            Align(
+              alignment: Alignment.topCenter,
+              child: Container(
+                height: MediaQuery.of(context).padding.top + 108,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      bg.withValues(alpha: 0.88),
+                      bg.withValues(alpha: 0.55),
+                      bg.withValues(alpha: 0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Align(alignment: Alignment.topCenter, child: _impactRow(context)),
+            // Hairline where the photo meets the text block.
+            const Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(
+                  height: 1,
+                  width: double.infinity,
+                  child: ColoredBox(color: border)),
+            ),
+          ]),
+        );
+      },
     );
   }
 }
@@ -1698,7 +1836,16 @@ class _StoryPagerState extends State<StoryPager> {
         controller: _hpc,
         itemCount: 1 + deepCount,
         itemBuilder: (context, i) {
-          if (i == 0) return StoryCard(story: widget.story);
+          if (i == 0) {
+            // The strip is the left swipe with a visible front door: same
+            // controller, same page, so _ensureRead/analytics/back-handling
+            // all come along for free.
+            return StoryCard(
+                story: widget.story,
+                onReadMore: () => _hpc.animateToPage(1,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOut));
+          }
           // Network failure and AI refusal are different stories: one deserves
           // a retry button, the other the honest fallback in DeepReadPages.
           if (_failed) return _FailedPage(onRetry: _retryRead);

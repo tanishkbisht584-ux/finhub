@@ -1,183 +1,213 @@
-<title>FinSwipe — liquid glass UI, the page the AI builds for every story</title>
+<title>FinSwipe Story Card</title>
 <style>
-  :root{
-    --bg:#eef0f4; --ink:#1d2530; --muted:#5d6b7a; --panel:#ffffff; --line:#dde3e2;
-    --accent:#0e7c66; --code-bg:#10161f; --code-ink:#c7d6cf;
-  }
-  @media (prefers-color-scheme: dark){
-    :root{ --bg:#0f141b; --ink:#e6ecf2; --muted:#93a1af; --panel:#171f28; --line:#27313c; --accent:#3ecfaa; }
-  }
-  :root[data-theme="dark"]{ --bg:#0f141b; --ink:#e6ecf2; --muted:#93a1af; --panel:#171f28; --line:#27313c; --accent:#3ecfaa; }
-  :root[data-theme="light"]{ --bg:#eef0f4; --ink:#1d2530; --muted:#5d6b7a; --panel:#ffffff; --line:#dde3e2; --accent:#0e7c66; }
-  /* the one deliberate use of color: market direction, never decorative */
-  :root{ --pos-a:#8ef0c2; --pos-b:#1f9e6e; --neg-a:#ffb3a4; --neg-b:#c8402c; }
-
-  *{box-sizing:border-box}
-  body{background:var(--bg); color:var(--ink); font:16px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif; margin:0; padding:32px 20px 64px}
-  .wrap{max-width:1060px; margin:0 auto}
-  h1{font-family:Georgia,"Times New Roman",serif; font-size:clamp(26px,4vw,38px); line-height:1.15; margin:0 0 6px; text-wrap:balance}
-  .sub{color:var(--muted); max-width:62ch; margin:0 0 34px}
-  .cols{display:flex; gap:36px; align-items:flex-start; flex-wrap:wrap; justify-content:center}
-
-  /* ---------- phone: liquid glass ---------- */
-  .phone{width:344px; flex:0 0 auto; background:#04060b; border-radius:36px; padding:11px; box-shadow:0 28px 70px rgba(0,0,0,.4)}
-  .screen{position:relative; border-radius:26px; overflow:hidden; color:#eef3f9; font-size:14.5px; line-height:1.5; background:#0a0f1c; isolation:isolate}
-  /* aurora background the glass floats over */
-  .aurora{position:absolute; inset:0; z-index:0}
-  .aurora i{position:absolute; border-radius:50%; filter:blur(46px); opacity:.75; display:block}
-  .aurora i:nth-child(1){width:260px;height:260px; left:-70px; top:-40px; background:#0f4d6e}
-  .aurora i:nth-child(2){width:240px;height:240px; right:-60px; top:150px; background:#5b2440}
-  .aurora i:nth-child(3){width:230px;height:230px; left:-30px; bottom:-60px; background:#0e5a4a}
-  .aurora i:nth-child(4){width:150px;height:150px; right:10px; bottom:120px; background:#6e5a17; opacity:.5}
-
-  .content{position:relative; z-index:1}
-  .statusbar{display:flex; justify-content:space-between; padding:10px 20px 6px; font-size:11.5px; color:#c4d2e2}
-
-  .glass{background:rgba(255,255,255,.09); backdrop-filter:blur(18px) saturate(1.5); -webkit-backdrop-filter:blur(18px) saturate(1.5);
-         border:1px solid rgba(255,255,255,.16); border-top-color:rgba(255,255,255,.30);
-         box-shadow:0 10px 34px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.12); border-radius:22px}
-
-  .card{margin:8px 12px 6px; padding:16px 17px 15px; display:flex; flex-direction:column; gap:12px}
-  .toprow{display:flex; gap:7px; align-items:center; flex-wrap:wrap}
-  .pill{font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; padding:4px 10px; border-radius:999px; font-weight:600;
-        background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px)}
-  .p-sev{color:#fff; border-color:rgba(255,140,120,.5); background:linear-gradient(135deg, rgba(255,150,130,.55), rgba(200,60,35,.6))}
-  .p-cat{color:#ffd98a; border-color:rgba(255,200,100,.35); background:rgba(160,110,20,.20)}
-  .p-horizon{color:#9fd8f5}
-  .hook{font-size:24px; font-weight:800; line-height:1.1; letter-spacing:-.01em; text-transform:uppercase; margin:2px 0 0;
-        background:linear-gradient(92deg,#ffd1cb,#ff8f86 55%,#ffc37a); -webkit-background-clip:text; background-clip:text; color:transparent; text-wrap:balance}
-  .photo{position:relative; border-radius:14px; height:110px; overflow:hidden; border:1px solid rgba(255,255,255,.14);
-         background:radial-gradient(140px 90px at 20% 100%, #f2a03d, transparent 65%),
-                    radial-gradient(180px 120px at 45% 120%, #b5401f, transparent 70%),
-                    radial-gradient(220px 150px at 80% -20%, #16324d, transparent 75%),
-                    linear-gradient(180deg,#0d1a2c,#1c1210)}
-  .photo::after{content:"📷 Reuters — oil tanker, Strait of Hormuz"; position:absolute; left:0; right:0; bottom:0;
-                font-size:9.5px; color:#e8edf5cc; padding:14px 10px 5px; background:linear-gradient(transparent,rgba(0,0,0,.65))}
-  .headline{font-size:17px; font-weight:700; line-height:1.3; margin:0; text-wrap:balance; text-shadow:0 1px 12px rgba(0,0,0,.35)}
-  .summary{color:#d7e0eb; font-size:13.8px}
-  .summary b{color:#fff}
-  .chips{display:flex; flex-wrap:wrap; gap:7px}
-  .chip{border-radius:999px; padding:4px 11px; font-size:12px; color:#e2eaf3;
-        background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.15)}
-  .arrow{width:14px; height:14px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:8px; margin-left:2px}
-  .arrow.up{background:linear-gradient(135deg,#8ef0c2,#1f9e6e); color:#06231a}
-  .arrow.dn{background:linear-gradient(135deg,#ffb3a4,#c8402c); color:#2e0d06}
-  .watch{border-radius:14px; padding:10px 13px; font-size:13px; color:#cfdae6;
-         background:rgba(10,20,40,.35); border:1px solid rgba(255,255,255,.10)}
-  .watch b{color:#fff; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; display:block; margin-bottom:3px; color:#9cc3ef}
-  .srcrow{display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:#a7b6c8; border-top:1px solid rgba(255,255,255,.12); padding-top:11px}
-  .srcrow a{color:#9fd0f7; text-decoration:none}
-  .disc{font-size:10px; color:#8b9aac; text-align:center; margin:2px 0 0}
-
-  .dock{margin:10px 14px 12px; padding:8px 10px; display:flex; gap:8px; border-radius:999px}
-  .act{flex:1; text-align:center; border-radius:999px; padding:8px 0; font-size:12.5px; color:#eaf1f8;
-       background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.13)}
-  .swipehint{text-align:center; color:#8fa2b7; font-size:11px; padding:0 0 12px}
-
-  /* ---------- explainer ---------- */
-  .made{flex:1 1 380px; min-width:320px}
-  .made h2{font-family:Georgia,serif; font-size:21px; margin:0 0 10px}
-  .made p{color:var(--muted); max-width:58ch; margin:0 0 14px}
-  .made ul{margin:0 0 18px; padding-left:20px; color:var(--muted)}
-  .made li{margin-bottom:8px}
-  .made li b{color:var(--ink)}
-  pre{background:var(--code-bg); color:var(--code-ink); border-radius:12px; padding:16px 18px; font:12px/1.6 Consolas,"Cascadia Mono",monospace; overflow-x:auto; margin:0 0 18px}
-  pre .k{color:#7fb3e8} pre .v{color:#f5c169} pre .s{color:#8fd6b3}
-
-  .strip{margin-top:44px}
-  .strip h2{font-family:Georgia,serif; font-size:21px; margin:0 0 4px}
-  .strip>p{color:var(--muted); margin:0 0 16px; max-width:64ch}
-  .minis{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px}
-  .mini{position:relative; border-radius:18px; padding:14px 15px; font-size:13px; color:#eef3f9; overflow:hidden; isolation:isolate;
-        display:flex; flex-direction:column; gap:8px; border:1px solid rgba(255,255,255,.14); background:#0c1322}
-  .mini::before{content:""; position:absolute; inset:0; z-index:-1; opacity:.85}
-  .mini.m1::before{background:radial-gradient(120px 120px at 15% 0%, #14486b, transparent 70%), radial-gradient(140px 140px at 100% 100%, #123f35, transparent 70%)}
-  .mini.m2::before{background:radial-gradient(120px 120px at 85% 0%, #14584a, transparent 70%), radial-gradient(140px 140px at 0% 100%, #503a12, transparent 70%)}
-  .mini.m3::before{background:radial-gradient(120px 120px at 15% 0%, #4a2145, transparent 70%), radial-gradient(140px 140px at 100% 100%, #133c5e, transparent 70%)}
-  .mini .glasspane{position:absolute; inset:0; z-index:-1; backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); background:rgba(255,255,255,.06)}
-  .mini .toprow{gap:6px}
-  .mini .headline{font-size:15px; text-shadow:none}
-  .mini .foot{color:#9fb0c2; font-size:11px; margin-top:auto; padding-top:6px}
-  .p-l2{color:#ffd98a} .p-l3{color:#9fd8f5} .p-neu{color:#cfd9e4}
-  .p-pos{color:#06231a; border-color:rgba(120,230,170,.5); background:linear-gradient(135deg, rgba(160,245,200,.55), rgba(35,160,105,.6))}
+  /* Deliberately single-theme: this mocks FinSwipe's clay-black ledger UI. */
+  body { background: #0A0C0B; color: #E8E6E3; margin: 0; padding: 40px 16px 64px; }
+  .wrap { display: flex; gap: 48px; justify-content: center; flex-wrap: wrap; }
+  .board { display: flex; flex-direction: column; gap: 14px; }
+  .board-label { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; color: #9BA09C; }
+  .board-note { font-family: system-ui, Roboto, sans-serif; font-size: 13px; line-height: 1.5; color: #9BA09C; max-width: 390px; }
+  .phone { width: 390px; height: 844px; background: #0E100F; border: 1px solid #272B28; border-radius: 24px; overflow: hidden; display: flex; flex-direction: column; position: relative; font-family: Georgia, 'Times New Roman', serif; flex-shrink: 0; }
+  h1 { font-family: Georgia, serif; font-size: 26px; font-weight: 700; text-align: center; margin: 0 0 8px; text-wrap: balance; }
+  .sub { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #9BA09C; text-align: center; margin: 0 auto 36px; max-width: 560px; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .sans { font-family: system-ui, Roboto, sans-serif; }
+  .chip { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; border: 1px solid #272B28; padding: 3px 8px; }
+  .rail { position: absolute; right: 10px; bottom: 250px; display: flex; flex-direction: column; gap: 4px; z-index: 3; }
+  .rail div { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 1px 4px rgba(0,0,0,0.5)); }
+  .nav { flex-shrink: 0; height: 76px; background: #161917; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; }
+  .nav .item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .nav .label { font-family: system-ui, Roboto, sans-serif; font-size: 12px; color: #9BA09C; }
+  .nav .label.on { color: #E8E6E3; font-weight: 600; }
+  .strip { flex-shrink: 0; border-top: 1px solid #272B28; padding: 12px 20px; display: flex; flex-direction: column; gap: 6px; }
+  .strip .teaser { font-family: system-ui, Roboto, sans-serif; font-size: 13px; line-height: 1.45; color: rgba(232,230,227,0.85); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .strip .cta { display: flex; align-items: center; gap: 5px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 700; }
+  .attr { display: flex; align-items: center; gap: 9px; padding-bottom: 16px; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; }
+  /* floating LIVE pill (top left) + filter dial (top right), as in the shipped feed */
+  .tiles { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; padding: 26px 16px 0; z-index: 4; }
+  .live-pill { height: 44px; padding: 0 12px; border-radius: 22px; background: rgba(22,25,23,0.96); border: 1px solid #272B28; display: flex; align-items: center; gap: 5px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; color: #9BA09C; }
+  .dial { width: 44px; height: 44px; border-radius: 50%; background: rgba(22,25,23,0.96); border: 1px solid #272B28; display: flex; align-items: center; justify-content: center; }
 </style>
 
-<div class="wrap">
-  <h1>Liquid glass UI — one AI agent, a finished page for every story</h1>
-  <p class="sub">Frosted glass cards floating over a deep aurora background. Nobody designs these pages by hand: the card-generator agent emits structured data, one glass template renders it. Every badge, chip, and severity stripe below comes straight from the AI's JSON.</p>
+<h1>FinSwipe story card — image-top template</h1>
+<p class="sub">Left: story with a photo. Right: no-image fallback. Colors, fonts, chips, gestures unchanged — only placement moves.</p>
 
-  <div class="cols">
-    <div class="phone" aria-label="FinSwipe liquid glass story page">
-      <div class="screen">
-        <div class="aurora"><i></i><i></i><i></i><i></i></div>
-        <div class="content">
-          <div class="statusbar"><span>21:47</span><span>FinSwipe</span><span>▲ 5G</span></div>
-          <div class="card glass">
-            <div class="toprow">
-              <span class="pill p-sev">Impact 9/10 · Short + Long</span>
-            </div>
-            <div class="hook">Oil just got scary for India</div>
-            <div class="photo"></div>
-            <div class="headline">Iran strikes Israeli targets; crude surges 8%, rupee slides</div>
-            <p class="summary">Iran launched strikes on Israel overnight, sharply escalating the Middle East conflict. Global markets fell as investors rushed to safety. <b>Why it matters to you:</b> India imports over 80% of its crude — costlier oil weakens the rupee, fuels inflation, and pressures the RBI on rates. Red Sea shipping risk also raises costs for exporters.</p>
-            <div class="chips">
-              <span class="chip">ONGC <span class="arrow up">▲</span></span>
-              <span class="chip">HPCL <span class="arrow dn">▼</span></span>
-              <span class="chip">BPCL <span class="arrow dn">▼</span></span>
-              <span class="chip">Aviation <span class="arrow dn">▼</span></span>
-              <span class="chip">Paints <span class="arrow dn">▼</span></span>
-            </div>
-            <div class="watch"><b>What to watch</b>Brent crude · USD/INR · Red Sea lanes · RBI commentary</div>
-            <div class="srcrow">
-              <span>BBC · Reuters via MC · ET &nbsp;·&nbsp; 21:32</span>
-              <a href="#">Read original ↗</a>
-            </div>
-            <p class="disc">Not investment advice</p>
+<div class="wrap">
+
+  <!-- ================= IMAGE CARD ================= -->
+  <div class="board">
+    <div class="board-label">IMAGE CARD</div>
+    <div class="phone">
+      <!-- hero image, full-bleed ~35% -->
+      <div style="height: 295px; flex-shrink: 0; position: relative; background: linear-gradient(160deg, #2a3440 0%, #1d2630 38%, #141a20 70%, #0f1316 100%)">
+        <svg viewBox="0 0 390 295" style="position: absolute; inset: 0; width: 100%; height: 100%" preserveAspectRatio="xMidYMax slice">
+          <rect x="60" y="90" width="120" height="205" fill="#232d38"></rect>
+          <rect x="150" y="55" width="150" height="240" fill="#2b3642"></rect>
+          <rect x="270" y="120" width="90" height="175" fill="#1e2731"></rect>
+          <g fill="#3a4753">
+            <rect x="160" y="70" width="130" height="6"></rect>
+            <rect x="160" y="90" width="130" height="6"></rect>
+            <rect x="160" y="110" width="130" height="6"></rect>
+            <rect x="160" y="130" width="130" height="6"></rect>
+            <rect x="70" y="105" width="100" height="5"></rect>
+            <rect x="70" y="125" width="100" height="5"></rect>
+            <rect x="280" y="135" width="70" height="5"></rect>
+            <rect x="280" y="155" width="70" height="5"></rect>
+          </g>
+          <ellipse cx="330" cy="270" rx="60" ry="26" fill="#18211c"></ellipse>
+          <ellipse cx="40" cy="280" rx="70" ry="30" fill="#161e19"></ellipse>
+        </svg>
+        <div style="position: absolute; top: 0; left: 0; right: 0; height: 118px; background: linear-gradient(180deg, rgba(14,16,15,0.88) 0%, rgba(14,16,15,0.55) 55%, rgba(14,16,15,0) 100%)"></div>
+        <div class="tiles">
+          <div class="live-pill">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="2" fill="#9BA09C" stroke="none"></circle><path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4"></path><path d="M4.9 19.1a10 10 0 0 1 0-14.2M19.1 4.9a10 10 0 0 1 0 14.2"></path></svg>
+            LIVE
           </div>
-          <div class="dock glass"><span class="act">🔖 Save</span><span class="act">↗ Share</span><span class="act">💬 Ask</span></div>
-          <div class="swipehint">⌃ swipe for next story</div>
+          <div class="mono" style="font-size: 13px; letter-spacing: 0.4px"><span style="color: #E5484D; font-weight: 700">IMPACT 9/10</span><span style="color: #9BA09C">&nbsp;&nbsp;&middot;&nbsp;&nbsp;SHORT</span></div>
+          <div class="dial">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h8M15 6h6M3 12h12M19 12h2M3 18h4M11 18h10"></path><circle cx="13" cy="6" r="2"></circle><circle cx="17" cy="12" r="2"></circle><circle cx="9" cy="18" r="2"></circle></svg>
+          </div>
+        </div>
+        <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 1px; background: #272B28"></div>
+      </div>
+
+      <!-- text block -->
+      <div style="flex: 1 1 auto; background: #161917; border-left: 3px solid #3ECF8E; padding: 22px 20px 0; display: flex; flex-direction: column; gap: 14px; min-height: 0">
+        <div style="font-size: 30px; line-height: 1.2; font-weight: 700; text-wrap: pretty; padding-right: 34px">Blue Cloud Softech begins trading on NSE</div>
+        <div class="sans" style="font-size: 15px; line-height: 1.55; color: rgba(232,230,227,0.8); padding-right: 34px">Blue Cloud Softech Solutions starts trading on NSE, offering 92 crore shares to fund expansion in Africa and the US.</div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <div class="chip" style="color: #E8E6E3; background: #161917">$BLUECLOUD</div>
+          <div class="chip" style="color: #9BA09C">IT SERVICES</div>
+        </div>
+        <div style="flex: 1 1 auto"></div>
+        <div style="height: 1px; background: #272B28"></div>
+        <div class="attr">
+          <div class="avatar" style="background: rgba(62,207,142,0.14); border: 1px solid rgba(62,207,142,0.5); color: #3ECF8E">T</div>
+          <div style="display: flex; flex-direction: column; gap: 2px">
+            <div class="sans" style="font-size: 13px; font-weight: 600; line-height: 1.2">The Hindu BusinessLine</div>
+            <div class="mono" style="display: flex; align-items: center; gap: 3px; font-size: 10.5px; color: #9BA09C">Read original
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"></path><path d="M9 7h8v8"></path></svg>
+            </div>
+          </div>
+          <div class="mono" style="font-size: 10.5px; font-weight: 600; color: #3ECF8E; padding: 6px 2px 6px 8px">+3 more</div>
+        </div>
+      </div>
+
+      <!-- reels rail -->
+      <div class="rail">
+        <div><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linejoin="round"><path d="M6.5 3.5h11v17l-5.5-4.1-5.5 4.1z"></path></svg></div>
+        <div><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 9.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7.5a2 2 0 0 0-2-2h-1.5"></path><path d="M12 14V3"></path><path d="m8.5 6 3.5-3.5L15.5 6"></path></svg></div>
+      </div>
+
+      <!-- read more strip -->
+      <div class="strip" style="background: linear-gradient(180deg, rgba(62,207,142,0.05) 0%, rgba(62,207,142,0.12) 100%)">
+        <div class="teaser">The BSE-listed Blue Cloud Softech Solutions Limited has commenced trading of its shares on the National Stock Ex&hellip;</div>
+        <div class="cta" style="color: #3ECF8E">Read more
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3ECF8E" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"></path><path d="m14 6 6 6-6 6"></path></svg>
+        </div>
+      </div>
+
+      <!-- nav -->
+      <div class="nav">
+        <div class="item">
+          <div style="width: 56px; height: 30px; border-radius: 15px; background: rgba(62,207,142,0.15); display: flex; align-items: center; justify-content: center">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E8E6E3" stroke-width="1.8" stroke-linejoin="round"><rect x="3.5" y="5" width="14" height="15" rx="1.5"></rect><path d="M17.5 9H19a1.5 1.5 0 0 1 1.5 1.5V18a2 2 0 0 1-2 2H5.5"></path><path d="M6.5 9h8M6.5 12.5h8M6.5 16h5"></path></svg>
+          </div>
+          <div class="label on">News</div>
+        </div>
+        <div class="item">
+          <div style="height: 30px; display: flex; align-items: center; justify-content: center">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4.5 4.5"></path></svg>
+          </div>
+          <div class="label">Ask</div>
+        </div>
+        <div class="item">
+          <div style="height: 30px; display: flex; align-items: center; justify-content: center">
+            <div class="avatar" style="width: 26px; height: 26px; font-size: 13px; background: rgba(62,207,142,0.14); border: 1px solid rgba(62,207,142,0.5); color: #3ECF8E">T</div>
+          </div>
+          <div class="label">Profile</div>
         </div>
       </div>
     </div>
-
-    <div class="made">
-      <h2>How liquid glass stays fast on budget phones</h2>
-      <p>Glassmorphism is GPU-hungry, and much of the Indian market runs budget Android. The design keeps the silky swipe by spending blur only where it pays:</p>
-      <ul>
-        <li><b>Glass on the card and dock only</b> — two blur surfaces per screen, not twenty.</li>
-        <li><b>The aurora background is static</b> — pre-rendered gradients per category (Geopolitics = ember red-blue, IPO = green-gold…), no live blur behind the feed.</li>
-        <li><b>Low-end fallback</b> — devices that can't sustain 60fps get semi-transparent solid cards; same layout, same beauty at arm's length.</li>
-        <li><b>Category-tinted auroras</b> — the background hue itself communicates the news type before a single word is read.</li>
-      </ul>
-      <h2>Same AI data underneath</h2>
-      <pre>{
-  <span class="k">"headline_rewrite"</span>: <span class="s">"Iran strikes…"</span>,
-  <span class="k">"impact"</span>: { <span class="k">"score"</span>: <span class="v">9</span>, … },   <span class="k">→ L1 pill</span>
-  <span class="k">"companies"</span>: [<span class="s">"ONGC"</span>,<span class="s">"HPCL"</span>,<span class="s">"BPCL"</span>],
-  <span class="k">"category"</span>: <span class="s">"Geopolitics"</span>       <span class="k">→ aurora tint</span>
-}</pre>
-    </div>
+    <p class="board-note">Photo full-bleed at the top (~35%), IMPACT rides on it under a scrim, flanked by the LIVE pill and the category filter dial (both as in today's feed). One big serif hook — the small headline is gone. Bookmark/share float Reels-style on the right edge. Bottom strip opens Deep Read.</p>
   </div>
 
-  <div class="strip">
-    <h2>Every story gets its own glass card — tinted by category</h2>
-    <p>Different data, same template: ~100 of these render automatically every day.</p>
-    <div class="minis">
-      <div class="mini m1"><div class="glasspane"></div>
-        <div class="toprow"><span class="pill p-l2">Impact 7/10 · Long term</span><span class="pill p-neu">Neutral</span></div>
-        <div class="headline">RBI holds repo rate at 6.5%, signals long pause</div>
-        <div class="foot">RBI · ET · Mint — 11:02</div>
+  <!-- ================= NO-IMAGE CARD ================= -->
+  <div class="board">
+    <div class="board-label">NO-IMAGE FALLBACK</div>
+    <div class="phone">
+      <!-- hero zone: the heading lives where the photo would be -->
+      <div style="height: 295px; flex-shrink: 0; position: relative; background: #0E100F; display: flex; flex-direction: column; justify-content: flex-end">
+        <div class="tiles">
+          <div class="live-pill">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="2" fill="#9BA09C" stroke="none"></circle><path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4"></path><path d="M4.9 19.1a10 10 0 0 1 0-14.2M19.1 4.9a10 10 0 0 1 0 14.2"></path></svg>
+            LIVE
+          </div>
+          <div class="mono" style="font-size: 13px; letter-spacing: 0.4px"><span style="color: #E5484D; font-weight: 700">IMPACT 8/10</span><span style="color: #9BA09C">&nbsp;&nbsp;&middot;&nbsp;&nbsp;SHORT + LONG</span></div>
+          <div class="dial">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h8M15 6h6M3 12h12M19 12h2M3 18h4M11 18h10"></path><circle cx="13" cy="6" r="2"></circle><circle cx="17" cy="12" r="2"></circle><circle cx="9" cy="18" r="2"></circle></svg>
+          </div>
+        </div>
+        <div style="font-size: 34px; line-height: 1.15; font-weight: 700; text-wrap: pretty; padding: 0 20px 24px">RBI holds repo rate, flags sticky food inflation</div>
+        <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 1px; background: #272B28"></div>
       </div>
-      <div class="mini m2"><div class="glasspane"></div>
-        <div class="toprow"><span class="pill p-l3">Impact 5/10 · Short term</span><span class="pill p-pos">Positive</span></div>
-        <div class="headline">Ather Energy IPO subscribed 4.2× on day two</div>
-        <div class="foot">ET IPO · Inc42 · BS — 16:40</div>
+
+      <!-- explanation below, same surface block as the image card -->
+      <div style="flex: 1 1 auto; background: #161917; border-left: 3px solid #E5484D; padding: 22px 20px 0; display: flex; flex-direction: column; gap: 14px; min-height: 0">
+        <div class="sans" style="font-size: 15px; line-height: 1.55; color: rgba(232,230,227,0.8); padding-right: 34px">The central bank keeps the repo rate at 6.5% for a ninth straight meeting, warning that food prices could keep headline inflation above target into the next quarter. Banks and rate-sensitive stocks slipped on the announcement.</div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <div class="chip" style="color: #E8E6E3; background: #161917">$HDFCBANK</div>
+          <div class="chip" style="color: #E8E6E3; background: #161917">$SBIN</div>
+          <div class="chip" style="color: #9BA09C">BANKING</div>
+        </div>
+        <div style="flex: 1 1 auto"></div>
+        <div style="height: 1px; background: #272B28"></div>
+        <div class="attr">
+          <div class="avatar" style="background: rgba(229,72,77,0.14); border: 1px solid rgba(229,72,77,0.5); color: #E5484D">M</div>
+          <div style="display: flex; flex-direction: column; gap: 2px">
+            <div class="sans" style="font-size: 13px; font-weight: 600; line-height: 1.2">Mint</div>
+            <div class="mono" style="display: flex; align-items: center; gap: 3px; font-size: 10.5px; color: #9BA09C">Read original
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"></path><path d="M9 7h8v8"></path></svg>
+            </div>
+          </div>
+          <div class="mono" style="font-size: 10.5px; font-weight: 600; color: #E5484D; padding: 6px 2px 6px 8px">+6 more</div>
+        </div>
       </div>
-      <div class="mini m3"><div class="glasspane"></div>
-        <div class="toprow"><span class="pill p-l3">Impact 6/10 · Long term</span><span class="pill p-pos">Positive</span></div>
-        <div class="headline">Infosys beats Q1 estimates, raises FY guidance</div>
-        <div class="foot">Moneycontrol · TOI — 09:15</div>
+
+      <div class="rail">
+        <div><svg width="24" height="24" viewBox="0 0 24 24" fill="#3ECF8E" stroke="#3ECF8E" stroke-width="1.8" stroke-linejoin="round"><path d="M6.5 3.5h11v17l-5.5-4.1-5.5 4.1z"></path></svg></div>
+        <div><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 9.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7.5a2 2 0 0 0-2-2h-1.5"></path><path d="M12 14V3"></path><path d="m8.5 6 3.5-3.5L15.5 6"></path></svg></div>
+      </div>
+
+      <div class="strip" style="background: linear-gradient(180deg, rgba(229,72,77,0.05) 0%, rgba(229,72,77,0.12) 100%)">
+        <div class="teaser">The Reserve Bank of India's monetary policy committee voted five to one to keep the benchmark repo rate unchanged&hellip;</div>
+        <div class="cta" style="color: #E5484D">Read more
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"></path><path d="m14 6 6 6-6 6"></path></svg>
+        </div>
+      </div>
+
+      <div class="nav">
+        <div class="item">
+          <div style="width: 56px; height: 30px; border-radius: 15px; background: rgba(62,207,142,0.15); display: flex; align-items: center; justify-content: center">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E8E6E3" stroke-width="1.8" stroke-linejoin="round"><rect x="3.5" y="5" width="14" height="15" rx="1.5"></rect><path d="M17.5 9H19a1.5 1.5 0 0 1 1.5 1.5V18a2 2 0 0 1-2 2H5.5"></path><path d="M6.5 9h8M6.5 12.5h8M6.5 16h5"></path></svg>
+          </div>
+          <div class="label on">News</div>
+        </div>
+        <div class="item">
+          <div style="height: 30px; display: flex; align-items: center; justify-content: center">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9BA09C" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4.5 4.5"></path></svg>
+          </div>
+          <div class="label">Ask</div>
+        </div>
+        <div class="item">
+          <div style="height: 30px; display: flex; align-items: center; justify-content: center">
+            <div class="avatar" style="width: 26px; height: 26px; font-size: 13px; background: rgba(62,207,142,0.14); border: 1px solid rgba(62,207,142,0.5); color: #3ECF8E">T</div>
+          </div>
+          <div class="label">Profile</div>
+        </div>
       </div>
     </div>
+    <p class="board-note">No photo &rarr; same template: the heading takes the photo's slot, explanation right below. LIVE pill, IMPACT and filter dial in the same top row. Rail and Read-more strip unchanged, tinted by the story's direction (red = negative, saved bookmark shown green).</p>
   </div>
+
 </div>

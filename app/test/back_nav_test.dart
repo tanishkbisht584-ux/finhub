@@ -28,4 +28,23 @@ void main() {
 
     expect(find.text('Hook'), findsOneWidget); // back on the card
   });
+
+  testWidgets('read-more strip turns the page like a left swipe',
+      (tester) async {
+    final story = Story.fromJson({
+      'id': 2,
+      'headline': 'RBI holds',
+      'hook': 'Hook',
+      'summary': 'Short.',
+      'sectors': const [],
+    });
+    await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(home: Scaffold(body: StoryPager(story: story)))));
+    await tester.tap(find.text('Read more'));
+    // The card's double-tap-save detector holds the arena for the double-tap
+    // window; advance past it so the strip's single tap resolves.
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+    expect(find.text('Hook'), findsNothing); // off the card, into the read
+  });
 }
