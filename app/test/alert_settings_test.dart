@@ -60,4 +60,39 @@ void main() {
     expect(last['pa'], freshPa, reason: 'write must carry the FRESH pa read '
         'from the server, not the stale pa from the initState snapshot');
   });
+
+  testWidgets(
+      'concurrent flips serialize: the second write must carry the first flip '
+      'even when the first write is still in flight when the second tap lands',
+      (tester) async {
+    final writes = <Map<String, dynamic>>[];
+    final server = <String, dynamic>{'personalized': true, 'voice_l1': true};
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: AlertSettingsSection(
+      userId: 'u1',
+      initial: const {'personalized': true, 'voice_l1': true},
+      fetcher: () async => Map<String, dynamic>.from(server),
+      writer: (merged) async {
+        // Slow write: the second toggle taps in before this resolves.
+        await Future.delayed(const Duration(milliseconds: 300));
+        writes.add(merged);
+        server
+          ..clear()
+          ..addAll(merged);
+      },
+    ))));
+    await tester.pump();
+
+    await tester.tap(find.byType(SwitchListTile).at(0));
+    await tester.pump(const Duration(milliseconds: 50)); // first write in flight
+    await tester.tap(find.byType(SwitchListTile).at(1));
+    await tester.pumpAndSettle();
+
+    expect(writes.length, 2);
+    expect(writes.last['voice_l1'], false);
+    expect(writes.last['personalized'], false,
+        reason: 'unserialized, the second merge reads a server map lacking '
+            'the first flip and silently snaps it back');
+  });
 }

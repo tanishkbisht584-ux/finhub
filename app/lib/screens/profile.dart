@@ -33,7 +33,8 @@ class ProfileScreen extends StatelessWidget {
             ]),
           ]),
           const SizedBox(height: 32),
-          Text('ALERTS', style: mono.copyWith(fontSize: 12, letterSpacing: 1.2)),
+          Text('ALERTS',
+              style: mono.copyWith(fontSize: 12, letterSpacing: 1.2)),
           const SizedBox(height: 8),
           const Divider(height: 1),
           if (user != null) AlertSettingsSection(userId: user.id),
@@ -43,13 +44,13 @@ class ProfileScreen extends StatelessWidget {
           const Divider(height: 1),
           const SizedBox(height: 24),
           OutlinedButton(
-            onPressed: _signOut,
+            onPressed: () => _signOut(context),
             style: OutlinedButton.styleFrom(
               foregroundColor: red,
               side: BorderSide(color: red.withValues(alpha: 0.5)),
               padding: const EdgeInsets.symmetric(vertical: 14),
-              shape:
-                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6)),
             ),
             child: const Text('Sign out'),
           ),
@@ -74,7 +75,7 @@ class ProfileScreen extends StatelessWidget {
   /// account's live FCM token and never registers its own. Never blocks
   /// sign-out on it — a stale token just means a missed alert, not a stuck
   /// sign-out button.
-  Future<void> _signOut() async {
+  Future<void> _signOut(BuildContext context) async {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid != null) {
       try {
@@ -83,7 +84,16 @@ class ProfileScreen extends StatelessWidget {
             .update({'fcm_token': null}).eq('id', uid);
       } catch (_) {}
     }
-    await Supabase.instance.client.auth.signOut();
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } catch (_) {
+      // Unawaited from onPressed: without this, a bad connection made the
+      // button do nothing at all, forever, with no message.
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not sign out — check your connection')));
+      }
+    }
   }
 
   /// Google picture when there is one, initial when there isn't — same rule as
@@ -155,7 +165,7 @@ class AlertSettingsSectionState extends State<AlertSettingsSection> {
     _load = widget.initial != null ? Future.value(widget.initial) : _fetch();
     _load.then((v) {
       if (mounted) setState(() => _current = v);
-    });
+    }, onError: (_) {}); // FutureBuilder already renders the failure
   }
 
   Future<Map<String, dynamic>> _fetch() async {
@@ -178,7 +188,15 @@ class AlertSettingsSectionState extends State<AlertSettingsSection> {
   /// Both alerts default ON when the key is absent from the jsonb.
   bool _value(String key) => (_current[key] as bool?) ?? true;
 
-  Future<void> _toggle(String key, bool v) async {
+  /// Rapid flips serialize through this chain: toggle B's fresh read must
+  /// see toggle A's write, or B merges from a map lacking A's change and
+  /// silently snaps A back.
+  Future<void> _chain = Future.value();
+
+  Future<void> _toggle(String key, bool v) =>
+      _chain = _chain.then((_) => _doToggle(key, v));
+
+  Future<void> _doToggle(String key, bool v) async {
     final was = _current;
     // Optimistic flip for the UI only. The WRITE below merges from a fresh
     // read instead of this snapshot: the pipeline rewrites alert_settings.pa
@@ -199,8 +217,8 @@ class AlertSettingsSectionState extends State<AlertSettingsSection> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _current = was); // never leave a lie on screen
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not update alert: $e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not update alert: $e')));
     }
   }
 
