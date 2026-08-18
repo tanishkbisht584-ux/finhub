@@ -285,7 +285,15 @@ class _HomeShellState extends State<HomeShell>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // Back on Ask/Profile returns to News instead of exiting the app; back
+    // on News (deep read handles its own case) exits as usual. Deep read is
+    // only reachable on tab 0, so the two PopScopes never fight over a pop.
+    return PopScope(
+      canPop: _tab == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _tab != 0) homeTab.value = 0;
+      },
+      child: Scaffold(
       body: Stack(children: [
         IndexedStack(
           index: _tab,
@@ -334,6 +342,7 @@ class _HomeShellState extends State<HomeShell>
           NavigationDestination(icon: const _Avatar(), label: 'Profile'),
         ],
       ),
+    ),
     );
   }
 }

@@ -1535,6 +1535,7 @@ class _StoryPagerState extends State<StoryPager> {
   DeepRead? _read;
   bool _requested = false; // analytics + invoke fired for this story
   bool _failed = false; // network failure — distinct from an AI refusal
+  bool _onDeep = false; // past the card — back should return, not exit
 
   @override
   void initState() {
@@ -1552,6 +1553,7 @@ class _StoryPagerState extends State<StoryPager> {
       _read = _deepReadMemo[widget.story.id];
       _requested = false;
       _failed = false;
+      _onDeep = false;
       if (_hpc.hasClients) _hpc.jumpToPage(0);
     }
   }
@@ -1565,7 +1567,9 @@ class _StoryPagerState extends State<StoryPager> {
   /// First pull past the card's edge is the "open": fire analytics once and
   /// start writing before the page even settles.
   void _onScroll() {
-    if ((_hpc.page ?? 0) > 0.5) _ensureRead();
+    final deep = (_hpc.page ?? 0) > 0.5;
+    if (deep != _onDeep) setState(() => _onDeep = deep);
+    if (deep) _ensureRead();
   }
 
   Future<void> _ensureRead() async {
@@ -1610,7 +1614,18 @@ class _StoryPagerState extends State<StoryPager> {
   Widget build(BuildContext context) {
     final read = _read;
     final deepCount = (read?.hasContent ?? false) ? read!.pages.length : 1;
-    return PageView.builder(
+    // Android back inside a deep read returns to the card; it was popping
+    // the root route, i.e. exiting the app two pages into a story.
+    return PopScope(
+      canPop: !_onDeep,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _onDeep) {
+          _hpc.animateToPage(0,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut);
+        }
+      },
+      child: PageView.builder(
       controller: _hpc,
       itemCount: 1 + deepCount,
       itemBuilder: (context, i) {
@@ -1628,6 +1643,7 @@ class _StoryPagerState extends State<StoryPager> {
           sourceName: widget.story.sourceName,
         );
       },
+    ),
     );
   }
 }
