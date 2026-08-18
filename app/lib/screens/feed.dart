@@ -514,12 +514,35 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
         final combined = _seeded(list);
         final shown = visibleStories(
             combined, enabledCategories.value, minImpact.value);
+        // A short visible list can't reach onPageChanged's load trigger (one
+        // card can't swipe at all), so pull older pages until the filter has
+        // enough to show or the 48h window is drained. Each round either grows
+        // _feed or sets _exhausted, so this converges; _loadingMore serializes.
+        if (!_exhausted && !_loadingMore && shown.length < 5) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _loadMore();
+          });
+        }
         // Cards keep the full screen; the filter is one round tile at top
         // right, below the system inset so it clears every phone's status
         // bar and notch.
         final inset = MediaQuery.of(context).padding.top;
         return list.isEmpty
-            ? const Center(child: Text('No stories yet — check back soon'))
+            // A dead-end with no way out kept new installs at quiet hours on
+            // a permanently blank screen (the pull-to-refresh only exists
+            // inside the PageView that isn't built here).
+            ? Center(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Text('No stories yet — check back soon'),
+                const SizedBox(height: 20),
+                OutlinedButton(
+                  onPressed: _manualRefresh,
+                  style: OutlinedButton.styleFrom(
+                      foregroundColor: ink,
+                      side: const BorderSide(color: border)),
+                  child: const Text('Refresh'),
+                ),
+              ]))
             : Column(children: [
                 if (cachedAt != null) _CacheBanner(savedAt: cachedAt),
                 Expanded(
