@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../models.dart';
 import '../theme.dart';
@@ -211,8 +210,7 @@ class AnswerCard extends StatelessWidget {
               title: Text(s.title, maxLines: 2, overflow: TextOverflow.ellipsis),
               subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
               trailing: const Icon(Icons.open_in_new, size: 16),
-              onTap: () =>
-                  launchUrl(Uri.parse(s.url), mode: LaunchMode.externalApplication),
+              onTap: () => openExternal(context, s.url),
             )),
         if (answer.followups.isNotEmpty) ...[
           const SizedBox(height: 8),

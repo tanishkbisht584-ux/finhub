@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../analytics.dart';
 import '../feed_cache.dart';
@@ -1154,8 +1153,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
     final others = story.outlets.length - 1;
     return Row(mainAxisSize: MainAxisSize.min, children: [
       InkWell(
-        onTap: () =>
-            launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+        onTap: () => openExternal(context, url),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
             width: 32,
@@ -1258,8 +1256,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
                           style: mono.copyWith(fontSize: 10.5)),
                   trailing:
                       Icon(Icons.north_east_rounded, size: 14, color: inkDim),
-                  onTap: () => launchUrl(Uri.parse(o.url),
-                      mode: LaunchMode.externalApplication),
+                  onTap: () => openExternal(context, o.url),
                 );
               },
             ),
@@ -1387,8 +1384,7 @@ class _MediaStripState extends State<_MediaStrip> {
         child: s.videoUrl == null
             ? img
             : InkWell(
-                onTap: () => launchUrl(Uri.parse(s.videoUrl!),
-                    mode: LaunchMode.externalApplication),
+                onTap: () => openExternal(context, s.videoUrl!),
                 child: Stack(alignment: Alignment.center, children: [
                   img,
                   Container(
@@ -1600,8 +1596,7 @@ class DeepReadPages extends StatelessWidget {
                 const SizedBox(height: 14),
                 // Same "Read original ↗" idiom as the card's attribution.
                 InkWell(
-                  onTap: () => launchUrl(Uri.parse(url),
-                      mode: LaunchMode.externalApplication),
+                  onTap: () => openExternal(context, url),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     if ((sourceName ?? '').isNotEmpty) ...[
                       Text(sourceName!,

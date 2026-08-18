@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../analytics.dart';
 import '../models.dart';
@@ -136,8 +135,7 @@ class SavedScreen extends ConsumerWidget {
                               tooltip: 'Remove from saved',
                               onPressed: () => _unsave(context, ref, s),
                             ),
-                            onTap: () => launchUrl(Uri.parse(s.sourceUrl),
-                                mode: LaunchMode.externalApplication),
+                            onTap: () => openExternal(context, s.sourceUrl),
                           ),
                         );
                       },

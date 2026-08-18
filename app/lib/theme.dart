@@ -1,7 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// Build stamp, injected with --dart-define=APP_VERSION at build time.
 const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
+
+/// launchUrl throws synchronously on a malformed stored URL and with a
+/// PlatformException when nothing handles the scheme; every tap site was bare,
+/// so a bad row made taps die silently. One guarded door for all of them.
+Future<void> openExternal(BuildContext context, String url) async {
+  try {
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Could not open link')));
+    }
+  }
+}
 
 /// Minimal ledger (docs/mockups/finswipe-minimal-mockup.png): no blur, no
 /// aurora, no colour-by-category. Red/green only for market direction and
