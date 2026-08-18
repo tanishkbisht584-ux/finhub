@@ -18,8 +18,25 @@ const _suggested = [
 /// question without a question word — and when this guess is wrong, Q&A
 /// answers the entity query with sources anyway, so a miss costs nothing.
 const _questionWords = {
-  'why', 'what', 'how', 'when', 'where', 'who', 'which', 'is', 'are', 'was',
-  'will', 'should', 'can', 'could', 'does', 'did', 'do', 'explain', 'tell',
+  'why',
+  'what',
+  'how',
+  'when',
+  'where',
+  'who',
+  'which',
+  'is',
+  'are',
+  'was',
+  'will',
+  'should',
+  'can',
+  'could',
+  'does',
+  'did',
+  'do',
+  'explain',
+  'tell',
 };
 
 bool looksLikeQuestion(String q) {
@@ -59,60 +76,69 @@ class _AskScreenState extends State<AskScreen> {
   Future<void> _ask(String question) async {
     if (question.trim().isEmpty || _loading) return;
     _controller.text = question;
-    final term = looksLikeQuestion(question) ? null : safeEntityTerm(question);
-    if (term != null) {
-      try {
-        final rows = await Supabase.instance.client
-            .from('companies')
-            .select('id,name,nse_symbol')
-            .or('nse_symbol.ilike.$term,name.ilike.$term%')
-            .limit(5);
-        // A prefix match can hit siblings (RELIANCE -> 6 rows, ITC -> 2,
-        // Tata Motors -> 2 post-demerger), so an exact match on symbol or
-        // name wins over the old "unique prefix" rule when there is one.
-        final lower = term.toLowerCase();
-        final exact = [
-          for (final r in rows)
-            if ((r['nse_symbol'] as String?)?.toLowerCase() == lower ||
-                (r['name'] as String?)?.toLowerCase() == lower)
-              r
-        ];
-        final match = exact.length == 1
-            ? exact.single
-            : (rows.length == 1 ? rows.single : null);
-        if (match != null && mounted) {
-          Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) =>
-                  StockScreen(company: Company.fromJson(match))));
-          return;
-        }
-      } catch (_) {
-        // company lookup down -> just ask; Q&A handles entities with sources
-      }
-    }
+    // Arm the spinner (and the reentrancy guard above) before the company
+    // lookup: that await used to run guardless with an inert UI, and a second
+    // enter fired a second lookup — two StockScreens pushed back-to-back.
     setState(() {
       _loading = true;
       _error = null;
       _answer = null;
     });
     try {
+      final term =
+          looksLikeQuestion(question) ? null : safeEntityTerm(question);
+      if (term != null) {
+        try {
+          final rows = await Supabase.instance.client
+              .from('companies')
+              .select('id,name,nse_symbol')
+              .or('nse_symbol.ilike.$term,name.ilike.$term%')
+              .limit(5);
+          // A prefix match can hit siblings (RELIANCE -> 6 rows, ITC -> 2,
+          // Tata Motors -> 2 post-demerger), so an exact match on symbol or
+          // name wins over the old "unique prefix" rule when there is one.
+          final lower = term.toLowerCase();
+          final exact = [
+            for (final r in rows)
+              if ((r['nse_symbol'] as String?)?.toLowerCase() == lower ||
+                  (r['name'] as String?)?.toLowerCase() == lower)
+                r
+          ];
+          final match = exact.length == 1
+              ? exact.single
+              : (rows.length == 1 ? rows.single : null);
+          if (match != null && mounted) {
+            Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => StockScreen(company: Company.fromJson(match))));
+            return;
+          }
+        } catch (_) {
+          // company lookup down -> just ask; Q&A handles entities with sources
+        }
+      }
       final res = await Supabase.instance.client.functions
           .invoke('qa', body: {'question': question});
       if (!mounted) return;
-      setState(() =>
-          _answer = QaAnswer.fromJson(Map<String, dynamic>.from(res.data)));
+      final a = QaAnswer.fromJson(Map<String, dynamic>.from(res.data));
+      // A 200 whose body defaulted to nothing everywhere renders as a bare
+      // divider — treat it as the failure it is.
+      setState(() => a.isBlank
+          ? _error = 'Could not get an answer — try again.'
+          : _answer = a);
     } on FunctionException catch (e) {
       // The guard and outage cases are expected states, not crashes — say what
       // happened in the user's terms rather than dumping a status code.
       if (!mounted) return;
       setState(() => _error = switch (e.status) {
-            429 => "That's a lot of questions for one day — try again tomorrow.",
+            429 =>
+              "That's a lot of questions for one day — try again tomorrow.",
             503 => 'Our answer service is busy. Try again in a minute.',
             _ => 'Could not get an answer — try again.',
           });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = 'Could not reach FinSwipe — check your connection.');
+      setState(
+          () => _error = 'Could not reach FinSwipe — check your connection.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -135,12 +161,15 @@ class _AskScreenState extends State<AskScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          if (_answer == null && !_loading && _error == null)
+          // Chips stay up under an error too — they were the only path back
+          // besides retyping the question.
+          if (_answer == null && !_loading)
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: _suggested
-                  .map((q) => ActionChip(label: Text(q), onPressed: () => _ask(q)))
+                  .map((q) =>
+                      ActionChip(label: Text(q), onPressed: () => _ask(q)))
                   .toList(),
             ),
           if (_loading)
@@ -151,8 +180,19 @@ class _AskScreenState extends State<AskScreen> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 24),
-              child: Text(_error!,
-                  textAlign: TextAlign.center, style: mono.copyWith(fontSize: 13)),
+              child: Column(children: [
+                Text(_error!,
+                    textAlign: TextAlign.center,
+                    style: mono.copyWith(fontSize: 13)),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () => _ask(_controller.text),
+                  style: OutlinedButton.styleFrom(
+                      foregroundColor: ink,
+                      side: const BorderSide(color: border)),
+                  child: const Text('Try again'),
+                ),
+              ]),
             ),
           if (_answer != null) AnswerCard(answer: _answer!, onFollowup: _ask),
           const SizedBox(height: 24),
@@ -161,7 +201,8 @@ class _AskScreenState extends State<AskScreen> {
           // answer is NOT from our sources and saying otherwise would be a lie.
           if (_answer == null)
             Text('Answers come only from our sources. Not investment advice.',
-                textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11)),
+                textAlign: TextAlign.center,
+                style: mono.copyWith(fontSize: 11)),
         ],
       ),
     );
@@ -207,7 +248,8 @@ class AnswerCard extends StatelessWidget {
         ...answer.sources.map((s) => ListTile(
               contentPadding: EdgeInsets.zero,
               dense: true,
-              title: Text(s.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+              title:
+                  Text(s.title, maxLines: 2, overflow: TextOverflow.ellipsis),
               subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
               trailing: const Icon(Icons.open_in_new, size: 16),
               onTap: () => openExternal(context, s.url),
@@ -218,7 +260,8 @@ class AnswerCard extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: answer.followups
-                .map((q) => ActionChip(label: Text(q), onPressed: () => onFollowup(q)))
+                .map((q) =>
+                    ActionChip(label: Text(q), onPressed: () => onFollowup(q)))
                 .toList(),
           ),
         ],
@@ -228,7 +271,8 @@ class AnswerCard extends StatelessWidget {
                 ? 'General explainer, not from our newsroom. Verify current '
                     'rules and rates. Not investment advice.'
                 : 'Answers come only from our sources. Not investment advice.',
-            textAlign: TextAlign.center, style: mono.copyWith(fontSize: 11)),
+            textAlign: TextAlign.center,
+            style: mono.copyWith(fontSize: 11)),
       ],
     );
   }
@@ -237,9 +281,11 @@ class AnswerCard extends StatelessWidget {
       ? const SizedBox.shrink()
       : Padding(
           padding: const EdgeInsets.only(bottom: 14),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label,
-                style: mono.copyWith(fontSize: 11, fontWeight: FontWeight.w700)),
+                style:
+                    mono.copyWith(fontSize: 11, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text(body, style: const TextStyle(fontSize: 15, height: 1.5)),
           ]),
