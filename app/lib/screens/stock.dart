@@ -22,7 +22,9 @@ class _StockScreenState extends State<StockScreen> {
   Quote? _quote;
   bool _quoteFailed = false;
   List<Story> _stories = const [];
+  bool _storiesFailed = false;
   bool _following = false;
+  bool _togglingFollow = false;
 
   @override
   void initState() {
@@ -33,21 +35,30 @@ class _StockScreenState extends State<StockScreen> {
   Future<void> _load() async {
     final sb = Supabase.instance.client;
     final uid = sb.auth.currentUser?.id;
-    // Three independent fetches; each failure degrades its own section only.
-    http.get(
-      Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/'
-          '${widget.company.nseSymbol}.NS?range=1mo&interval=1d'),
-      headers: {'User-Agent': 'Mozilla/5.0'},
-    ).then((r) {
-      if (!mounted) return;
-      if (r.statusCode != 200) return setState(() => _quoteFailed = true);
-      setState(() => _quote = Quote.fromChartJson(jsonDecode(r.body)));
-    }).catchError((_) {
-      if (mounted) setState(() => _quoteFailed = true);
+    setState(() {
+      _quoteFailed = false;
+      _storiesFailed = false;
     });
+    // Three independent fetches; each failure degrades its own section only.
+    http
+        .get(
+          Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/'
+              '${widget.company.nseSymbol}.NS?range=1mo&interval=1d'),
+          headers: {'User-Agent': 'Mozilla/5.0'},
+        )
+        .timeout(const Duration(seconds: 10))
+        .then((r) {
+          if (!mounted) return;
+          if (r.statusCode != 200) return setState(() => _quoteFailed = true);
+          setState(() => _quote = Quote.fromChartJson(jsonDecode(r.body)));
+        })
+        .catchError((_) {
+          if (mounted) setState(() => _quoteFailed = true);
+        });
     // Two steps, not an embedded join: ordering by a referenced table's column
     // through PostgREST embeds is where the Q&A tier-1 bug came from.
-    sb.from('story_companies')
+    sb
+        .from('story_companies')
         .select('story_id')
         .eq('company_id', widget.company.id)
         .order('story_id', ascending: false)
@@ -55,18 +66,26 @@ class _StockScreenState extends State<StockScreen> {
         .then((links) async {
       final ids = [for (final l in links) l['story_id']];
       if (ids.isEmpty || !mounted) return;
-      final rows = await sb.from('stories')
+      final rows = await sb
+          .from('stories')
           .select()
           .inFilter('id', ids)
           .eq('status', 'approved')
           .order('published_at', ascending: false)
           .limit(15);
       if (!mounted) return;
-      setState(() => _stories =
-          [for (final r in rows) Story.fromJson(Map<String, dynamic>.from(r))]);
-    }).catchError((_) {});
+      setState(() => _stories = [
+            for (final r in rows) Story.fromJson(Map<String, dynamic>.from(r))
+          ]);
+    }).catchError((_) {
+      // A network blip must not read as "this company has no coverage".
+      if (mounted) setState(() => _storiesFailed = true);
+    });
+    // Best-effort by design: worst case the star shows unfollowed and the
+    // toggle's upsert is a safe no-op re-follow.
     if (uid != null) {
-      sb.from('follows')
+      sb
+          .from('follows')
           .select('target_id')
           .eq('user_id', uid)
           .eq('target_type', 'company')
@@ -82,22 +101,30 @@ class _StockScreenState extends State<StockScreen> {
     final sb = Supabase.instance.client;
     final uid = sb.auth.currentUser?.id;
     if (uid == null) return;
+    // A fast double-tap fired upsert and delete concurrently; last to land
+    // won on the server while the UI showed the second tap's guess.
+    if (_togglingFollow) return;
+    _togglingFollow = true;
     final was = _following;
     setState(() => _following = !was); // optimistic, like save
     try {
       if (was) {
         await sb.from('follows').delete().match({
-          'user_id': uid, 'target_type': 'company',
+          'user_id': uid,
+          'target_type': 'company',
           'target_id': '${widget.company.id}',
         });
       } else {
         await sb.from('follows').upsert({
-          'user_id': uid, 'target_type': 'company',
+          'user_id': uid,
+          'target_type': 'company',
           'target_id': '${widget.company.id}',
         });
       }
     } catch (_) {
       if (mounted) setState(() => _following = was);
+    } finally {
+      _togglingFollow = false;
     }
   }
 
@@ -112,13 +139,16 @@ class _StockScreenState extends State<StockScreen> {
     return Scaffold(
       backgroundColor: bg,
       appBar: AppBar(
-        backgroundColor: bg, surfaceTintColor: bg, elevation: 0,
+        backgroundColor: bg,
+        surfaceTintColor: bg,
+        elevation: 0,
         leading: const BackButton(color: ink),
         title: Text(widget.company.name, style: serif.copyWith(fontSize: 18)),
         actions: [
           IconButton(
             onPressed: _toggleFollow,
-            icon: Icon(_following ? Icons.star_rounded : Icons.star_outline_rounded,
+            icon: Icon(
+                _following ? Icons.star_rounded : Icons.star_outline_rounded,
                 color: _following ? amber : inkDim),
             tooltip: _following ? 'Unfollow' : 'Follow',
           ),
@@ -132,22 +162,30 @@ class _StockScreenState extends State<StockScreen> {
           if (q != null) ...[
             Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
               Text('₹${q.price.toStringAsFixed(2)}',
-                  style: serif.copyWith(fontSize: 34, fontWeight: FontWeight.w700)),
+                  style: serif.copyWith(
+                      fontSize: 34, fontWeight: FontWeight.w700)),
               const SizedBox(width: 10),
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
                 child: Text('${up ? '+' : ''}$delta ($pct%)',
-                    style: mono.copyWith(fontSize: 13, color: up ? green : red)),
+                    style:
+                        mono.copyWith(fontSize: 13, color: up ? green : red)),
               ),
             ]),
             const SizedBox(height: 16),
             SizedBox(height: 64, child: Sparkline(q.closes, up ? green : red)),
             const SizedBox(height: 10),
-            Text('52-wk  ₹${q.low52.toStringAsFixed(0)} – ₹${q.high52.toStringAsFixed(0)}',
+            Text(
+                '52-wk  ₹${q.low52.toStringAsFixed(0)} – ₹${q.high52.toStringAsFixed(0)}',
                 style: mono.copyWith(fontSize: 12)),
-            Text('Delayed price · Yahoo Finance', style: mono.copyWith(fontSize: 10)),
+            Text('Delayed price · Yahoo Finance',
+                style: mono.copyWith(fontSize: 10)),
           ] else if (_quoteFailed)
-            Text('Price unavailable right now', style: mono.copyWith(fontSize: 13))
+            GestureDetector(
+              onTap: _load,
+              child: Text('Price unavailable — tap to retry',
+                  style: mono.copyWith(fontSize: 13)),
+            )
           else
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
@@ -160,15 +198,23 @@ class _StockScreenState extends State<StockScreen> {
           if (_stories.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 16),
-              child: Text('No tagged stories yet',
-                  style: mono.copyWith(fontSize: 13)),
+              child: _storiesFailed
+                  ? GestureDetector(
+                      onTap: _load,
+                      child: Text("Couldn't load stories — tap to retry",
+                          style: mono.copyWith(fontSize: 13)),
+                    )
+                  : Text('No tagged stories yet',
+                      style: mono.copyWith(fontSize: 13)),
             ),
           for (final s in _stories)
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(s.hook ?? s.headline,
-                  maxLines: 2, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: ink, fontWeight: FontWeight.w600)),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      const TextStyle(color: ink, fontWeight: FontWeight.w600)),
               subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
               onTap: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => StoryDetailScreen(storyId: s.id))),

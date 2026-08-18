@@ -33,13 +33,16 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     if (uid == null) return setState(() => _companies = const []);
     List<int> ids;
     try {
-      final follows = await sb.from('follows')
+      final follows = await sb
+          .from('follows')
           .select('target_id')
           .eq('user_id', uid)
           .eq('target_type', 'company');
+      if (!mounted) return;
       ids = [for (final f in follows) int.parse(f['target_id'])];
       if (ids.isEmpty) return setState(() => _companies = const []);
-      final companies = await sb.from('companies')
+      final companies = await sb
+          .from('companies')
           .select('id,name,nse_symbol')
           .inFilter('id', ids);
       if (!mounted) return;
@@ -54,16 +57,17 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
       return;
     }
     try {
-      final links = await sb.from('story_companies')
+      final links = await sb
+          .from('story_companies')
           .select('story_id')
           .inFilter('company_id', ids)
           .order('story_id', ascending: false)
           .limit(200);
-      final storyIds =
-          {for (final l in links) l['story_id']}.toList();
+      final storyIds = {for (final l in links) l['story_id']}.toList();
       final stories = storyIds.isEmpty
           ? const <Map<String, dynamic>>[]
-          : await sb.from('stories')
+          : await sb
+              .from('stories')
               .select()
               .inFilter('id', storyIds)
               .eq('status', 'approved')
@@ -71,7 +75,8 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
               .limit(30);
       if (!mounted) return;
       setState(() => _stories = [
-            for (final s in stories) Story.fromJson(Map<String, dynamic>.from(s))
+            for (final s in stories)
+              Story.fromJson(Map<String, dynamic>.from(s))
           ]);
     } catch (e) {
       // Companies already rendered; only the feed half failed — keep them
@@ -88,9 +93,22 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         return Center(
           child: Padding(
             padding: const EdgeInsets.all(32),
-            child: Text('Could not load watchlist\n$_error',
-                textAlign: TextAlign.center,
-                style: mono.copyWith(fontSize: 13, height: 1.6)),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text('Could not load watchlist',
+                  textAlign: TextAlign.center,
+                  style: mono.copyWith(fontSize: 13, height: 1.6)),
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: () {
+                  setState(() => _error = null);
+                  _load();
+                },
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: ink,
+                    side: const BorderSide(color: border)),
+                child: const Text('Retry'),
+              ),
+            ]),
           ),
         );
       }
@@ -120,8 +138,13 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                 backgroundColor: surface,
                 side: const BorderSide(color: border),
                 label: Text(c.nseSymbol, style: mono.copyWith(color: ink)),
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => StockScreen(company: c))),
+                // Reload on return: an unfollow on the stock page must not
+                // leave the chip (and its stories) ghosting here.
+                onPressed: () async {
+                  await Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => StockScreen(company: c)));
+                  if (mounted) _load();
+                },
               ),
           ],
         ),
@@ -129,8 +152,11 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         if (_error != null)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Text('Could not load stories\n$_error',
-                style: mono.copyWith(fontSize: 13)),
+            child: GestureDetector(
+              onTap: _load,
+              child: Text('Could not load stories — tap to retry',
+                  style: mono.copyWith(fontSize: 13)),
+            ),
           )
         else if (_stories.isEmpty)
           Padding(
@@ -142,8 +168,10 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: Text(s.hook ?? s.headline,
-                maxLines: 2, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: ink, fontWeight: FontWeight.w600)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    const TextStyle(color: ink, fontWeight: FontWeight.w600)),
             subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => StoryDetailScreen(storyId: s.id))),
