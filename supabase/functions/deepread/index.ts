@@ -8,47 +8,52 @@ const sb = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_KEY")!,
 );
 
-// (key, model) lanes, Groq-first; same comma-separated multi-key pattern as the
-// pipeline. Order = preference: strongest chat model across every key first.
-// Transcribed verbatim from supabase/functions/qa/index.ts.
-function lanes(): { url: string; key: string; model: string }[] {
-  const out: { url: string; key: string; model: string }[] = [];
-  const groqKeys = (Deno.env.get("GROQ_API_KEYS") ?? Deno.env.get("GROQ_API_KEY") ?? "")
-    .split(",").map((k) => k.trim()).filter(Boolean);
-  for (const model of ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"]) {
-    for (const key of groqKeys) {
-      out.push({ url: "https://api.groq.com/openai/v1/chat/completions", key, model });
-    }
+// (key, model) lanes, strongest-first; same comma-separated multi-key pattern
+// as the pipeline. Mirrors qa/index.ts's "smart" lane (18 Aug 2026): a deep
+// read is written ONCE and cached forever, so it deserves the best free model
+// even more than a throwaway answer does. gemini-3.7-flash is the newest flash
+// our keys can use (pro is 429 on free keys); llama-3.3-70b was retired from
+// Groq's catalog; qwen3.6-27b is the strongest live replacement.
+type Lane = { provider: "groq" | "gemini"; key: string; model: string };
+
+function keysOf(...envs: string[]): string[] {
+  for (const e of envs) {
+    const v = (Deno.env.get(e) ?? "").split(",").map((k) => k.trim()).filter(Boolean);
+    if (v.length) return v;
   }
-  return out;
+  return [];
+}
+
+function lanes(): Lane[] {
+  const groq = keysOf("GROQ_API_KEYS", "GROQ_API_KEY");
+  const gemini = keysOf("GEMINI_API_KEYS", "GEMINI_API_KEY");
+  const order: [("groq" | "gemini"), string][] = [
+    ["gemini", "gemini-3.7-flash"], ["groq", "openai/gpt-oss-120b"],
+    ["groq", "qwen/qwen3.6-27b"], ["gemini", "gemini-3.5-flash-lite"],
+  ];
+  return order.flatMap(([provider, model]) =>
+    (provider === "groq" ? groq : gemini).map((key) => ({ provider, key, model }))
+  );
 }
 
 async function chat(prompt: string): Promise<string | null> {
-  for (const { url, key, model } of lanes()) {
+  for (const { provider, key, model } of lanes()) {
     try {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model, temperature: 0.2,
-          response_format: { type: "json_object" },
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!r.ok) continue; // 429/503/anything -> next lane
-      return (await r.json()).choices[0].message.content;
-    } catch {
-      continue; // a provider outage must never surface as a 500
-    }
-  }
-  // Gemini depth: only reached when every Groq lane is down.
-  for (
-    const key of (Deno.env.get("GEMINI_API_KEYS") ?? Deno.env.get("GEMINI_API_KEY") ?? "")
-      .split(",").map((k) => k.trim()).filter(Boolean)
-  ) {
-    try {
+      if (provider === "groq") {
+        const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model, temperature: 0.2,
+            response_format: { type: "json_object" },
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (!r.ok) continue; // 429/503/anything -> next lane
+        return (await r.json()).choices[0].message.content;
+      }
       const r = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {
           method: "POST",
           headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
@@ -61,7 +66,7 @@ async function chat(prompt: string): Promise<string | null> {
       if (!r.ok) continue;
       return (await r.json()).candidates[0].content.parts[0].text;
     } catch {
-      continue;
+      continue; // a provider outage must never surface as a 500
     }
   }
   return null;
@@ -109,9 +114,12 @@ function prompt(
   return `You are FinSwipe's staff writer. Using ONLY the material below, write the
 whole story for a reader who knows nothing about it, in plain easy English.
 Facts only, never advice, never numbers that are not in the material.
-Structure it as 3-6 newspaper pages, each 60-120 words:
+Structure it as 4-8 newspaper pages, each 80-160 words:
 "What happened", "Background", "Who is affected", "Why it matters",
-and "What's next" only if the material supports it.
+and "What's next" only if the material supports it. Go deeper rather than
+wider: unpack terms a beginner would not know, spell out the chain of cause
+and effect, and use every relevant fact the material offers — but never pad;
+a thin story honestly told in 4 pages beats a padded 8.
 If the material is too thin to write honestly, return {"pages": []}.
 Return ONLY JSON: {"pages": [{"heading": "...", "body": "..."}]}
 
@@ -157,17 +165,19 @@ Deno.serve(async (req) => {
   // constraint update. This is cost protection, not a security boundary: a
   // failed count/insert (network blip, unexpected error) degrades to
   // ALLOWING generation rather than blocking it — swallowed, not logged.
-  try {
-    const midnight = new Date();
-    midnight.setUTCHours(0, 0, 0, 0);
-    const { count, error } = await sb.from("events")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", user.id).eq("type", "deep_read")
-      .gte("created_at", midnight.toISOString());
-    if (!error && (count ?? 0) >= 50) return new Response("daily limit", { status: 429 });
-    await sb.from("events").insert({ user_id: user.id, type: "deep_read" });
-  } catch {
-    // cap check/log unavailable -> proceed rather than block generation
+  if (user) {
+    try {
+      const midnight = new Date();
+      midnight.setUTCHours(0, 0, 0, 0);
+      const { count, error } = await sb.from("events")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id).eq("type", "deep_read")
+        .gte("created_at", midnight.toISOString());
+      if (!error && (count ?? 0) >= 50) return new Response("daily limit", { status: 429 });
+      await sb.from("events").insert({ user_id: user.id, type: "deep_read" });
+    } catch {
+      // cap check/log unavailable -> proceed rather than block generation
+    }
   }
 
   let members: Member[] = [];

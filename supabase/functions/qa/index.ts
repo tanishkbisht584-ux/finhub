@@ -19,46 +19,55 @@ const REFUSAL = "Our sources don't clearly explain this yet.";
 
 type Source = { title: string; body: string; source_name: string; url: string };
 
-// (key, model) lanes, Groq-first; same comma-separated multi-key pattern as the
-// pipeline. Order = preference: strongest chat model across every key first.
-function lanes(): { url: string; key: string; model: string }[] {
-  const out: { url: string; key: string; model: string }[] = [];
-  const groqKeys = (Deno.env.get("GROQ_API_KEYS") ?? Deno.env.get("GROQ_API_KEY") ?? "")
-    .split(",").map((k) => k.trim()).filter(Boolean);
-  for (const model of ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"]) {
-    for (const key of groqKeys) {
-      out.push({ url: "https://api.groq.com/openai/v1/chat/completions", key, model });
-    }
+// Two lane orders over the same providers (measured against our keys 18 Aug):
+//  "smart" — user-facing answers: gemini-3.7-flash first (newest free flash, a
+//            quota bucket the pipeline never draws from; gemini-pro is 429 on
+//            free keys), then Groq's best, then flash-lite as the last resort.
+//  "fast"  — the planner: routing needs speed, not brains, so Groq (sub-second)
+//            leads. llama-3.3-70b was retired from Groq's catalog (gone 18 Aug);
+//            qwen3.6-27b is the strongest live replacement.
+// Same comma-separated multi-key pattern as the pipeline throughout.
+type Lane = { provider: "groq" | "gemini"; key: string; model: string };
+
+function keysOf(...envs: string[]): string[] {
+  for (const e of envs) {
+    const v = (Deno.env.get(e) ?? "").split(",").map((k) => k.trim()).filter(Boolean);
+    if (v.length) return v;
   }
-  return out;
+  return [];
 }
 
-async function chat(prompt: string): Promise<string | null> {
-  for (const { url, key, model } of lanes()) {
+function lanes(kind: "smart" | "fast"): Lane[] {
+  const groq = keysOf("GROQ_API_KEYS", "GROQ_API_KEY");
+  const gemini = keysOf("GEMINI_API_KEYS", "GEMINI_API_KEY");
+  const order: [("groq" | "gemini"), string][] = kind === "smart"
+    ? [["gemini", "gemini-3.7-flash"], ["groq", "openai/gpt-oss-120b"],
+       ["groq", "qwen/qwen3.6-27b"], ["gemini", "gemini-3.5-flash-lite"]]
+    : [["groq", "openai/gpt-oss-120b"], ["groq", "qwen/qwen3.6-27b"],
+       ["gemini", "gemini-3.5-flash-lite"]];
+  return order.flatMap(([provider, model]) =>
+    (provider === "groq" ? groq : gemini).map((key) => ({ provider, key, model }))
+  );
+}
+
+async function chat(prompt: string, kind: "smart" | "fast" = "fast"): Promise<string | null> {
+  for (const { provider, key, model } of lanes(kind)) {
     try {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model, temperature: 0.2,
-          response_format: { type: "json_object" },
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!r.ok) continue; // 429/503/anything -> next lane
-      return (await r.json()).choices[0].message.content;
-    } catch {
-      continue; // a provider outage must never surface as a 500
-    }
-  }
-  // Gemini depth: only reached when every Groq lane is down.
-  for (
-    const key of (Deno.env.get("GEMINI_API_KEYS") ?? Deno.env.get("GEMINI_API_KEY") ?? "")
-      .split(",").map((k) => k.trim()).filter(Boolean)
-  ) {
-    try {
+      if (provider === "groq") {
+        const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model, temperature: 0.2,
+            response_format: { type: "json_object" },
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (!r.ok) continue; // 429/503/retired model/anything -> next lane
+        return (await r.json()).choices[0].message.content;
+      }
       const r = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {
           method: "POST",
           headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
@@ -71,7 +80,7 @@ async function chat(prompt: string): Promise<string | null> {
       if (!r.ok) continue;
       return (await r.json()).candidates[0].content.parts[0].text;
     } catch {
-      continue;
+      continue; // a provider outage must never surface as a 500
     }
   }
   return null;
@@ -250,7 +259,7 @@ function refusal() {
  *  real answer instead of four blanks. */
 async function conceptAnswer(question: string, terms: string[]) {
   const sources = await tier1(question, terms); // free: a DB query, not an AI call
-  const raw = await chat(conceptPrompt(question, sources));
+  const raw = await chat(conceptPrompt(question, sources), "smart");
   if (raw === null) return { error: 503 as const };
   let out;
   try {
@@ -298,7 +307,7 @@ async function answer(question: string) {
   for (const tier of [1, 2] as const) {
     const sources = tier === 1 ? await tier1(question, terms) : await tier2(question);
     if (!sources.length) continue;
-    const raw = await chat(prompt(question, sources));
+    const raw = await chat(prompt(question, sources), "smart");
     if (raw === null) return { error: 503 as const };
     let out;
     try {
