@@ -28,4 +28,28 @@ void main() {
     expect(find.textContaining("Couldn't load"), findsOneWidget);
     expect(find.textContaining('unavailable'), findsNothing);
   });
+
+  testWidgets('prefetch fails silently; the open retries once, then shows it',
+      (tester) async {
+    final story = Story.fromJson({
+      'id': 2,
+      'headline': 'RBI holds',
+      'hook': 'Hook',
+      'summary': 'Short.',
+      'sectors': const [],
+    });
+    await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(home: Scaffold(body: StoryPager(story: story)))));
+    // The 2s dwell prefetch fires and (Supabase uninitialized) fails — the
+    // card must stay pristine: no error page pre-baked behind it.
+    await tester.pump(const Duration(seconds: 3));
+    expect(find.text('Hook'), findsOneWidget);
+    expect(find.text('Try again'), findsNothing);
+
+    // Opening retries once silently; it fails again, and only now does the
+    // honest error page show.
+    await tester.fling(find.text('Hook'), const Offset(-400, 0), 1000);
+    await tester.pumpAndSettle();
+    expect(find.text('Try again'), findsOneWidget);
+  });
 }

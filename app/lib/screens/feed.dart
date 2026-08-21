@@ -91,8 +91,9 @@ Future<void> enableAllCategories() async {
 
 /// LIVE mode (owner 2026-08-14): red tile top-left. On = the feed hugs the
 /// bleeding edge — instant refresh on toggle, then a 15s fresh-poll instead
-/// of the ambient 90s. A mode, not a setting: every launch starts calm.
-final liveMode = ValueNotifier<bool>(false);
+/// of the ambient 90s. Every launch starts LIVE (owner 2026-08-21); the pill
+/// still toggles it off for the session.
+final liveMode = ValueNotifier<bool>(true);
 const livePollSeconds = 15;
 const ambientPollSeconds = 90;
 
@@ -115,16 +116,37 @@ Future<void> setMinImpact(int v) async {
       : await prefs.setInt(_minImpactPrefsKey, v);
 }
 
+/// Horizon lens: ALL, or only the short/long-term stories. Opened by tapping
+/// the SHORT/LONG half of the card's ledger line. Same lifecycle as minImpact.
+final horizonFilter = ValueNotifier<String>('all'); // 'all' | 'short' | 'long'
+const _horizonPrefsKey = 'feed_horizon_v1';
+
+Future<void> loadHorizonFilter() async {
+  final prefs = await SharedPreferences.getInstance();
+  horizonFilter.value = prefs.getString(_horizonPrefsKey) ?? 'all';
+}
+
+Future<void> setHorizonFilter(String v) async {
+  track('filter_horizon', {'h': v});
+  horizonFilter.value = v;
+  final prefs = await SharedPreferences.getInstance();
+  v == 'all'
+      ? await prefs.remove(_horizonPrefsKey)
+      : await prefs.setString(_horizonPrefsKey, v);
+}
+
 /// An alerted story must never be invisible because a filter excludes it:
 /// open the feed back up.
 void resetFilterForAlert() {
   enabledCategories.value = {...feedCategories};
   minImpact.value = 0;
+  horizonFilter.value = 'all';
   // Persist too, or the narrow filter resurrects on next launch. Not routed
   // through setMinImpact: that would log a filter_impact event per alert.
   SharedPreferences.getInstance().then((p) {
     p.remove(_categoriesPrefsKey);
     p.remove(_minImpactPrefsKey);
+    p.remove(_horizonPrefsKey);
   });
 }
 
@@ -132,7 +154,8 @@ void resetFilterForAlert() {
 /// thin feed is never a mystery.
 bool filtersActive() =>
     enabledCategories.value.length != feedCategories.length ||
-    minImpact.value > 0;
+    minImpact.value > 0 ||
+    horizonFilter.value != 'all';
 
 /// Dedup-by-id merge for the infinite feed: [incoming] joins [current] at the
 /// bottom (an older page) or the top, never duplicating a card the reader
@@ -165,13 +188,22 @@ List<Story> insertFresh(List<Story> feed, List<Story> fresh, int? anchorId) {
 /// The one feed the reader scrolls. A story with a null category (shouldn't
 /// happen for approved rows, but guard) shows only when nothing is excluded;
 /// a null impact score counts as 0.
-List<Story> visibleStories(List<Story> list, Set<String> enabled, int minImp) =>
+List<Story> visibleStories(
+        List<Story> list, Set<String> enabled, int minImp, String horizon) =>
     [
       for (final s in list)
         if ((s.category == null
                 ? enabled.length == feedCategories.length
                 : enabled.contains(s.category)) &&
-            (s.impactScore ?? 0) >= minImp)
+            (s.impactScore ?? 0) >= minImp &&
+            // Same convention as null category: a story with no horizon shows
+            // only when the lens is wide open. 'both' belongs to either lens.
+            (horizon == 'all' ||
+                (horizon == 'short'
+                    ? s.impactHorizon == 'short_term' ||
+                        s.impactHorizon == 'both'
+                    : s.impactHorizon == 'long_term' ||
+                        s.impactHorizon == 'both')))
           s
     ];
 
@@ -329,9 +361,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     pendingStory.addListener(_rebuild);
     enabledCategories.addListener(_onFilterChanged);
     minImpact.addListener(_onFilterChanged);
+    horizonFilter.addListener(_onFilterChanged);
     liveMode.addListener(_onLiveToggle);
     loadEnabledCategories();
     loadMinImpact();
+    loadHorizonFilter();
     WidgetsBinding.instance.addObserver(this);
     _startFreshTimer();
   }
@@ -357,6 +391,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     pendingStory.removeListener(_rebuild);
     enabledCategories.removeListener(_onFilterChanged);
     minImpact.removeListener(_onFilterChanged);
+    horizonFilter.removeListener(_onFilterChanged);
     liveMode.removeListener(_onLiveToggle);
     _pc.dispose();
     super.dispose();
@@ -464,7 +499,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       // very next swipe, seamlessly — never a jump, never behind the reader.
       int? anchorId;
       final shown =
-          visibleStories(_feed, enabledCategories.value, minImpact.value);
+          visibleStories(_feed, enabledCategories.value, minImpact.value,
+              horizonFilter.value);
       final page = _pc.hasClients ? _pc.page?.round() : null;
       if (page != null && shown.isNotEmpty) {
         anchorId = shown[page.clamp(0, shown.length - 1)].id;
@@ -527,7 +563,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
         }
         final combined = _seeded(list);
         final shown =
-            visibleStories(combined, enabledCategories.value, minImpact.value);
+            visibleStories(combined, enabledCategories.value, minImpact.value,
+                horizonFilter.value);
         // A short visible list can't reach onPageChanged's load trigger (one
         // card can't swipe at all), so pull older pages until the filter has
         // enough to show or the 48h window is drained. Each round either grows
@@ -753,79 +790,129 @@ class FeedFilterButton extends StatelessWidget {
   }
 }
 
-/// The filter panel: category pills + minimum-impact tiles, dressed like the
-/// share palette (tint glow, mono labels, 140ms ease).
-void showFeedFilterSheet(BuildContext context) {
-  Widget pill(String label, bool on, Color tint, VoidCallback onTap,
-          {double fontSize = 11}) =>
-      GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onTap();
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-          decoration: BoxDecoration(
-            color: on ? tint.withValues(alpha: 0.18) : surface,
-            border: Border.all(color: on ? tint : border, width: on ? 1.5 : 1),
-          ),
-          child: Text(label,
-              style: mono.copyWith(
-                  fontSize: fontSize,
-                  color: on ? tint : inkDim,
-                  fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
+/// The one pill treatment every filter surface wears (tint glow, mono label,
+/// 140ms ease) — the dial sheet and both ledger-line mini sheets share it.
+Widget filterPill(String label, bool on, Color tint, VoidCallback onTap,
+        {double fontSize = 11}) =>
+    GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: on ? tint.withValues(alpha: 0.18) : surface,
+          border: Border.all(color: on ? tint : border, width: on ? 1.5 : 1),
         ),
-      );
+        child: Text(label,
+            style: mono.copyWith(
+                fontSize: fontSize,
+                color: on ? tint : inkDim,
+                fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
+      ),
+    );
 
+/// Shared dressing for the clay-black filter sheets: square corners, mono
+/// header, one Wrap of pills.
+void _showPillSheet(BuildContext context, String header,
+    Widget Function(BuildContext) pills) {
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: bg,
+    shape: const RoundedRectangleBorder(), // square corners, clay-black
+    builder: (_) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(header,
+                  style:
+                      mono.copyWith(fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 10),
+              Builder(builder: pills),
+            ]),
+      ),
+    ),
+  );
+}
+
+/// The dial's panel: categories only (owner 2026-08-21 — impact and horizon
+/// moved onto the card's ledger line, where they're visible).
+void showFeedFilterSheet(BuildContext context) {
   showModalBottomSheet(
     context: context,
     backgroundColor: bg,
     shape: const RoundedRectangleBorder(), // square corners, clay-black
     builder: (_) => ValueListenableBuilder<Set<String>>(
       valueListenable: enabledCategories,
-      builder: (context, enabled, _) => ValueListenableBuilder<int>(
-        valueListenable: minImpact,
-        builder: (context, minImp, _) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Text('YOUR FEED',
-                        style: mono.copyWith(
-                            fontSize: 12, fontWeight: FontWeight.w700)),
-                    const Spacer(),
-                    pill('Reset', filtersActive(), green, resetFilterForAlert,
-                        fontSize: 10),
-                  ]),
-                  const SizedBox(height: 14),
-                  Wrap(spacing: 8, runSpacing: 8, children: [
-                    pill('All', enabled.length == feedCategories.length, green,
-                        enableAllCategories),
-                    for (final c in feedCategories)
-                      pill(c, enabled.contains(c), green,
-                          () => toggleCategory(c)),
-                  ]),
-                  const SizedBox(height: 18),
-                  Text('MIN IMPACT',
+      builder: (context, enabled, _) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Text('YOUR FEED',
                       style: mono.copyWith(
                           fontSize: 12, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 10),
-                  Wrap(spacing: 8, runSpacing: 8, children: [
-                    pill('ANY', minImp == 0, green, () => setMinImpact(0)),
-                    pill('4+', minImp == 4, amber, () => setMinImpact(4)),
-                    pill('6+', minImp == 6, amber, () => setMinImpact(6)),
-                    // 8+ burns ember, same as the card's IMPACT line
-                    pill('8+', minImp == 8, red, () => setMinImpact(8)),
-                  ]),
+                  const Spacer(),
+                  filterPill(
+                      'Reset', filtersActive(), green, resetFilterForAlert,
+                      fontSize: 10),
                 ]),
-          ),
+                const SizedBox(height: 14),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  filterPill('All', enabled.length == feedCategories.length,
+                      green, enableAllCategories),
+                  for (final c in feedCategories)
+                    filterPill(
+                        c, enabled.contains(c), green, () => toggleCategory(c)),
+                ]),
+              ]),
         ),
       ),
+    ),
+  );
+}
+
+/// Mini sheet behind the card's IMPACT text.
+void showImpactSheet(BuildContext context) {
+  _showPillSheet(
+    context,
+    'MIN IMPACT',
+    (context) => ValueListenableBuilder<int>(
+      valueListenable: minImpact,
+      builder: (context, minImp, _) =>
+          Wrap(spacing: 8, runSpacing: 8, children: [
+        filterPill('ANY', minImp == 0, green, () => setMinImpact(0)),
+        filterPill('4+', minImp == 4, amber, () => setMinImpact(4)),
+        filterPill('6+', minImp == 6, amber, () => setMinImpact(6)),
+        // 8+ burns ember, same as the card's IMPACT line
+        filterPill('8+', minImp == 8, red, () => setMinImpact(8)),
+      ]),
+    ),
+  );
+}
+
+/// Mini sheet behind the card's SHORT/LONG text.
+void showHorizonSheet(BuildContext context) {
+  _showPillSheet(
+    context,
+    'HORIZON',
+    (context) => ValueListenableBuilder<String>(
+      valueListenable: horizonFilter,
+      builder: (context, h, _) => Wrap(spacing: 8, runSpacing: 8, children: [
+        filterPill('ALL', h == 'all', green, () => setHorizonFilter('all')),
+        filterPill(
+            'SHORT', h == 'short', green, () => setHorizonFilter('short')),
+        filterPill('LONG', h == 'long', green, () => setHorizonFilter('long')),
+      ]),
     ),
   );
 }
@@ -1103,7 +1190,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
 
           // Reels-style action rail on the right edge, over the card and
           // outside the RepaintBoundary — share PNGs stay free of UI icons.
-          Positioned(right: 10, bottom: 116, child: _rail(isSaved)),
+          // 172 clears the divider + attribution zone on every card (the
+          // share icon was sitting on the hairline on short no-image cards).
+          Positioned(right: 10, bottom: 172, child: _rail(isSaved)),
 
           // Dim the card while the palette is up, so the targets read as a
           // layer above rather than more card furniture.
@@ -1172,7 +1261,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
         // docs/mockups/finswipe-card-mockup.html): photo full-bleed with the
         // IMPACT line on a scrim, or the hook in the photo's slot when there
         // is no image.
-        _CardHero(story: story),
+        _CardHero(story: story, interactive: widget.onReadMore != null),
         Expanded(
           child: Container(
             width: double.infinity,
@@ -1519,8 +1608,12 @@ final shareCapture = ValueNotifier<bool>(false);
 ///    just the IMPACT row, so the PNG keeps the ledger line but never the
 ///    hotlinked photo, and the hook below the hero still shows exactly once.
 class _CardHero extends StatefulWidget {
-  const _CardHero({required this.story});
+  const _CardHero({required this.story, this.interactive = false});
   final Story story;
+
+  /// Feed cards only: the ledger line's halves open the impact and horizon
+  /// filter sheets. Detail/saved/stock keep a passive line.
+  final bool interactive;
 
   @override
   State<_CardHero> createState() => _CardHeroState();
@@ -1547,24 +1640,49 @@ class _CardHeroState extends State<_CardHero> {
   /// IMPACT 9/10 · SHORT + LONG — monospace ledger line, centered between the
   /// floating LIVE/filter tiles' 44px row (owner 2026-08-14). The card paints
   /// edge-to-edge now, so the status inset is handled here on every face.
+  /// On feed cards each half is a filter door: IMPACT opens the min-impact
+  /// sheet, the horizon opens the ALL/SHORT/LONG sheet (owner 2026-08-21).
+  /// Single taps ride behind the card's double-tap arena, like the strip.
   Widget _impactRow(BuildContext context) {
     final s = widget.story;
+    final impact = Text('IMPACT ${s.impactScore ?? '–'}/10',
+        style: mono.copyWith(
+            color: impactColor(s.impactScore), fontWeight: FontWeight.w700));
+    final horizon =
+        _horizon.isEmpty ? null : Text('  ·  $_horizon', style: mono);
     return Padding(
       padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 8),
       child: SizedBox(
         height: 44,
         child: Center(
-          child: Text.rich(TextSpan(children: [
-            TextSpan(
-                text: 'IMPACT ${s.impactScore ?? '–'}/10',
-                style: mono.copyWith(
-                    color: impactColor(s.impactScore),
-                    fontWeight: FontWeight.w700)),
-            if (_horizon.isNotEmpty)
-              TextSpan(text: '  ·  $_horizon', style: mono),
-          ])),
+          // Two texts can't soft-wrap like the old single Text.rich did, so
+          // scale the whole line down on a width it doesn't fit.
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              _ledgerTap(impact, () => showImpactSheet(context)),
+              if (horizon != null)
+                _ledgerTap(horizon, () => showHorizonSheet(context)),
+            ]),
+          ),
         ),
       ),
+    );
+  }
+
+  /// Tap target around one half of the ledger line, padded toward the 44px
+  /// row height — the text alone is not thumb-sized.
+  Widget _ledgerTap(Widget label, VoidCallback open) {
+    final padded =
+        Padding(padding: const EdgeInsets.symmetric(vertical: 13), child: label);
+    if (!widget.interactive) return padded;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        open();
+      },
+      child: padded,
     );
   }
 
@@ -1744,15 +1862,20 @@ class StoryPager extends StatefulWidget {
 class _StoryPagerState extends State<StoryPager> {
   final _hpc = PageController();
   DeepRead? _read;
-  bool _requested = false; // analytics + invoke fired for this story
+  bool _requested = false; // invoke fired for this story (open or prefetch)
   bool _failed = false; // network failure — distinct from an AI refusal
   bool _onDeep = false; // past the card — back should return, not exit
+  bool _opened = false; // the reader actually went deep (analytics gate)
+  bool _tracked = false; // deep_read logged once per story per session
+  bool _retriedOnOpen = false; // one silent retry when a prefetch had failed
+  Timer? _prefetch;
 
   @override
   void initState() {
     super.initState();
     _read = _deepReadMemo[widget.story.id];
     _hpc.addListener(_onScroll);
+    _armPrefetch();
   }
 
   @override
@@ -1765,22 +1888,61 @@ class _StoryPagerState extends State<StoryPager> {
       _requested = false;
       _failed = false;
       _onDeep = false;
+      _opened = false;
+      _tracked = false;
+      _retriedOnOpen = false;
       if (_hpc.hasClients) _hpc.jumpToPage(0);
+      _armPrefetch();
     }
   }
 
   @override
   void dispose() {
+    _prefetch?.cancel();
     _hpc.dispose();
     super.dispose();
   }
 
-  /// First pull past the card's edge is the "open": fire analytics once and
-  /// start writing before the page even settles.
+  /// Speed-read the room: after ~2s on a card the reader might go deep, so
+  /// start the write now — a left swipe (or the Read-more strip) then lands on
+  /// a finished read. Only viewed cards generate, and the edge function's
+  /// server-side cache makes each story a one-time cost across all users
+  /// (owner 2026-08-21 — chosen over pipeline pre-generation, which would
+  /// spend tokens on stories nobody opens).
+  void _armPrefetch() {
+    _prefetch?.cancel();
+    if (_read != null) return; // memo hit — nothing to warm
+    final id = widget.story.id;
+    _prefetch = Timer(const Duration(seconds: 2), () {
+      if (mounted && widget.story.id == id) _ensureRead();
+    });
+  }
+
+  /// First pull past the card's edge is the "open": analytics fire here (not
+  /// on prefetch), and a prefetch that failed quietly gets one silent retry
+  /// on the transition edge — never per scroll pixel.
   void _onScroll() {
     final deep = (_hpc.page ?? 0) > 0.5;
-    if (deep != _onDeep) setState(() => _onDeep = deep);
+    if (deep != _onDeep) {
+      setState(() => _onDeep = deep);
+      if (deep) {
+        _opened = true;
+        _maybeTrack();
+        if (_failed && !_retriedOnOpen) {
+          _retriedOnOpen = true;
+          _retryRead();
+        }
+      }
+    }
     if (deep) _ensureRead();
+  }
+
+  /// deep_read means "a person read it" — once per story per session, only
+  /// after a real open, whether content arrived before (prefetch) or after.
+  void _maybeTrack() {
+    if (_tracked || !_opened || !(_read?.hasContent ?? false)) return;
+    _tracked = true;
+    track('deep_read', {'story_id': widget.story.id});
   }
 
   Future<void> _ensureRead() async {
@@ -1793,15 +1955,14 @@ class _StoryPagerState extends State<StoryPager> {
       final read = DeepRead.fromJson(
           res.data is Map ? Map<String, dynamic>.from(res.data as Map) : null);
       // A refusal isn't cached server-side either — leave it out of the memo
-      // so a later encounter retries against a possibly-richer story. Analytics
-      // fires exactly here, tied to the memo write: once per story per
-      // session, never on a retry that only reaches a refusal, never on a
-      // memo hit (that path returns above before this is reached).
-      if (read.hasContent) {
-        _deepReadMemo[id] = read;
-        track('deep_read', {'story_id': id});
+      // so a later encounter retries against a possibly-richer story.
+      // Analytics moved to _maybeTrack (open-gated): a prefetch that is never
+      // read must not count as a deep_read.
+      if (read.hasContent) _deepReadMemo[id] = read;
+      if (mounted && widget.story.id == id) {
+        setState(() => _read = read);
+        _maybeTrack();
       }
-      if (mounted && widget.story.id == id) setState(() => _read = read);
     } catch (_) {
       if (mounted && widget.story.id == id) {
         // _requested stays true: _onScroll fires per scroll pixel while the
