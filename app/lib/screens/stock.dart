@@ -68,7 +68,7 @@ class _StockScreenState extends State<StockScreen> {
       if (ids.isEmpty || !mounted) return;
       final rows = await sb
           .from('stories')
-          .select()
+          .select(storyCols)
           .inFilter('id', ids)
           .eq('status', 'approved')
           .order('published_at', ascending: false)

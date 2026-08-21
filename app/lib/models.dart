@@ -12,6 +12,14 @@ class Outlet {
         publishedAt = DateTime.tryParse(j['published_at'] ?? '');
 }
 
+/// Exactly the columns Story.fromJson reads. `select()` was shipping the
+/// whole row — including the multi-page `deep_read` jsonb and the `fts`
+/// tsvector — making every feed page ~5x its useful size, then paying for it
+/// again in jsonDecode, the offline-cache encode, and the prefs blob.
+const storyCols = 'id,hook,headline,summary,impact_direction,impact_strength,'
+    'impact_horizon,impact_score,severity_level,confidence,source_name,'
+    'source_url,category,sectors,image_url,video_url,published_at,cluster_id';
+
 class Story {
   final int id;
   final String? hook;

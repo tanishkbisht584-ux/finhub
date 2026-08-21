@@ -15,7 +15,7 @@ final savedProvider = FutureProvider<List<Story>>((ref) async {
   if (uid == null) return const [];
   final rows = await Supabase.instance.client
       .from('saves')
-      .select('stories(*)')
+      .select('stories($storyCols)')
       .eq('user_id', uid)
       .order('saved_at', ascending: false);
   return rows

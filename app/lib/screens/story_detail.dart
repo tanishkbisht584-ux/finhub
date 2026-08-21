@@ -6,15 +6,24 @@ import '../theme.dart';
 import 'feed.dart' show StoryCard;
 
 /// Deep-link target (spec §8 screen 8): alerts and shares land here.
-class StoryDetailScreen extends StatelessWidget {
+class StoryDetailScreen extends StatefulWidget {
   const StoryDetailScreen({super.key, required this.storyId});
   final int storyId;
+
+  @override
+  State<StoryDetailScreen> createState() => _StoryDetailScreenState();
+}
+
+class _StoryDetailScreenState extends State<StoryDetailScreen> {
+  // Fetch once on mount — an inline future in build() refetched the story on
+  // every rebuild.
+  late final Future<Story?> _story = _fetch();
 
   Future<Story?> _fetch() async {
     final row = await Supabase.instance.client
         .from('stories')
-        .select()
-        .eq('id', storyId)
+        .select(storyCols)
+        .eq('id', widget.storyId)
         .maybeSingle();
     return row == null ? null : Story.fromJson(row);
   }
@@ -24,7 +33,7 @@ class StoryDetailScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('FinSwipe')),
       body: FutureBuilder<Story?>(
-        future: _fetch(),
+        future: _story,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
             return Center(child: appSpinner());

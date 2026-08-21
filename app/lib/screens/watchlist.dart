@@ -68,7 +68,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
           ? const <Map<String, dynamic>>[]
           : await sb
               .from('stories')
-              .select()
+              .select(storyCols)
               .inFilter('id', storyIds)
               .eq('status', 'approved')
               .order('published_at', ascending: false)

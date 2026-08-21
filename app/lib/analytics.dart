@@ -25,22 +25,24 @@ Map<String, Object?> buildCapture(String event, String distinctId,
 String analyticsDistinctId() =>
     Supabase.instance.client.auth.currentUser?.id ?? 'anon';
 
+/// One long-lived client: a fresh HttpClient per event meant a full TCP+TLS
+/// handshake per swipe (fifty swipes = fifty handshakes, radio held high on
+/// cellular). Keep-alive reuses the connection; a single global can't leak.
+final _client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+
 /// Fire-and-forget: analytics must never slow a swipe or surface an error.
 void track(String event, [Map<String, Object?> props = const {}]) {
   () async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
-      final req = await client.postUrl(Uri.https(_phHost, '/capture/'));
+      final req = await _client.postUrl(Uri.https(_phHost, '/capture/'));
       req.headers.contentType = ContentType.json;
       req.write(jsonEncode(buildCapture(event, analyticsDistinctId(), props)));
-      // connectionTimeout only bounds the connect; a stalled response held
-      // the socket forever, and every failed capture leaked the client.
+      // connectionTimeout only bounds the connect; a stalled response would
+      // otherwise hold its socket indefinitely.
       await (await req.close().timeout(const Duration(seconds: 10)))
           .drain<void>();
     } catch (_) {
       // Offline or PostHog down: the Supabase events table still has it.
-    } finally {
-      client.close(force: true);
     }
   }();
 }

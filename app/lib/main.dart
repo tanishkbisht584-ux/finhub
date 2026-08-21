@@ -106,18 +106,26 @@ Future<void> main() async {
         )))));
     return;
   }
+  // Decoded heroes are ~1.5MB each; the 100MB default kept ~50 cards' worth
+  // of bitmaps alive on a 3GB phone. 32MB still holds a screenful + neighbors.
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 32 << 20;
   RemoteMessage? initial;
   try {
     await Firebase.initializeApp();
-    await FirebaseMessaging.instance.requestPermission();
-    await FirebaseMessaging.instance.subscribeToTopic('alerts');
     FirebaseMessaging.onMessageOpenedApp.listen(_openStory);
+    // Only getInitialMessage is on the deep-link path. requestPermission
+    // blocks on the Android 13+ OS dialog and subscribeToTopic is a network
+    // round trip — neither belongs before the first frame.
     initial = await FirebaseMessaging.instance.getInitialMessage();
     FirebaseMessaging.onMessage.listen(_maybeSpeak);
     FirebaseMessaging.instance.onTokenRefresh.listen((_) {
       _fcmTokenSaved = false;
       _saveFcmToken();
     });
+    FirebaseMessaging.instance
+        .requestPermission()
+        .then((_) => FirebaseMessaging.instance.subscribeToTopic('alerts'))
+        .then((_) {}, onError: (_) {});
   } catch (_) {
     // no google-services / Play Services: app works, alerts don't arrive
   }

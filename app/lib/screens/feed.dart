@@ -186,7 +186,7 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
   try {
     final rows = await Supabase.instance.client
         .from('stories')
-        .select()
+        .select(storyCols)
         .eq('status', 'approved')
         .gte('published_at', since)
         .order('is_featured', ascending: false)
@@ -217,7 +217,7 @@ Future<List<Story>> fetchFeedPage({DateTime? before, DateTime? after}) async {
       .toIso8601String();
   var q = Supabase.instance.client
       .from('stories')
-      .select()
+      .select(storyCols)
       .eq('status', 'approved')
       .gte('published_at', since);
   // lte, not lt: same-second neighbours must not fall through the crack —
@@ -1198,71 +1198,74 @@ class _StoryCardState extends ConsumerState<StoryCard>
                   const SizedBox(height: 12),
                 ],
                 Expanded(
-              child: _FitScroll(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(story.summary ?? '',
-                        style: TextStyle(
-                            fontSize: 15,
-                            height: 1.55,
-                            color: ink.withValues(alpha: 0.8))),
-                    if (story.companies.isNotEmpty) ...[
-                      const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: story.companies
-                            .map((c) => GestureDetector(
-                                  onTap: () => Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                          builder: (_) =>
-                                              StockScreen(company: c))),
-                                  child: Container(
-                                    // Taller than the inert sector chips and
-                                    // carrying the ↗ — this one navigates,
-                                    // and nothing else distinguished them.
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 8),
-                                    decoration: BoxDecoration(
-                                        color: surface,
-                                        border: Border.all(color: border)),
-                                    child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text('\$${c.nseSymbol}',
-                                              style: mono.copyWith(
-                                                  fontSize: 12, color: ink)),
-                                          const SizedBox(width: 3),
-                                          const Icon(Icons.north_east_rounded,
-                                              size: 10, color: inkDim),
-                                        ]),
-                                  ),
-                                ))
-                            .toList(),
-                      ),
-                    ],
-                    if (story.sectors.isNotEmpty) ...[
-                      const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: story.sectors
-                            .map((s) => Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                      border: Border.all(color: border)),
-                                  child: Text(s,
-                                      style: mono.copyWith(fontSize: 12)),
-                                ))
-                            .toList(),
-                      ),
-                    ],
-                  ],
+                  child: _FitScroll(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(story.summary ?? '',
+                            style: TextStyle(
+                                fontSize: 15,
+                                height: 1.55,
+                                color: ink.withValues(alpha: 0.8))),
+                        if (story.companies.isNotEmpty) ...[
+                          const SizedBox(height: 14),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: story.companies
+                                .map((c) => GestureDetector(
+                                      onTap: () => Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                              builder: (_) =>
+                                                  StockScreen(company: c))),
+                                      child: Container(
+                                        // Taller than the inert sector chips and
+                                        // carrying the ↗ — this one navigates,
+                                        // and nothing else distinguished them.
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 8),
+                                        decoration: BoxDecoration(
+                                            color: surface,
+                                            border: Border.all(color: border)),
+                                        child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text('\$${c.nseSymbol}',
+                                                  style: mono.copyWith(
+                                                      fontSize: 12,
+                                                      color: ink)),
+                                              const SizedBox(width: 3),
+                                              const Icon(
+                                                  Icons.north_east_rounded,
+                                                  size: 10,
+                                                  color: inkDim),
+                                            ]),
+                                      ),
+                                    ))
+                                .toList(),
+                          ),
+                        ],
+                        if (story.sectors.isNotEmpty) ...[
+                          const SizedBox(height: 14),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: story.sectors
+                                .map((s) => Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                          border: Border.all(color: border)),
+                                      child: Text(s,
+                                          style: mono.copyWith(fontSize: 12)),
+                                    ))
+                                .toList(),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
                 const Divider(height: 20),
                 // Attribution owns the full width now — the action rail
                 // floats on the card's right edge (see build).
