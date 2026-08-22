@@ -12,6 +12,7 @@ import '../analytics.dart';
 import '../feed_cache.dart';
 import '../models.dart';
 import '../publishers.dart';
+import '../remote_config.dart';
 import '../share_palette.dart';
 import 'saved.dart';
 import 'stock.dart';
@@ -94,8 +95,9 @@ Future<void> enableAllCategories() async {
 /// of the ambient 90s. Every launch starts LIVE (owner 2026-08-21); the pill
 /// still toggles it off for the session.
 final liveMode = ValueNotifier<bool>(true);
-const livePollSeconds = 15;
-const ambientPollSeconds = 90;
+// Poll cadence comes from the admin's remote config (defaults 15 s / 90 s).
+int get livePollSeconds => remoteConfig.livePollSeconds;
+int get ambientPollSeconds => remoteConfig.ambientPollSeconds;
 
 /// Minimum impact score a card needs to stay in the feed (0 = show all).
 /// Same lifecycle as the category set: persisted, reset by alerts.
@@ -1949,6 +1951,11 @@ class _StoryPagerState extends State<StoryPager> {
     if (_requested || _read != null) return;
     _requested = true;
     final id = widget.story.id;
+    if (!remoteConfig.deepReadEnabled) {
+      // Admin paused deep reads: the honest "not available" page, no invoke.
+      if (mounted) setState(() => _read = DeepRead.fromJson(null));
+      return;
+    }
     try {
       final res = await Supabase.instance.client.functions.invoke('deepread',
           body: {'story_id': id}).timeout(const Duration(seconds: 20));

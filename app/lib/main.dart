@@ -7,6 +7,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'analytics.dart';
+import 'remote_config.dart';
 import 'screens/ask.dart';
 import 'screens/feed.dart';
 import 'screens/interests.dart';
@@ -92,6 +93,10 @@ Future<void> main() async {
   try {
     await Supabase.initialize(
         url: supabaseUrl, publishableKey: supabasePublishableKey);
+    // Admin's remote config: kill switches, poll cadence, force-update floor.
+    // Bounded to 4 s and never throws — defaults are the compiled values.
+    await loadRemoteConfig();
+    liveMode.value = remoteConfig.liveDefault;
   } catch (_) {
     // A broken build (missing --dart-define) or hostile boot environment:
     // a message beats the native crash screen.
@@ -148,7 +153,8 @@ class FinSwipeApp extends StatelessWidget {
       title: 'FinSwipe',
       theme: appTheme,
       debugShowCheckedModeBanner: false,
-      home: const AuthGate(),
+      // Below the admin's minimum version: the update wall, nothing else.
+      home: updateRequired ? const ForceUpdateScreen() : const AuthGate(),
     );
   }
 }
@@ -173,6 +179,9 @@ class _AuthGateState extends State<AuthGate> {
       await Supabase.instance.client.from('profiles').upsert({
         'id': user.id,
         'display_name': user.userMetadata?['full_name'] ?? user.email,
+        // version telemetry for the admin (which builds are in the wild)
+        'app_version': appVersion,
+        'last_seen_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'id');
       _profileEnsured = true;
     } catch (_) {
@@ -334,6 +343,9 @@ class _HomeShellState extends State<HomeShell>
               ),
             ),
           ),
+          if (remoteConfig.maintenance.isNotEmpty)
+            const Positioned(
+                left: 0, right: 0, top: 0, child: MaintenanceBanner()),
         ]),
         // Three destinations, not four: Saved is a place you visit occasionally,
         // not a peer of the feed. It now hangs off the bookmark on a card, where

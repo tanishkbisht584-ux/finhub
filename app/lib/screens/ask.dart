@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
+import '../remote_config.dart';
 import '../theme.dart';
 import 'stock.dart';
 
@@ -84,6 +85,14 @@ class _AskScreenState extends State<AskScreen> {
       _error = null;
       _answer = null;
     });
+    if (!remoteConfig.qaEnabled) {
+      // Admin paused Ask: say so instead of a round trip that would 503.
+      setState(() {
+        _loading = false;
+        _error = 'Ask is paused for maintenance — back soon.';
+      });
+      return;
+    }
     try {
       final term =
           looksLikeQuestion(question) ? null : safeEntityTerm(question);
