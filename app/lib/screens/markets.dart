@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
@@ -10,17 +12,36 @@ import '../ticks.dart';
 import 'feed.dart' show homeTab, marketsTab;
 import 'stock.dart';
 
-/// Everything the Markets tab shows, from the pipeline's `quotes` table
-/// (pipeline/market.py): indices, FX, crypto, commodities, plus the signed-in
-/// user's followed companies with their quotes.
+/// Everything the Markets tab shows, from the pipeline's `quotes` and
+/// `market_blobs` tables (pipeline/market.py), plus the signed-in user's
+/// followed companies and MF schemes.
 class MarketsData {
-  const MarketsData({required this.ticks, required this.watchlist});
+  const MarketsData({
+    required this.ticks,
+    required this.watchlist,
+    this.followedMf = const {},
+    this.blobs = const {},
+    this.blobUpdated = const {},
+  });
   final List<Tick> ticks;
   final List<Company> watchlist;
+  final Set<int> followedMf;
+  final Map<String, dynamic> blobs; // key -> payload
+  final Map<String, DateTime> blobUpdated;
 
   List<Tick> kind(String k) => [
         for (final t in ticks)
           if (t.kind == k) t
+      ];
+
+  List<Map<String, dynamic>> list(String key) => [
+        for (final r in (blobs[key] as List? ?? const []))
+          Map<String, dynamic>.from(r as Map)
+      ];
+
+  List<Map<String, dynamic>> get deals => [
+        for (final r in ((blobs['bulk_deals'] as Map?)?['deals'] as List? ?? const []))
+          Map<String, dynamic>.from(r as Map)
       ];
 
   /// Newest refresh across everything shown — the "as of" line.
@@ -35,20 +56,42 @@ final marketsProvider = FutureProvider.autoDispose<MarketsData>((ref) async {
   final rows = await sb
       .from('quotes')
       .select(tickColsWithCloses)
-      .inFilter('kind', ['index', 'fx', 'crypto', 'commodity']).order('symbol');
+      .inFilter('kind', ['index', 'fx', 'crypto', 'commodity', 'mf', 'macro']).order('symbol');
   final all = [
     for (final r in rows) Tick.fromJson(Map<String, dynamic>.from(r))
   ];
+  var blobs = <String, dynamic>{};
+  var blobUpdated = <String, DateTime>{};
+  try {
+    final bs = await sb.from('market_blobs').select('key,payload,updated_at');
+    for (final b in bs) {
+      blobs[b['key'] as String] = b['payload'];
+      final u = DateTime.tryParse(b['updated_at'] ?? '');
+      if (u != null) blobUpdated[b['key'] as String] = u;
+    }
+  } catch (_) {
+    // Lists are a bonus; the numbers still show.
+  }
   var watch = <Company>[];
+  var followedMf = <int>{};
   final uid = sb.auth.currentUser?.id;
   if (uid != null) {
     try {
       final follows = await sb
           .from('follows')
-          .select('target_id')
+          .select('target_type,target_id')
           .eq('user_id', uid)
-          .eq('target_type', 'company');
-      final ids = [for (final f in follows) int.parse(f['target_id'])];
+          .inFilter('target_type', ['company', 'mf']);
+      final ids = <int>[];
+      for (final f in follows) {
+        final id = int.tryParse('${f['target_id']}');
+        if (id == null) continue;
+        if (f['target_type'] == 'mf') {
+          followedMf.add(id);
+        } else {
+          ids.add(id);
+        }
+      }
       if (ids.isNotEmpty) {
         final cs = await sb
             .from('companies')
@@ -65,7 +108,12 @@ final marketsProvider = FutureProvider.autoDispose<MarketsData>((ref) async {
     }
   }
   mergeTicks(all);
-  return MarketsData(ticks: all, watchlist: watch);
+  return MarketsData(
+      ticks: all,
+      watchlist: watch,
+      followedMf: followedMf,
+      blobs: blobs,
+      blobUpdated: blobUpdated);
 });
 
 /// Spec add-on (2026-08-22): "what is the market doing" next to "what
@@ -106,6 +154,41 @@ class _MarketsScreenState extends ConsumerState<MarketsScreen> {
     super.dispose();
   }
 
+  Future<void> _followMf(int code, bool follow) async {
+    final sb = Supabase.instance.client;
+    final uid = sb.auth.currentUser?.id;
+    if (uid == null) return;
+    final rowKey = {'user_id': uid, 'target_type': 'mf', 'target_id': '$code'};
+    try {
+      if (follow) {
+        await sb.from('follows').upsert(rowKey);
+      } else {
+        await sb.from('follows').delete().match(rowKey);
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not update your funds')));
+      }
+    }
+    ref.invalidate(marketsProvider);
+  }
+
+  Future<void> _addMf() async {
+    final code = await showModalBottomSheet<int>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: surface,
+        builder: (_) => const MfSearchSheet());
+    if (code != null) {
+      await _followMf(code, true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Following — NAV appears within a few minutes')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final data = ref.watch(marketsProvider);
@@ -131,7 +214,7 @@ class _MarketsScreenState extends ConsumerState<MarketsScreen> {
           color: green,
           backgroundColor: surface,
           onRefresh: () => ref.refresh(marketsProvider.future),
-          child: MarketsBody(d),
+          child: MarketsBody(d, onFollowMf: _followMf, onAddMf: _addMf),
         ),
       ),
     );
@@ -140,19 +223,35 @@ class _MarketsScreenState extends ConsumerState<MarketsScreen> {
 
 /// The sections themselves, stateless so a test can feed it [MarketsData].
 class MarketsBody extends StatelessWidget {
-  const MarketsBody(this.data, {super.key});
+  const MarketsBody(this.data, {super.key, this.onFollowMf, this.onAddMf});
   final MarketsData data;
+  final void Function(int code, bool follow)? onFollowMf;
+  final VoidCallback? onAddMf;
 
   @override
   Widget build(BuildContext context) {
     final indices = data.kind('index');
     final watch = data.watchlist;
+    final mf = data.kind('mf')
+      ..sort((a, b) {
+        final fa = data.followedMf.contains(a.meta['scheme_code']) ? 0 : 1;
+        final fb = data.followedMf.contains(b.meta['scheme_code']) ? 0 : 1;
+        return fa != fb ? fa - fb : a.name.compareTo(b.name);
+      });
+    final macro = data.kind('macro');
+    final results = data.list('results_calendar');
+    final deals = data.deals;
+    final insider = data.list('insider_trades');
+    final sectors = [
+      for (final s in data.list('nse_indices'))
+        if (s['group'] == 'SECTORAL INDICES') s
+    ];
     final stale = _stale(data.updatedAt);
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
       children: [
-        if (indices.isEmpty && data.ticks.isEmpty)
+        if (data.ticks.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 48),
             child: Text(
@@ -176,11 +275,19 @@ class MarketsBody extends StatelessWidget {
             ValueListenableBuilder<Map<String, Tick>>(
               valueListenable: ticks,
               builder: (_, m, __) => Column(children: [
-                for (final c in watch)
-                  _CompanyRow(c, m[c.nseSymbol]),
+                for (final c in watch) _CompanyRow(c, m[c.nseSymbol]),
               ]),
             ),
         ]),
+        if (sectors.isNotEmpty)
+          _Section('Sectors', [
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final s in sectors) _SectorTile(s),
+              ]),
+            ),
+          ]),
         if (data.kind('fx').isNotEmpty)
           _Section('Currencies', [
             for (final t in data.kind('fx')) _TickRow(t, spark: true),
@@ -194,13 +301,65 @@ class MarketsBody extends StatelessWidget {
             for (final t in data.kind('commodity'))
               _TickRow(t, spark: t.closes.length > 1),
           ]),
+        if (mf.isNotEmpty || onAddMf != null)
+          _Section('Mutual funds', [
+            for (final t in mf)
+              _MfRow(t, data.followedMf.contains(t.meta['scheme_code']),
+                  onFollowMf),
+          ], action: onAddMf == null
+              ? null
+              : TextButton(
+                  onPressed: onAddMf,
+                  child: Text('+ Add fund',
+                      style: mono.copyWith(fontSize: 12, color: green)))),
+        if (macro.isNotEmpty)
+          _Section('Economy', [
+            for (final t in macro) _MacroRow(t),
+          ]),
+        if (results.isNotEmpty)
+          _Section('Results this fortnight', [
+            _Collapsible([
+              for (final r in results) _LineRow(
+                  lead: r['symbol']?.toString() ?? '',
+                  main: r['company']?.toString() ?? '',
+                  trail: _dmy(r['date']),
+                  sub: r['purpose']?.toString())
+            ]),
+          ], stamp: data.blobUpdated['results_calendar']),
+        if (deals.isNotEmpty)
+          _Section('Bulk & block deals', [
+            _Collapsible([
+              for (final d in deals)
+                _LineRow(
+                    lead: d['symbol']?.toString() ?? '',
+                    main: d['client']?.toString() ?? '',
+                    trail: '${d['side']} ₹${_crore(d['value'])}',
+                    trailColor: d['side'] == 'BUY' ? green : red,
+                    sub:
+                        '${d['type']} · ${fmtNum((d['qty'] as num).toDouble(), decimals: 0)} @ ₹${fmtNum((d['price'] as num).toDouble())} · ${d['date'] ?? ''}')
+            ]),
+          ], stamp: data.blobUpdated['bulk_deals']),
+        if (insider.isNotEmpty)
+          _Section('Insider trades', [
+            _Collapsible([
+              for (final i in insider)
+                _LineRow(
+                    lead: i['symbol']?.toString() ?? '',
+                    main: i['person']?.toString() ?? '',
+                    trail: '${i['side'] ?? ''} ${i['qty'] ?? ''}',
+                    trailColor: '${i['side']}'.toLowerCase().startsWith('b')
+                        ? green
+                        : red,
+                    sub: '${i['category'] ?? ''} · ${i['mode'] ?? ''} · ${i['date'] ?? ''}')
+            ]),
+          ], stamp: data.blobUpdated['insider_trades']),
         const SizedBox(height: 20),
         Text(
             [
               if (data.updatedAt != null)
                 'as of ${_hhmmIst(data.updatedAt!)} IST',
               if (stale) 'stale — pipeline has not refreshed',
-              'Yahoo Finance · CoinGecko · delayed',
+              'Yahoo Finance · CoinGecko · mfapi.in · NSE · delayed',
             ].join(' · '),
             style: mono.copyWith(fontSize: 10, color: stale ? amber : inkDim)),
       ],
@@ -219,22 +378,70 @@ String _hhmmIst(DateTime t) {
   return '${ist.hour.toString().padLeft(2, '0')}:${ist.minute.toString().padLeft(2, '0')}';
 }
 
+String _dmy(Object? iso) {
+  final d = DateTime.tryParse('$iso');
+  if (d == null) return '$iso';
+  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${d.day} ${m[d.month - 1]}';
+}
+
+/// ₹ value -> "24.7 Cr" / "85 L" — deal sizes read in crores here, nowhere else.
+String _crore(Object? v) {
+  final n = (v as num?)?.toDouble() ?? 0;
+  if (n >= 1e7) return '${(n / 1e7).toStringAsFixed(n >= 1e9 ? 0 : 1)} Cr';
+  if (n >= 1e5) return '${(n / 1e5).toStringAsFixed(0)} L';
+  return fmtNum(n, decimals: 0);
+}
+
 class _Section extends StatelessWidget {
-  const _Section(this.title, this.children);
+  const _Section(this.title, this.children, {this.action, this.stamp});
   final String title;
   final List<Widget> children;
+  final Widget? action;
+  final DateTime? stamp;
 
   @override
   Widget build(BuildContext context) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 22),
-          Text(title.toUpperCase(), style: monoLabel),
+          Row(children: [
+            Expanded(child: Text(title.toUpperCase(), style: monoLabel)),
+            if (stamp != null)
+              Text('NSE · ${_hhmmIst(stamp!)}', style: mono.copyWith(fontSize: 10)),
+            if (action != null) action!,
+          ]),
           const SizedBox(height: 6),
           const Divider(height: 1),
           ...children,
         ],
       );
+}
+
+/// Long lists start at 6 rows; "show all N" expands in place.
+class _Collapsible extends StatefulWidget {
+  const _Collapsible(this.rows);
+  final List<Widget> rows;
+
+  @override
+  State<_Collapsible> createState() => _CollapsibleState();
+}
+
+class _CollapsibleState extends State<_Collapsible> {
+  bool _all = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = _all ? widget.rows : widget.rows.take(6).toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      ...rows,
+      if (!_all && widget.rows.length > 6)
+        TextButton(
+            onPressed: () => setState(() => _all = true),
+            child: Text('show all ${widget.rows.length}',
+                style: mono.copyWith(fontSize: 12, color: green))),
+    ]);
+  }
 }
 
 /// One instrument: name (+ label) left, price and % right, optional sparkline.
@@ -265,8 +472,7 @@ class _TickRow extends StatelessWidget {
               ]),
         ),
         if (spark && t.closes.length > 1)
-          SizedBox(
-              width: 64, height: 22, child: Sparkline(t.closes, color)),
+          SizedBox(width: 64, height: 22, child: Sparkline(t.closes, color)),
         const SizedBox(width: 14),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Text(fmtMoney(t.price, t.currency),
@@ -324,4 +530,279 @@ class _CompanyRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A mutual-fund scheme: ★ to follow, NAV and 1-day move, 1-year return.
+class _MfRow extends StatelessWidget {
+  const _MfRow(this.t, this.followed, this.onFollow);
+  final Tick t;
+  final bool followed;
+  final void Function(int code, bool follow)? onFollow;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = t.changePct == null ? inkDim : (t.up ? green : red);
+    final code = t.meta['scheme_code'];
+    final y = (t.meta['ret_1y'] as num?)?.toDouble();
+    final cat = (t.meta['category'] as String?)?.split(' - ').last;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: border))),
+      child: Row(children: [
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          onPressed: onFollow == null || code is! int
+              ? null
+              : () => onFollow!(code, !followed),
+          icon: Icon(followed ? Icons.star_rounded : Icons.star_outline_rounded,
+              color: followed ? amber : inkDim, size: 20),
+          tooltip: followed ? 'Unfollow' : 'Follow',
+        ),
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(t.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: serif.copyWith(fontSize: 14)),
+                Text(
+                    [
+                      if (y != null) '1y ${fmtPct(y, decimals: 1)}',
+                      if (cat != null && cat.isNotEmpty) cat,
+                    ].join(' · '),
+                    style: mono.copyWith(fontSize: 10)),
+              ]),
+        ),
+        const SizedBox(width: 10),
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text('₹${fmtNum(t.price, decimals: 2)}',
+              style: mono.copyWith(fontSize: 13, color: ink)),
+          Text(fmtPct(t.changePct),
+              style: mono.copyWith(fontSize: 11, color: color)),
+        ]),
+      ]),
+    );
+  }
+}
+
+/// A macro series: value in its own units, previous and period underneath.
+class _MacroRow extends StatelessWidget {
+  const _MacroRow(this.t);
+  final Tick t;
+
+  @override
+  Widget build(BuildContext context) {
+    final units = (t.meta['units'] as String?) ?? '';
+    final delta = (t.meta['delta'] as num?)?.toDouble();
+    final period = t.meta['period'] as String?;
+    String val(double v) =>
+        units == '%' ? '${v.toStringAsFixed(2)}%' : fmtNum(v, indian: units == 'INR');
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 11),
+      decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: border))),
+      child: Row(children: [
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(t.name, style: serif.copyWith(fontSize: 15)),
+                Text(
+                    [
+                      if (t.prevClose != null) 'prev ${val(t.prevClose!)}',
+                      if (period != null) period,
+                    ].join(' · '),
+                    style: mono.copyWith(fontSize: 10)),
+              ]),
+        ),
+        if (t.closes.length > 1)
+          SizedBox(
+              width: 64,
+              height: 22,
+              child: Sparkline(t.closes,
+                  delta == null ? inkDim : (delta >= 0 ? green : red))),
+        const SizedBox(width: 14),
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text(val(t.price), style: mono.copyWith(fontSize: 14, color: ink)),
+          if (delta != null)
+            Text('${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(2)}',
+                style: mono.copyWith(
+                    fontSize: 11, color: delta >= 0 ? green : red)),
+        ]),
+      ]),
+    );
+  }
+}
+
+/// Sector heatmap tile: index name without the "NIFTY " prefix, tinted by %.
+class _SectorTile extends StatelessWidget {
+  const _SectorTile(this.s);
+  final Map<String, dynamic> s;
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = (s['pct'] as num?)?.toDouble();
+    final c = pct == null ? inkDim : (pct >= 0 ? green : red);
+    final name = (s['index'] as String? ?? '')
+        .replaceFirst(RegExp(r'^NIFTY\s*'), '')
+        .replaceFirst(' INDEX', '');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+      decoration: BoxDecoration(
+          color: c.withValues(alpha: (pct?.abs() ?? 0).clamp(0.4, 2.5) / 10),
+          border: Border.all(color: c.withValues(alpha: 0.45))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(name, style: mono.copyWith(fontSize: 10, color: ink)),
+        Text(fmtPct(pct), style: mono.copyWith(fontSize: 11, color: c)),
+      ]),
+    );
+  }
+}
+
+/// Lead (symbol) · main text · trailing value, with a sub-line. Used for the
+/// three NSE lists so they all read the same.
+class _LineRow extends StatelessWidget {
+  const _LineRow(
+      {required this.lead,
+      required this.main,
+      required this.trail,
+      this.trailColor,
+      this.sub});
+  final String lead, main, trail;
+  final Color? trailColor;
+  final String? sub;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: border))),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(
+              width: 86,
+              child: Text(lead,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: mono.copyWith(fontSize: 12, color: ink))),
+          Expanded(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(main,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: serif.copyWith(fontSize: 13)),
+                  if (sub != null && sub!.isNotEmpty)
+                    Text(sub!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: mono.copyWith(fontSize: 10)),
+                ]),
+          ),
+          const SizedBox(width: 8),
+          Text(trail,
+              style: mono.copyWith(fontSize: 12, color: trailColor ?? ink)),
+        ]),
+      );
+}
+
+/// Search mfapi.in (keyless, straight from the phone like Yahoo on the stock
+/// page) and pick a scheme to follow. Pops with the scheme code.
+class MfSearchSheet extends StatefulWidget {
+  const MfSearchSheet({super.key});
+
+  @override
+  State<MfSearchSheet> createState() => _MfSearchSheetState();
+}
+
+class _MfSearchSheetState extends State<MfSearchSheet> {
+  final _ctl = TextEditingController();
+  Timer? _debounce;
+  List<Map<String, dynamic>> _hits = const [];
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String q) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () => _search(q));
+  }
+
+  Future<void> _search(String q) async {
+    if (q.trim().length < 3) return setState(() => _hits = const []);
+    setState(() => _busy = true);
+    try {
+      final r = await http
+          .get(Uri.parse('https://api.mfapi.in/mf/search?q=${Uri.encodeQueryComponent(q.trim())}'))
+          .timeout(const Duration(seconds: 10));
+      final all = (jsonDecode(r.body) as List).cast<Map>();
+      // Direct-Growth only: the Regular/IDCW variants of one fund are noise here.
+      final hits = [
+        for (final h in all)
+          if (RegExp(r'direct', caseSensitive: false).hasMatch('${h['schemeName']}') &&
+              RegExp(r'growth', caseSensitive: false).hasMatch('${h['schemeName']}') &&
+              !RegExp(r'idcw|dividend', caseSensitive: false).hasMatch('${h['schemeName']}'))
+            Map<String, dynamic>.from(h)
+      ];
+      if (mounted) setState(() => _hits = hits.take(30).toList());
+    } catch (_) {
+      if (mounted) setState(() => _hits = const []);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('ADD A FUND', style: monoLabel),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ctl,
+            autofocus: true,
+            onChanged: _onChanged,
+            style: serif.copyWith(fontSize: 15),
+            decoration: InputDecoration(
+              hintText: 'Fund name, e.g. Parag Parikh',
+              hintStyle: mono.copyWith(fontSize: 13),
+              suffixIcon: _busy
+                  ? Padding(padding: const EdgeInsets.all(12), child: appSpinner())
+                  : null,
+              enabledBorder: const UnderlineInputBorder(
+                  borderSide: BorderSide(color: border)),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Flexible(
+            child: ListView(shrinkWrap: true, children: [
+              for (final h in _hits)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('${h['schemeName']}',
+                      style: serif.copyWith(fontSize: 13)),
+                  onTap: () => Navigator.of(context).pop(h['schemeCode'] as int),
+                ),
+              if (_hits.isEmpty && _ctl.text.trim().length >= 3 && !_busy)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Text('No Direct-Growth scheme matches.',
+                      style: mono.copyWith(fontSize: 12)),
+                ),
+            ]),
+          ),
+        ]),
+      );
 }

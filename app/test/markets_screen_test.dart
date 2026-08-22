@@ -6,11 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Tick _t(String sym, String kind, String name, double price, double? pct,
-        {String cur = 'INR', List<double> closes = const [], Map? meta}) =>
+        {String cur = 'INR', List<double> closes = const [], Map? meta,
+        double? prev}) =>
     Tick.fromJson({
       'symbol': sym, 'kind': kind, 'name': name, 'price': price,
-      'change_pct': pct, 'currency': cur, 'closes': closes, 'meta': meta,
-      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'prev_close': prev, 'change_pct': pct, 'currency': cur, 'closes': closes,
+      'meta': meta, 'updated_at': DateTime.now().toUtc().toIso8601String(),
     });
 
 final _data = MarketsData(ticks: [
@@ -22,7 +23,51 @@ final _data = MarketsData(ticks: [
       meta: {'derived': true, 'label': 'intl spot × USD/INR, ex-duty'}),
 ], watchlist: const []);
 
-Widget _app(MarketsData d) => MaterialApp(home: Scaffold(body: MarketsBody(d)));
+final _blobs = <String, dynamic>{
+  'results_calendar': [
+    {'symbol': 'TCS', 'company': 'TCS Ltd', 'date': '2026-08-28', 'purpose': 'Financial Results'},
+  ],
+  'bulk_deals': {
+    'as_on': '21-Aug-2026',
+    'deals': [
+      {'type': 'block', 'symbol': 'AMAGI', 'name': 'Amagi', 'side': 'BUY', 'qty': 142857,
+       'price': 560.0, 'value': 80000000, 'client': 'NOTRE DAME', 'date': '21-Aug-2026'},
+    ],
+  },
+  'insider_trades': [
+    {'symbol': 'TCS', 'person': 'A Person', 'side': 'Buy', 'qty': '100', 'category': 'Promoter',
+     'mode': 'Market', 'date': '20-Aug-2026'},
+  ],
+  'nse_indices': [
+    {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46},
+    {'index': 'NIFTY 100', 'group': 'BROAD MARKET INDICES', 'pct': 0.02},
+  ],
+};
+
+final _phase3 = MarketsData(
+  ticks: [
+    ..._data.ticks,
+    _t('MF:122639', 'mf', 'Parag Parikh Flexi Cap Fund', 90.8656, 0.14,
+        meta: {'scheme_code': 122639, 'ret_1y': -1.2, 'category': 'Equity Scheme - Flexi Cap Fund'}),
+    _t('MF:120503', 'mf', 'Axis ELSS Tax Saver Fund', 112.22, -0.02,
+        meta: {'scheme_code': 120503, 'ret_1y': 8.0}),
+    _t('MACRO:FEDFUNDS', 'macro', 'US Fed funds rate', 4.33, null, cur: '',
+        prev: 4.58, closes: [4.58, 4.33],
+        meta: {'units': '%', 'delta': -0.25, 'period': '2026-08-01'}),
+  ],
+  watchlist: const [],
+  followedMf: {120503},
+  blobs: _blobs,
+  blobUpdated: {'bulk_deals': DateTime.now().toUtc()},
+);
+
+Widget _app(MarketsData d, {void Function(int, bool)? onFollow}) => MaterialApp(
+    home: Scaffold(body: MarketsBody(d, onFollowMf: onFollow, onAddMf: () {})));
+
+Future<void> _toEnd(WidgetTester tester) async {
+  await tester.drag(find.byType(ListView).first, const Offset(0, -6000));
+  await tester.pump();
+}
 
 void main() {
   testWidgets('Markets body renders every section with formatted numbers',
@@ -38,18 +83,14 @@ void main() {
     expect(find.text('\$4,624.10'), findsOneWidget);
     expect(find.text('intl spot × USD/INR, ex-duty'), findsOneWidget);
     expect(find.textContaining('Nothing followed yet'), findsOneWidget);
-    // The footer sits below the test viewport; the list is lazy.
-    await tester.drag(find.byType(ListView), const Offset(0, -3000));
-    await tester.pump();
+    await _toEnd(tester); // the footer sits below the test viewport
     expect(find.textContaining('as of'), findsOneWidget);
     expect(find.textContaining('stale'), findsNothing);
   });
 
   testWidgets('watchlist rows show the live % from ticks and tolerate a gap',
       (tester) async {
-    ticks.value = {
-      'TCS': _t('TCS', 'equity', 'TCS', 2302, 0.17),
-    };
+    ticks.value = {'TCS': _t('TCS', 'equity', 'TCS', 2302, 0.17)};
     final d = MarketsData(ticks: _data.ticks, watchlist: [
       Company.fromJson({'id': 1, 'name': 'Tata Consultancy', 'nse_symbol': 'TCS'}),
       Company.fromJson({'id': 2, 'name': 'Infosys', 'nse_symbol': 'INFY'}),
@@ -62,10 +103,55 @@ void main() {
     ticks.value = {};
   });
 
+  testWidgets('phase 3 sections: MF (followed first, star toggles), economy, '
+      'NSE lists, sector tiles', (tester) async {
+    final toggles = <(int, bool)>[];
+    await tester.pumpWidget(_app(_phase3, onFollow: (c, f) => toggles.add((c, f))));
+    // Sectors: only SECTORAL group, "NIFTY " prefix dropped.
+    expect(find.text('SECTORS'), findsOneWidget);
+    expect(find.text('IT'), findsOneWidget);
+    expect(find.text('100'), findsNothing);
+    await tester.scrollUntilVisible(find.text('MUTUAL FUNDS'), 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pump();
+    // Followed scheme (Axis) sorts above the default (Parag) despite the alphabet.
+    final axis = tester.getTopLeft(find.text('Axis ELSS Tax Saver Fund'));
+    final ppfas = tester.getTopLeft(find.text('Parag Parikh Flexi Cap Fund'));
+    expect(axis.dy < ppfas.dy, isTrue);
+    expect(find.byIcon(Icons.star_rounded), findsOneWidget);
+    expect(find.textContaining('1y ▼1.2%'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.star_outline_rounded).first);
+    expect(toggles, [(122639, true)]);
+    expect(find.text('+ Add fund'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('ECONOMY'), 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pump();
+    expect(find.text('4.33%'), findsOneWidget);
+    expect(find.text('-0.25'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('INSIDER TRADES'), 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pump();
+    expect(find.text('RESULTS THIS FORTNIGHT'), findsOneWidget);
+    expect(find.text('28 Aug'), findsOneWidget);
+    expect(find.text('BULK & BLOCK DEALS'), findsOneWidget);
+    expect(find.text('BUY ₹8.0 Cr'), findsOneWidget);
+    expect(find.textContaining('NSE · '), findsWidgets); // blob stamp on deals
+    expect(find.text('A Person'), findsOneWidget);
+  });
+
   testWidgets('empty data explains itself instead of a blank screen',
       (tester) async {
     await tester.pumpWidget(_app(const MarketsData(ticks: [], watchlist: [])));
     expect(find.textContaining('No market data yet'), findsOneWidget);
+  });
+
+  test('companyEventLines picks only this symbol from the blobs', () {
+    final lines = companyEventLines(_blobs, 'TCS');
+    expect(lines.length, 2);
+    expect(lines[0], 'Board meeting 28 Aug — Financial Results');
+    expect(lines[1], startsWith('Insider buy: A Person 100'));
+    expect(companyEventLines(_blobs, 'AMAGI').single, contains('Block BUY 1,42,857 @ ₹560.00'));
+    expect(companyEventLines(const {}, 'TCS'), isEmpty);
   });
 
   test('Markets is the second tab', () {

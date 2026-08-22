@@ -27,6 +27,7 @@ class _StockScreenState extends State<StockScreen> {
   bool _storiesFailed = false;
   bool _following = false;
   bool _togglingFollow = false;
+  List<String> _events = const []; // NSE results/deals/insider lines (market_blobs)
 
   @override
   void initState() {
@@ -98,6 +99,17 @@ class _StockScreenState extends State<StockScreen> {
       // A network blip must not read as "this company has no coverage".
       if (mounted) setState(() => _storiesFailed = true);
     });
+    // Smart-money lines for this symbol from the pipeline's NSE blobs. A miss
+    // just hides the section.
+    sb
+        .from('market_blobs')
+        .select('key,payload')
+        .inFilter('key', ['results_calendar', 'bulk_deals', 'insider_trades'])
+        .then((rows) {
+      if (!mounted) return;
+      final blobs = {for (final r in rows) r['key'] as String: r['payload']};
+      setState(() => _events = companyEventLines(blobs, sym));
+    }).catchError((_) {});
     // Best-effort by design: worst case the star shows unfollowed and the
     // toggle's upsert is a safe no-op re-follow.
     if (uid != null) {
@@ -209,6 +221,18 @@ class _StockScreenState extends State<StockScreen> {
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Center(child: appSpinner()),
             ),
+          if (_events.isNotEmpty) ...[
+            const Divider(height: 40),
+            Text('ON THE TAPE', style: monoLabel),
+            const SizedBox(height: 8),
+            for (final e in _events.take(8))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(e, style: mono.copyWith(fontSize: 12, height: 1.4)),
+              ),
+            Text('NSE · board meetings, bulk/block deals, insider filings',
+                style: mono.copyWith(fontSize: 10)),
+          ],
           const Divider(height: 40),
           Text('RECENT STORIES', style: monoLabel),
           const SizedBox(height: 8),

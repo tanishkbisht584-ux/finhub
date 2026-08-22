@@ -292,3 +292,37 @@ String fmtMoney(double v, String currency) => switch (currency) {
       'USD' => '\$${fmtNum(v, indian: false)}',
       _ => '${fmtNum(v, indian: false)} $currency',
     };
+
+/// One-line "smart money" facts about [symbol] from the pipeline's NSE blobs
+/// (`market_blobs`: results_calendar, bulk_deals, insider_trades). Pure, so
+/// the stock page and its test share it. Empty when nothing is on file.
+List<String> companyEventLines(Map<String, dynamic> blobs, String symbol) {
+  final out = <String>[];
+  for (final r in (blobs['results_calendar'] as List? ?? const [])) {
+    if (r['symbol'] == symbol) {
+      out.add('Board meeting ${_dmy(r['date'])} — ${r['purpose'] ?? 'results'}');
+    }
+  }
+  final deals = (blobs['bulk_deals'] as Map?)?['deals'] as List? ?? const [];
+  for (final d in deals) {
+    if (d['symbol'] == symbol) {
+      out.add('${d['type'] == 'block' ? 'Block' : 'Bulk'} ${d['side']} '
+          '${fmtNum((d['qty'] as num).toDouble(), decimals: 0)} @ ₹${fmtNum((d['price'] as num).toDouble())}'
+          ' · ${d['client'] ?? ''} (${d['date'] ?? ''})');
+    }
+  }
+  for (final i in (blobs['insider_trades'] as List? ?? const [])) {
+    if (i['symbol'] == symbol) {
+      out.add('Insider ${(i['side'] ?? '').toString().toLowerCase()}: '
+          '${i['person'] ?? ''} ${i['qty'] ?? ''} (${i['date'] ?? ''})');
+    }
+  }
+  return out;
+}
+
+String _dmy(Object? iso) {
+  final d = DateTime.tryParse('$iso');
+  if (d == null) return '$iso';
+  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${d.day} ${m[d.month - 1]}';
+}
