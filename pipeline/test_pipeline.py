@@ -895,3 +895,35 @@ def test_auto_approve_ten_minute_backstop(monkeypatch):
     # the backstop: ANY pending story after 10 minutes, no score filter
     assert "impact_score" not in patches[1]
     assert "status=eq.pending" in patches[1]
+
+
+# ---------- admin cockpit: remote config + run log ----------
+
+def test_apply_config_overrides_known_knobs_only():
+    import run
+    saved = run.MAX_ALERTS_PER_DAY
+    try:
+        sw = run.apply_config({"knobs": {"max_alerts_per_day": "3", "bogus": 1},
+                               "switches": {"alerts": False}})
+        assert run.MAX_ALERTS_PER_DAY == 3 and not hasattr(run, "BOGUS")
+        noon = datetime(2026, 8, 22, 6, 30, tzinfo=timezone.utc)  # 12:00 IST
+        assert run.may_push(10, noon, 3) is False   # cap now 3
+        assert run.may_push(10, noon, 2) is True
+        assert sw["alerts"] is False and sw["pipeline"] is True and len(sw) == len(run.SWITCHES)
+    finally:
+        run.MAX_ALERTS_PER_DAY = saved
+
+
+def test_run_logged_honours_pipeline_switch(monkeypatch):
+    import run
+    monkeypatch.setattr(run, "load_env", lambda: None)
+    monkeypatch.setattr(run, "load_config", lambda: {"switches": {"pipeline": False}})
+    monkeypatch.setattr(run, "main", lambda cfg=None: pytest.fail("main ran while paused"))
+    assert run.run_logged() is True
+
+
+def test_run_log_error_lines():
+    import run
+    log = "12 fetched\nFEED FAIL ET: timeout\nTraceback (most recent call last):\ndone: 3 pending"
+    assert [l for l in log.splitlines() if run.ERR_RE.search(l)] == [
+        "FEED FAIL ET: timeout", "Traceback (most recent call last):"]

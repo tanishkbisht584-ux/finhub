@@ -192,3 +192,80 @@ def html_bars(data, color):
 
 def jdump(obj):
     return json.dumps(obj, indent=1, ensure_ascii=False)
+
+
+def sb_try(path, default=None):
+    """GET that returns `default` ([] by default) when the table is missing —
+    pre-migration-010 pages must still render."""
+    try:
+        return sb("GET", path)
+    except requests.RequestException:
+        return [] if default is None else default
+
+
+def knob_default(key):
+    """Code default for a pipeline knob / model env, read off the imported modules."""
+    run, ai = pipeline_mod(), ai_mod()
+    if key == "AI_RPM_PER_LANE":
+        return ai.RPM_PER_LANE
+    if key == "GEMINI_MODELS":
+        return ai.GEMINI_MODELS
+    for _, _, model_env, models in ai.FALLBACKS:
+        if model_env == key:
+            return models
+    return getattr(run, key, "")
+
+
+def knob_editor(keys, state_key):
+    """Override table for pipeline knobs (app_config.pipeline.knobs). Blank
+    override = code default. Keys stored upper-case; run.apply_config reads them."""
+    pc = cfg("pipeline")
+    knobs = {str(k).upper(): v for k, v in (pc.get("knobs") or {}).items()}
+    rows = [{"knob": k, "default": str(knob_default(k)), "override": str(knobs.get(k, ""))}
+            for k in keys]
+    edited = st.data_editor(rows, disabled=["knob", "default"], hide_index=True,
+                            key=state_key, width="stretch")
+    c1, c2, _ = st.columns([1, 1, 4])
+    if c1.button("Save overrides", key=f"{state_key}_save", type="primary"):
+        for r in edited:
+            v = str(r["override"]).strip()
+            if v:
+                knobs[r["knob"]] = v
+            else:
+                knobs.pop(r["knob"], None)
+        cfg_save("pipeline", {**pc, "knobs": knobs})
+        st.rerun()
+    if c2.button("Reset shown", key=f"{state_key}_reset", help="Drop these overrides -> code defaults"):
+        for k in keys:
+            knobs.pop(k, None)
+        cfg_save("pipeline", {**pc, "knobs": knobs})
+        st.rerun()
+    return knobs
+
+
+def effective_knob(key):
+    """Override if set, else code default (what the pipeline is actually using)."""
+    v = {str(k).upper(): v for k, v in (cfg("pipeline").get("knobs") or {}).items()}.get(key)
+    return v if v not in (None, "") else knob_default(key)
+
+
+def run_age(r, field="started_at"):
+    return (datetime.now(timezone.utc)
+            - datetime.fromisoformat(r[field].replace("Z", "+00:00"))).total_seconds()
+
+
+def runs_table(runs):
+    """Compact pipeline_runs table: one line per run."""
+    rows = []
+    for r in runs:
+        dur = (round((datetime.fromisoformat(r["finished_at"].replace("Z", "+00:00"))
+                      - datetime.fromisoformat(r["started_at"].replace("Z", "+00:00"))).total_seconds())
+               if r.get("finished_at") else None)
+        c = r.get("counts") or {}
+        rows.append({"started": ago(r["started_at"]) + " ago",
+                     "ok": "ok" if r.get("ok") else ("..." if r.get("ok") is None else "FAIL"),
+                     "secs": dur, "fetched": c.get("fetched"), "new": c.get("new"),
+                     "processed": c.get("processed"), "flagged": c.get("flagged"),
+                     "alerted": c.get("alerted"), "approved": c.get("approved"),
+                     "errors": len(r.get("errors") or []), "host": r.get("host")})
+    st.dataframe(rows, hide_index=True, width="stretch")

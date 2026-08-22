@@ -1,11 +1,15 @@
 """FinSwipe M1 pipeline: fetch feeds -> normalize -> dedupe -> cluster ->
 Gemini card -> insert 'pending' into Supabase. Idempotent: url_hash re-checked
 every run, so re-processing is a no-op."""
+import contextlib
 import hashlib
 import html
+import io
 import os
 import pathlib
 import re
+import socket
+import sys
 import time
 import traceback
 import uuid
@@ -45,6 +49,46 @@ QUIET_PIERCE_SCORE = 9      # ... unless it's this big ("wake me if the market i
 IST = timezone(timedelta(hours=5, minutes=30))
 FETCH_TIMEOUT = 20
 UA = {"User-Agent": "Mozilla/5.0 (FinSwipe pipeline; +private)"}
+
+# ---------- remote config (admin cockpit) ----------
+# Every constant above (and the few defined further down) can be overridden
+# from the admin's app_config.pipeline row: `knobs` by name, `switches` to
+# pause a stage. The functions read module globals at call time, so rebinding
+# the global IS the mechanism — don't refactor these into default arguments.
+KNOBS = ("MAX_AI_CALLS_PER_RUN", "AI_CONCURRENCY", "AI_PHASE_SECONDS", "DAILY_AI_BUDGET",
+         "PENDING_MAX_MINUTES", "AUTO_APPROVE_MINUTES", "FAST_LANE_SCORE", "BREAKING_MINUTES",
+         "SILENT_SOURCE_DAYS", "REVIVE_AFTER_HOURS", "TRUSTED_SOLO_MINUTES", "TRUSTED_AUTHORITY",
+         "MAX_ALERTS_PER_DAY", "QUIET_START_IST", "QUIET_END_IST", "QUIET_PIERCE_SCORE",
+         "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "VIDEO_BATCH_CAP",
+         "EVENTS_RETENTION_DAYS")
+MODEL_ENVS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL")  # ai.py reads env at call time
+SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "video_match")
+
+
+def load_config():
+    """The admin's pipeline row; {} (= code defaults) when unreachable or absent."""
+    try:
+        rows = sb("GET", "app_config?select=value&key=eq.pipeline")
+        return rows[0]["value"] if rows else {}
+    except Exception as e:  # table missing pre-migration, network, anything
+        print(f"CONFIG READ FAILED ({e}); using defaults")
+        return {}
+
+
+def apply_config(cfg):
+    """Apply knob overrides to this module (and ai's env/throttle); return the
+    switch map with every switch present, defaulting to on. Unknown keys ignored."""
+    for k, v in (cfg.get("knobs") or {}).items():
+        key = str(k).upper()
+        if key in KNOBS:
+            globals()[key] = int(v)
+        elif key in MODEL_ENVS:
+            os.environ[key] = str(v)
+        elif key == "AI_RPM_PER_LANE":
+            import ai
+            ai.RPM_PER_LANE = int(v)
+    switches = cfg.get("switches") or {}
+    return {name: bool(switches.get(name, True)) for name in SWITCHES}
 
 
 def load_env():
@@ -849,7 +893,7 @@ def personal_alert_engine(now=None):
     return sent
 
 
-def alert_engine(authority_by_source):
+def alert_engine(authority_by_source, push=True):
     """Speed path: qualifying stories auto-approve + alert with no human in the loop.
     The 5/day cap limits PUSHES, not publication — a story past the cap is still
     approved so it reaches the feed, it just doesn't buzz anyone's phone.
@@ -876,16 +920,16 @@ def alert_engine(authority_by_source):
                            authority_by_source.get(s["source_name"], 5), age_minutes):
             continue
         patch = {"status": "approved"}
-        if may_push(s["impact_score"], now, sent_today + alerted):
+        if push and may_push(s["impact_score"], now, sent_today + alerted):
             send_fcm(s["hook"] or s["headline"], s["headline"], s["id"],
                      s["impact_score"])
             patch["alerted_at"] = now.isoformat()
             alerted += 1
         else:
-            published += 1  # capped or quiet hours: goes live silently, no push
+            published += 1  # capped, quiet hours or alerts switched off: live, silent
         sb("PATCH", f"stories?id=eq.{s['id']}", json=patch)
     if published:
-        print(f"{published} story(ies) published without a push (cap or quiet hours)")
+        print(f"{published} story(ies) published without a push (cap, quiet hours or switch)")
     return alerted
 
 
@@ -1101,6 +1145,12 @@ def retention_sweep():
         .replace(hour=0, minute=0, second=0, microsecond=0)
     try:
         sb("DELETE", f"events?created_at=lt.{iso(cutoff)}")
+        # run/edge logs: 1 run row per loop iteration (~1900/day) would eat the
+        # free tier in months — keep failures 14 d, healthy runs 48 h, edge 30 d
+        now = datetime.now(timezone.utc)
+        sb("DELETE", f"pipeline_runs?ok=eq.true&started_at=lt.{iso(now - timedelta(hours=48))}")
+        sb("DELETE", f"pipeline_runs?started_at=lt.{iso(now - timedelta(days=14))}")
+        sb("DELETE", f"edge_log?created_at=lt.{iso(now - timedelta(days=30))}")
     except requests.RequestException as e:
         print(f"RETENTION SWEEP FAILED: {e}")  # next run retries; nothing lost
 
@@ -1129,8 +1179,10 @@ def insert_story(row, companies_by_key, card=None):
     return story
 
 
-def main():
+def main(cfg=None):
     load_env()
+    switches = apply_config(load_config() if cfg is None else cfg)
+    on = switches.get
     from ai import (AIError, QuotaExhausted, editor_pass, process_story,
                     usage_report, video_match)  # after env load
 
@@ -1361,14 +1413,16 @@ def main():
     # was re-reading the same 100 rows every 3.2 min for ~20% of the daily call
     # budget. Skipping those costs no coverage: a relevel or a merge can only
     # become available once a new card enters the window.
-    releveled = chief_editor(editor_pass) if processed else 0
-    alerted = alert_engine({s["name"]: s["authority"] for s in sources})
-    personal = personal_alert_engine()
-    videos = match_videos(yt_sources, recent, seen_images, video_match)
+    # Admin switches pause a stage, never the publication path above.
+    releveled = chief_editor(editor_pass) if processed and on("chief_editor") else 0
+    alerted = alert_engine({s["name"]: s["authority"] for s in sources}, push=on("alerts"))
+    personal = personal_alert_engine() if on("personal_alerts") else 0
+    videos = match_videos(yt_sources, recent, seen_images, video_match) if on("video_match") else 0
     healed = retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key)
     disabled = disable_dead_sources()
     revived = revive_sources()
-    approved = auto_approve()
+    # off = strict manual review; the PENDING_MAX_MINUTES backstop is inside too
+    approved = auto_approve() if on("auto_approve") else 0
     retention_sweep()
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
           + (f", {merged} merged into an existing story" if merged else "")
@@ -1380,6 +1434,74 @@ def main():
     if served:  # which lane actually carried the run — silent failover is visible
         print("AI served by: " + ", ".join(f"{m}={n}" for m, n in
                                            sorted(served.items(), key=lambda kv: -kv[1])))
+    return {"fetched": len(items), "new": len(fresh), "to_ai": len(to_process),
+            "dupes": len(dupes), "noise": len(noise), "deferred": skipped,
+            "processed": processed, "dropped": dropped, "flagged": flagged, "merged": merged,
+            "quota_blocked": quota_blocked, "held": held, "releveled": releveled,
+            "alerted": alerted, "personal": personal, "videos": videos, "healed": healed,
+            "disabled": disabled, "revived": revived, "approved": approved,
+            "switched_off": [k for k, v in switches.items() if not v]}
+
+
+# ---------- run log (admin cockpit) ----------
+
+ERR_RE = re.compile(r"FAIL|Traceback|Exception", re.I)
+
+
+class _Tee(io.TextIOBase):
+    """stdout to both the real console (GitHub log) and a buffer (run row)."""
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, s):
+        for stream in self.streams:
+            stream.write(s)
+        return len(s)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
+def run_logged():
+    """One main() wrapped in a pipeline_runs row: started/finished, ok, stage
+    counts, which AI lanes served, the captured stdout. Honours the admin's
+    `pipeline` switch. Logging may fail without failing the run, and vice versa."""
+    load_env()
+    cfg = load_config()
+    if not (cfg.get("switches") or {}).get("pipeline", True):
+        print("pipeline PAUSED by admin switch; nothing fetched")
+        return True
+    run_id = None
+    try:
+        host = os.environ.get("GITHUB_RUN_ID") or socket.gethostname()
+        run_id = sb("POST", "pipeline_runs", json={"host": host},
+                    headers={"Prefer": "return=representation"})[0]["id"]
+    except Exception as e:  # pre-migration or Supabase hiccup: run anyway
+        print(f"RUN LOG INSERT FAILED: {e}")
+    from ai import usage_report
+    before = usage_report()  # cumulative per process; this run = the diff
+    buf = io.StringIO()
+    ok, counts = True, None
+    with contextlib.redirect_stdout(_Tee(sys.__stdout__, buf)):
+        try:
+            counts = main(cfg)
+        except Exception:
+            ok = False
+            traceback.print_exc(file=sys.stdout)
+    if run_id is None:
+        return ok
+    after = usage_report()
+    log = buf.getvalue()[-20000:]
+    try:
+        sb("PATCH", f"pipeline_runs?id=eq.{run_id}", json={
+            "finished_at": datetime.now(timezone.utc).isoformat(), "ok": ok, "counts": counts,
+            "errors": [l for l in log.splitlines() if ERR_RE.search(l)][:50],
+            "ai_usage": {k: n - before.get(k, 0) for k, n in after.items() if n - before.get(k, 0)},
+            "log": log})
+    except Exception as e:
+        print(f"RUN LOG PATCH FAILED: {e}")
+    return ok
 
 
 if __name__ == "__main__":
@@ -1391,12 +1513,12 @@ if __name__ == "__main__":
     # the next one starts; unset means run forever (always-on host).
     deadline = int(os.environ.get("LOOP_MAX_SECONDS", "0"))
     if not loop_seconds:
-        main()
+        sys.exit(0 if run_logged() else 1)
     else:
         started = time.monotonic()
         while True:
             try:
-                main()
+                run_logged()
             except Exception:
                 traceback.print_exc()  # never let one bad run kill the poller
             if deadline and time.monotonic() - started + loop_seconds > deadline:
