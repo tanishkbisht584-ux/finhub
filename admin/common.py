@@ -194,6 +194,21 @@ def jdump(obj):
     return json.dumps(obj, indent=1, ensure_ascii=False)
 
 
+def sb_all(path, page=1000):
+    """GET past PostgREST's silent 1000-row cap (paginate every reader)."""
+    rows, start = [], 0
+    while True:
+        chunk = requests.get(f"{URL}/rest/v1/{path}",
+                             headers=_headers({"Range": f"{start}-{start + page - 1}"}),
+                             timeout=60)
+        chunk.raise_for_status()
+        got = chunk.json() if chunk.text else []
+        rows += got
+        if len(got) < page:
+            return rows
+        start += page
+
+
 def sb_try(path, default=None):
     """GET that returns `default` ([] by default) when the table is missing —
     pre-migration-010 pages must still render."""
