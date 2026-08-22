@@ -217,7 +217,7 @@ def validate(card):
 # as the main lane. Models are overridable per provider via env.
 FALLBACKS = [
     ("GROQ_API_KEY", "https://api.groq.com/openai/v1/chat/completions",
-     "GROQ_MODEL", "llama-3.3-70b-versatile,openai/gpt-oss-120b,qwen/qwen3.6-27b"),
+     "GROQ_MODEL", "openai/gpt-oss-120b,qwen/qwen3.6-27b,openai/gpt-oss-20b"),
     # Deliberately NOT a google/* free model: those route to Google AI Studio's
     # shared pool, i.e. the same upstream our own Gemini key already exhausted.
     ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/chat/completions",

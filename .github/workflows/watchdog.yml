@@ -8,6 +8,9 @@ name: watchdog
 #       outages the zero-approvals check misses — 2026-08-11 a retired Gemini
 #       model flagged 3.4k stories over 12h while approvals still trickled)
 #   feed ranking frozen (app's own query checked)  -> alert
+#   AI starved (last run's log: most cycles deferred on quota) -> alert
+#       (2026-08-22: one key per provider for 9 days; a ~10/h trickle kept
+#       every DB check green while 95% of stories were never scored)
 #   Supabase unreachable                           -> alert (nothing can heal it)
 # Alerts = one open `watchdog` issue at a time; GitHub emails the owner AND
 # an FCM push goes to the 'alerts' topic (the admin's phone). Healthy runs
@@ -76,6 +79,33 @@ jobs:
               needs_you.append("Pipeline is CRASH-LOOPING (3 straight failed runs) — "
                                "restarting won't help. Likely a broken secret, "
                                f"dependency, or commit. Logs: {done[0]['html_url']}")
+
+          # starvation is invisible to every DB check: 2026-08-22 the secrets held
+          # ONE key per provider, 119 of every 120 stories deferred on quota for
+          # 9 days, and a ~10/h trickle kept "approved recently" green throughout.
+          # The run log says it outright, so read the last completed run's log.
+          starved_cycles = "?"
+          try:
+              import io, zipfile
+              import requests as rq  # drops the bearer on the redirect to blob storage; urllib would not
+              # not `done`: after a cancel storm the last 10 runs can all be
+              # cancelled, so ask for the newest success outright
+              last = call(gh + "/actions/workflows/pipeline.yml/runs?status=success&per_page=1",
+                          gh_hdrs)["workflow_runs"][0]
+              z = zipfile.ZipFile(io.BytesIO(
+                  rq.get(last["logs_url"], headers=gh_hdrs, timeout=60).content))
+              cycles = [l for n in z.namelist()
+                        for l in z.read(n).decode("utf8", "replace").splitlines()
+                        if " done: " in l][-30:]
+              n_starved = sum("awaiting quota" in l for l in cycles)
+              starved_cycles = f"{n_starved}/{len(cycles)}"
+              if cycles and n_starved >= len(cycles) / 2:
+                  needs_you.append(
+                      f"AI STARVED: {starved_cycles} recent cycles deferred stories for "
+                      "lack of quota — keys exhausted or the secrets hold a single key "
+                      "(GEMINI_API_KEY / GROQ_API_KEY are comma lists). Feed is a trickle.")
+          except Exception as e:
+              print("starvation check skipped:", e)
 
           now = datetime.now(timezone.utc)
           def age_h(iso):
@@ -161,7 +191,7 @@ jobs:
                   print(f"closed healed watchdog issue #{i['number']}")
               state = healed[0] if healed else (
                   f"healthy: approved {approved_age:.1f}h ago, "
-                  f"feed top {top_age:.1f}h old")
+                  f"feed top {top_age:.1f}h old, ai-starved {starved_cycles}")
               print("self-healed: " + state if healed else state)
               sys.exit(0)
 
