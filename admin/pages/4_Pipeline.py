@@ -20,11 +20,12 @@ HELP = {
     "personal_alerts": "OFF = no per-user (followed company/sector) pushes.",
     "chief_editor": "OFF = no comparative relevel/merge/feature pass (saves 1 AI call per cycle).",
     "video_match": "OFF = no YouTube matching (saves 1 AI call per cycle).",
+    "market": "OFF = no quotes/FX/crypto refresh into `quotes` (market.py). News is unaffected.",
 }
 sw = {s: bool((pc.get("switches") or {}).get(s, True)) for s in run.SWITCHES}
 st.markdown("**SWITCHES** — picked up on the next loop iteration (under 45 s)")
 cols = st.columns(len(run.SWITCHES))
-new = {s: c.toggle(s.replace("_", " "), value=sw[s], help=HELP[s], key=f"sw_{s}")
+new = {s: c.toggle(s.replace("_", " "), value=sw[s], help=HELP.get(s, ""), key=f"sw_{s}")
        for c, s in zip(cols, run.SWITCHES)}
 if new != sw:
     cfg_save("pipeline", {**pc, "switches": new})
