@@ -165,6 +165,13 @@ class Quote {
   Quote.fromChartJson(Map<String, dynamic> j)
       : this._(Map<String, dynamic>.from(j['chart']['result'][0]));
 
+  /// Header-only quote from the pipeline's `quotes` row: no 52-wk range, no
+  /// closes. The stock page paints this first, then swaps in the chart fetch.
+  Quote.seed(this.price, this.prevClose)
+      : high52 = 0,
+        low52 = 0,
+        closes = const [];
+
   Quote._(Map<String, dynamic> r)
       : price = (r['meta']['regularMarketPrice'] as num).toDouble(),
         prevClose = (r['meta']['chartPreviousClose'] as num).toDouble(),
@@ -203,3 +210,85 @@ class DeepRead {
     ]);
   }
 }
+
+/// One row of the pipeline's `quotes` table (pipeline/market.py): an equity,
+/// index, FX pair, crypto, commodity, MF scheme or macro series. Read-only on
+/// the phone. Price and % are what the chips show; `closes` (indices/FX/
+/// commodities/MF only) feeds a sparkline.
+class Tick {
+  final String symbol;
+  final String kind;
+  final String name;
+  final double price;
+  final double? prevClose;
+  final double? changePct;
+  final String currency;
+  final List<double> closes;
+  final DateTime? asOf;
+  final DateTime? updatedAt;
+  final Map<String, dynamic> meta;
+
+  Tick.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] ?? '',
+        kind = j['kind'] ?? '',
+        name = j['name'] ?? '',
+        price = (j['price'] as num?)?.toDouble() ?? 0,
+        prevClose = (j['prev_close'] as num?)?.toDouble(),
+        changePct = (j['change_pct'] as num?)?.toDouble(),
+        currency = j['currency'] ?? 'INR',
+        closes = [
+          for (final c in (j['closes'] as List? ?? const []))
+            if (c != null) (c as num).toDouble()
+        ],
+        asOf = DateTime.tryParse(j['as_of'] ?? ''),
+        updatedAt = DateTime.tryParse(j['updated_at'] ?? ''),
+        meta = Map<String, dynamic>.from(j['meta'] as Map? ?? const {});
+
+  bool get up => (changePct ?? 0) >= 0;
+}
+
+/// Selected columns for any `quotes` read — the whole row is small, but the
+/// 1-month `closes` array is only wanted where a sparkline is drawn.
+const tickCols = 'symbol,kind,name,price,prev_close,change_pct,currency,'
+    'as_of,updated_at,meta';
+const tickColsWithCloses = '$tickCols,closes';
+
+/// "▲1.23%" / "▼0.80%" / '' when unknown. The arrow carries direction so the
+/// number never needs a sign and colour is never the only cue.
+String fmtPct(double? p, {int decimals = 2}) => p == null
+    ? ''
+    : '${p >= 0 ? '▲' : '▼'}${p.abs().toStringAsFixed(decimals)}%';
+
+/// Indian grouping for rupee amounts (1,42,290 · 73,95,017), western for the
+/// rest. Decimals scale with magnitude: 0.6018 · 95.71 · 24,252 · 1,42,290.
+String fmtNum(double v, {bool indian = true, int? decimals}) {
+  final a = v.abs();
+  final d = decimals ?? (a < 1 ? 4 : a >= 10000 ? 0 : 2);
+  final fixed = a.toStringAsFixed(d);
+  final dot = fixed.indexOf('.');
+  final whole = dot < 0 ? fixed : fixed.substring(0, dot);
+  final frac = dot < 0 ? '' : fixed.substring(dot);
+  String grouped;
+  if (indian && whole.length > 3) {
+    final tail = whole.substring(whole.length - 3);
+    var head = whole.substring(0, whole.length - 3);
+    final parts = <String>[];
+    while (head.length > 2) {
+      parts.insert(0, head.substring(head.length - 2));
+      head = head.substring(0, head.length - 2);
+    }
+    if (head.isNotEmpty) parts.insert(0, head);
+    grouped = '${parts.join(',')},$tail';
+  } else {
+    grouped = whole.replaceAllMapped(
+        RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
+  }
+  return '${v < 0 ? '-' : ''}$grouped$frac';
+}
+
+/// ₹ / $ prefix by currency code; anything else shows the code.
+String fmtMoney(double v, String currency) => switch (currency) {
+      'INR' => '₹${fmtNum(v)}',
+      'USD' => '\$${fmtNum(v, indian: false)}',
+      _ => '${fmtNum(v, indian: false)} $currency',
+    };

@@ -14,6 +14,7 @@ import '../models.dart';
 import '../publishers.dart';
 import '../remote_config.dart';
 import '../share_palette.dart';
+import '../ticks.dart';
 import 'saved.dart';
 import 'stock.dart';
 import 'story_detail.dart';
@@ -35,6 +36,11 @@ final pendingStory = ValueNotifier<int?>(null);
 /// Lives here (not main.dart) so the feed's poll can gate on it without a
 /// feed→main import cycle.
 final homeTab = ValueNotifier<int>(0);
+
+/// HomeShell's tabs, in order. Markets sits at [marketsTab]; the feed's poll
+/// and the Markets screen's refresh each gate on their own index.
+const homeTabLabels = ['News', 'Markets', 'Ask', 'Profile'];
+const marketsTab = 1;
 
 /// Put the feed on [id]'s card. False when the story isn't in the loaded list,
 /// so the caller can fall back to the standalone detail screen.
@@ -330,6 +336,13 @@ Future<List<Map<String, dynamic>>> _attachCompanies(
     for (final row in rows) {
       row['companies'] = byStory[row['id']] ?? const [];
     }
+    // Prices ride the shared `ticks` map, not the row: the row is cached
+    // offline and a cached % would replay as live. Not awaited — chips fill
+    // in when it lands.
+    unawaited(loadTicks([
+      for (final l in links.cast<Map<String, dynamic>>())
+        l['companies']['nse_symbol'] as String? ?? ''
+    ]));
   } catch (_) {
     // Chips are a bonus, never a reason to lose the feed.
   }
@@ -1318,19 +1331,38 @@ class _StoryCardState extends ConsumerState<StoryCard>
                                         decoration: BoxDecoration(
                                             color: surface,
                                             border: Border.all(color: border)),
-                                        child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text('\$${c.nseSymbol}',
-                                                  style: mono.copyWith(
-                                                      fontSize: 12,
-                                                      color: ink)),
-                                              const SizedBox(width: 3),
-                                              const Icon(
-                                                  Icons.north_east_rounded,
-                                                  size: 10,
-                                                  color: inkDim),
-                                            ]),
+                                        child: ValueListenableBuilder<
+                                                Map<String, Tick>>(
+                                            valueListenable: ticks,
+                                            builder: (_, m, __) {
+                                              final t = m[c.nseSymbol];
+                                              return Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Text('\$${c.nseSymbol}',
+                                                        style: mono.copyWith(
+                                                            fontSize: 12,
+                                                            color: ink)),
+                                                    if (t?.changePct !=
+                                                        null) ...[
+                                                      const SizedBox(width: 5),
+                                                      Text(
+                                                          fmtPct(t!.changePct,
+                                                              decimals: 1),
+                                                          style: mono.copyWith(
+                                                              fontSize: 11,
+                                                              color: t.up
+                                                                  ? green
+                                                                  : red)),
+                                                    ],
+                                                    const SizedBox(width: 3),
+                                                    const Icon(
+                                                        Icons.north_east_rounded,
+                                                        size: 10,
+                                                        color: inkDim),
+                                                  ]);
+                                            }),
                                       ),
                                     ))
                                 .toList(),

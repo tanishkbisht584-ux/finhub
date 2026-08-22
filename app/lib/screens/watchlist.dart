@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
 import '../theme.dart';
+import '../ticks.dart';
 import 'stock.dart';
 import 'story_detail.dart';
 
@@ -50,6 +53,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
             for (final c in companies)
               Company.fromJson(Map<String, dynamic>.from(c))
           ]);
+      unawaited(loadTicks([for (final c in _companies!) c.nseSymbol]));
     } catch (e) {
       // Companies never loaded — nothing to show behind the error, so the
       // empty-state branch in build() must not be allowed to claim this.
@@ -134,8 +138,21 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
               ActionChip(
                 backgroundColor: surface,
                 side: const BorderSide(color: border),
-                label: Text(c.nseSymbol,
-                    style: mono.copyWith(fontSize: 13, color: ink)),
+                label: ValueListenableBuilder<Map<String, Tick>>(
+                    valueListenable: ticks,
+                    builder: (_, m, __) {
+                      final t = m[c.nseSymbol];
+                      return Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text(c.nseSymbol,
+                            style: mono.copyWith(fontSize: 13, color: ink)),
+                        if (t?.changePct != null) ...[
+                          const SizedBox(width: 6),
+                          Text(fmtPct(t!.changePct, decimals: 1),
+                              style: mono.copyWith(
+                                  fontSize: 11, color: t.up ? green : red)),
+                        ],
+                      ]);
+                    }),
                 // Reload on return: an unfollow on the stock page must not
                 // leave the chip (and its stories) ghosting here.
                 onPressed: () async {

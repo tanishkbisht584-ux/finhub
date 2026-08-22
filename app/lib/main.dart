@@ -11,6 +11,7 @@ import 'remote_config.dart';
 import 'screens/ask.dart';
 import 'screens/feed.dart';
 import 'screens/interests.dart';
+import 'screens/markets.dart';
 import 'screens/profile.dart';
 import 'screens/saved.dart';
 import 'screens/watchlist.dart';
@@ -323,7 +324,12 @@ class _HomeShellState extends State<HomeShell>
         body: Stack(children: [
           IndexedStack(
             index: _tab,
-            children: const [FeedScreen(), AskScreen(), ProfileScreen()],
+            children: const [
+              FeedScreen(),
+              MarketsScreen(),
+              AskScreen(),
+              ProfileScreen()
+            ],
           ),
           IgnorePointer(
             child: FadeTransition(
@@ -347,9 +353,11 @@ class _HomeShellState extends State<HomeShell>
             const Positioned(
                 left: 0, right: 0, top: 0, child: MaintenanceBanner()),
         ]),
-        // Three destinations, not four: Saved is a place you visit occasionally,
-        // not a peer of the feed. It now hangs off the bookmark on a card, where
-        // the thought "I want my saved ones" actually occurs.
+        // News · Markets · Ask · Profile (homeTabLabels). Saved is not a
+        // destination: it is a place you visit occasionally, so it hangs off
+        // the bookmark on a card, where the thought "I want my saved ones"
+        // actually occurs. Markets earned a tab because "what is the market
+        // doing" is asked as often as "what happened".
         bottomNavigationBar: NavigationBar(
           selectedIndex: _tab,
           onDestinationSelected: (i) => homeTab.value = i,
@@ -365,6 +373,11 @@ class _HomeShellState extends State<HomeShell>
                       _tab == 0 ? Icons.newspaper : Icons.newspaper_outlined),
                 ),
                 label: 'News'),
+            NavigationDestination(
+                icon: Icon(_tab == marketsTab
+                    ? Icons.show_chart
+                    : Icons.show_chart_outlined),
+                label: 'Markets'),
             const NavigationDestination(icon: Icon(Icons.search), label: 'Ask'),
             NavigationDestination(icon: const _Avatar(), label: 'Profile'),
           ],

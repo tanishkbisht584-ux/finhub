@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
 import '../theme.dart';
+import '../ticks.dart';
 import 'story_detail.dart';
 
 /// Spec §8 screen 4: delayed price + light line chart + 52-wk range + related
@@ -39,6 +41,21 @@ class _StockScreenState extends State<StockScreen> {
       _quoteFailed = false;
       _storiesFailed = false;
     });
+    // The pipeline's cached quote paints the header instantly (and survives a
+    // Yahoo failure); the chart fetch below replaces it with the fuller Quote.
+    final sym = widget.company.nseSymbol;
+    void seed() {
+      final t = ticks.value[sym];
+      if (t != null && _quote == null && mounted) {
+        setState(() => _quote = Quote.seed(t.price, t.prevClose ?? t.price));
+      }
+    }
+
+    if (ticks.value[sym] != null) {
+      seed();
+    } else {
+      unawaited(loadTicks([sym]).then((_) => seed()));
+    }
     // Three independent fetches; each failure degrades its own section only.
     http
         .get(
@@ -175,9 +192,10 @@ class _StockScreenState extends State<StockScreen> {
             const SizedBox(height: 16),
             SizedBox(height: 64, child: Sparkline(q.closes, up ? green : red)),
             const SizedBox(height: 10),
-            Text(
-                '52-wk  ₹${q.low52.toStringAsFixed(0)} – ₹${q.high52.toStringAsFixed(0)}',
-                style: mono.copyWith(fontSize: 12)),
+            if (q.high52 > 0)
+              Text(
+                  '52-wk  ₹${q.low52.toStringAsFixed(0)} – ₹${q.high52.toStringAsFixed(0)}',
+                  style: mono.copyWith(fontSize: 12)),
             Text('Delayed price · Yahoo Finance',
                 style: mono.copyWith(fontSize: 10)),
           ] else if (_quoteFailed)
