@@ -24,6 +24,11 @@ CASES = [
     ("What does the latest inflation data mean for markets?", False),
     ("What are FIIs doing in Indian markets right now?", False),
     ("How is the rupee doing against the dollar?", False),
+    # Live-quote grounding (markets upgrade 2026-08-22): answered from the
+    # `quotes` table, cited like any source — never a refusal.
+    ("What is the Nifty at right now?", False),
+    ("How much is gold per 10 grams today?", False),
+    ("What is the USD INR rate today?", False),
     ("What happened in US markets overnight?", False),
     ("Any major corporate results announced recently?", False),
     # Concept questions (explainer lane): a full sectioned answer, never a

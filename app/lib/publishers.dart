@@ -50,3 +50,15 @@ const publisherOf = <String, String>{
 /// The newsroom behind [feedName]. Anything unlisted is its own publisher —
 /// a new source is a new outlet until someone says otherwise.
 String publisher(String feedName) => publisherOf[feedName] ?? feedName;
+
+/// Outlet favicon via Google's s2 service, keyed on the article's host. Null
+/// when there is no usable host — Google-News-proxied links all live on
+/// news.google.com and would show Google's icon for every outlet, so those
+/// (and anything unparseable) fall back to the letter monogram.
+String? faviconUrl(String articleUrl) {
+  final host = Uri.tryParse(articleUrl)?.host ?? '';
+  if (host.isEmpty || host.endsWith('news.google.com') || host.endsWith('google.com')) {
+    return null;
+  }
+  return 'https://www.google.com/s2/favicons?domain=$host&sz=64';
+}

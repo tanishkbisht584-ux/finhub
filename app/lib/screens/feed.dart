@@ -1465,19 +1465,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
       InkWell(
         onTap: () => openExternal(context, url),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            width: 32,
-            height: 32,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: dir.withValues(alpha: 0.14),
-              border: Border.all(color: dir.withValues(alpha: 0.5)),
-            ),
-            child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
-                style: serif.copyWith(
-                    fontSize: 15, fontWeight: FontWeight.w700, color: dir)),
-          ),
+          // The outlet's favicon when the link has a real host; the letter
+          // monogram otherwise (Google-News proxies, dead icons, offline).
+          OutletMark(name: name, url: url, color: dir),
           const SizedBox(width: 9),
           Flexible(
             child: Column(
@@ -1558,9 +1548,17 @@ class _StoryCardState extends ConsumerState<StoryCard>
                   leading: Text(i == 0 ? 'FIRST' : '${i + 1}',
                       style: mono.copyWith(
                           fontSize: 10, color: i == 0 ? green : inkDim)),
-                  title: Text(o.name,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  title: Row(children: [
+                    OutletMark(name: o.name, url: o.url, color: inkDim, size: 18),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(o.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600)),
+                    ),
+                  ]),
                   subtitle: o.publishedAt == null
                       ? null
                       : Text(_when(o.publishedAt!),
@@ -1641,6 +1639,49 @@ final shareCapture = ValueNotifier<bool>(false);
 ///  - compact: image exists but is dead or a share capture is in flight —
 ///    just the IMPACT row, so the PNG keeps the ledger line but never the
 ///    hotlinked photo, and the hook below the hero still shows exactly once.
+/// An outlet's mark: its favicon (Google s2, keyed on the article host) in a
+/// tinted ring, or the first-letter monogram when there is no real host or
+/// the icon fails to load. One widget for the card credit and the outlet sheet.
+class OutletMark extends StatelessWidget {
+  const OutletMark(
+      {super.key,
+      required this.name,
+      required this.url,
+      required this.color,
+      this.size = 32});
+  final String name;
+  final String url;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = faviconUrl(url);
+    Widget monogram() => Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
+        style: serif.copyWith(
+            fontSize: size * 0.47, fontWeight: FontWeight.w700, color: color));
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color.withValues(alpha: 0.14),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: icon == null
+          ? monogram()
+          : Image.network(icon,
+              key: const ValueKey('outlet-favicon'), // tests count hero images by type
+              width: size * 0.6,
+              height: size * 0.6,
+              cacheWidth: 64,
+              errorBuilder: (_, __, ___) => monogram()),
+    );
+  }
+}
+
 class _CardHero extends StatefulWidget {
   const _CardHero({required this.story, this.interactive = false});
   final Story story;

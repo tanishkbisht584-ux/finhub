@@ -109,6 +109,10 @@ void _withMockedImageTransport() {
   debugNetworkImageHttpClientProvider = () => _FakeImageHttpClient();
 }
 
+/// Hero images only: the outlet credit's favicon is an Image too (OutletMark).
+final heroImage = find.byWidgetPredicate(
+    (w) => w is Image && w.key != const ValueKey('outlet-favicon'));
+
 void main() {
   test('Story parses image_url and video_url', () {
     final s = _s({'image_url': 'https://cdn.et.com/a.jpg',
@@ -124,7 +128,7 @@ void main() {
     tester.view.devicePixelRatio = 3.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(_app(_s(const {})));
-    expect(find.byType(Image), findsNothing);
+    expect(heroImage, findsNothing);
     expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
     // The hook takes the photo's slot — shown once, in the hero.
     expect(find.text('RBI stands still'), findsOneWidget);
@@ -157,7 +161,7 @@ void main() {
     })));
     await tester.pumpAndSettle();
 
-    expect(find.byType(Image), findsOneWidget);
+    expect(heroImage, findsOneWidget);
     expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
     expect(
         find.ancestor(
@@ -178,7 +182,7 @@ void main() {
     // failure) -> strip collapses and _dead latches true.
     await tester.pumpWidget(_app(_s({'image_url': 'https://x.invalid/a.jpg'})));
     await tester.pumpAndSettle();
-    expect(find.byType(Image), findsNothing);
+    expect(heroImage, findsNothing);
 
     // Same widget position, no keys -> Flutter reuses the State, exactly
     // like PageView.builder swiping to the next card. A good image_url on
@@ -186,7 +190,7 @@ void main() {
     _withMockedImageTransport();
     await tester.pumpWidget(_app(_s({'image_url': 'https://cdn.et.com/b.jpg'})));
     await tester.pumpAndSettle();
-    expect(find.byType(Image), findsOneWidget);
+    expect(heroImage, findsOneWidget);
     debugNetworkImageHttpClientProvider = null;
   });
 }

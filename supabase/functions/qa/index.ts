@@ -273,6 +273,75 @@ async function tier1(question: string, terms: string[] = []): Promise<Source[]> 
   }));
 }
 
+// Words the planner emits for almost any market question; matching them against
+// `quotes.name` would drag in every row. Instrument words (nifty, tcs, gold,
+// bitcoin, rupee, fed) are what we want.
+const QUOTE_STOP = new Set([
+  "market", "markets", "stock", "stocks", "india", "indian", "today", "price",
+  "prices", "share", "shares", "news", "latest", "move", "moved", "why", "what",
+  "how", "much", "now", "right", "current", "level", "value",
+]);
+
+const QUOTE_ALIAS: Record<string, string> = {
+  sensex: "^BSESN", nifty: "^NSEI", banknifty: "^NSEBANK", rupee: "USDINR=X",
+  dollar: "USDINR=X", usdinr: "USDINR=X", gold: "GOLD_INR_10G", silver: "SI=F",
+  crude: "CL=F", oil: "CL=F", btc: "bitcoin", eth: "ethereum", sol: "solana",
+  fed: "MACRO:FEDFUNDS", treasury: "MACRO:DGS10",
+};
+
+function quoteUrl(q: Record<string, unknown>): string {
+  const sym = String(q.symbol);
+  if (q.kind === "crypto") return `https://www.coingecko.com/en/coins/${sym}`;
+  if (q.kind === "mf") return `https://api.mfapi.in/mf/${sym.slice(3)}`;
+  if (q.kind === "macro") return `https://fred.stlouisfed.org/series/${sym.slice(6)}`;
+  if (sym === "GOLD_INR_10G") return "https://finance.yahoo.com/quote/GC=F";
+  return `https://finance.yahoo.com/quote/${encodeURIComponent(q.kind === "equity" ? sym + ".NS" : sym)}`;
+}
+
+/** Live numbers from the pipeline's `quotes` table (market.py) as sources the
+ *  model can cite — "what is the Nifty at?" gets the real level, not a
+ *  refusal or a two-day-old headline. One DB query, no AI call; the 15-minute
+ *  qa_cache bounds staleness. Empty when nothing matches. */
+async function liveQuotes(terms: string[]): Promise<Source[]> {
+  const words = terms.filter((t) => t.length >= 3 && !QUOTE_STOP.has(t));
+  if (!words.length) return [];
+  const syms = new Set(words.map((w) => QUOTE_ALIAS[w]).filter(Boolean));
+  const ors = [
+    ...words.map((w) => `symbol.ilike.${w}`),
+    ...words.map((w) => `name.ilike.*${w}*`),
+    ...[...syms].map((s) => `symbol.eq.${s}`),
+  ];
+  try {
+    const { data } = await sb.from("quotes")
+      .select("symbol,kind,name,price,prev_close,change_pct,currency,as_of,meta")
+      .or(ors.join(","))
+      .limit(5);
+    return (data ?? []).map((q: Record<string, unknown>) => {
+      const meta = (q.meta ?? {}) as Record<string, unknown>;
+      const units = String(meta.units ?? q.currency ?? "");
+      const price = Number(q.price).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+      const pct = q.change_pct == null ? "" :
+        ` (${Number(q.change_pct) >= 0 ? "▲" : "▼"}${Math.abs(Number(q.change_pct)).toFixed(2)}% on the day)`;
+      const asOf = q.as_of ? new Date(String(q.as_of)).toLocaleString("en-IN",
+        { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+      const src = q.kind === "crypto" ? "CoinGecko" : q.kind === "mf" ? "mfapi.in (AMFI NAV)" :
+        q.kind === "macro" ? "FRED" : "Yahoo Finance (delayed)";
+      const label = meta.label ? ` — ${meta.label}` : "";
+      const period = meta.period ? ` (period ${meta.period})` : "";
+      return {
+        title: `Live: ${q.name} ${price} ${units}${pct}`,
+        body: `${q.name}: ${price} ${units}${pct}${label}${period}` +
+          (q.prev_close != null ? `; previous ${Number(q.prev_close).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "") +
+          (asOf ? `. As of ${asOf} IST.` : ".") + ` Source: ${src}.`,
+        source_name: src,
+        url: quoteUrl(q),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 async function tier2(question: string): Promise<Source[]> {
   const key = Deno.env.get("TAVILY_API_KEY");
   if (!key) return [];
@@ -352,8 +421,13 @@ async function answer(question: string) {
     if (out) return out; // null -> explainer declined; the news lanes still get a go
   }
 
+  // Live quotes ride along with whichever tier answers: a price question gets
+  // the number first, a news question gets the number as context. They are
+  // never enough on their own to skip the sourced-answer contract — the model
+  // still cites [n], and a quote-only answer is still an answer from sources.
+  const live = await liveQuotes(terms);
   for (const tier of [1, 2] as const) {
-    const sources = tier === 1 ? await tier1(question, terms) : await tier2(question);
+    const sources = [...live, ...(tier === 1 ? await tier1(question, terms) : await tier2(question))];
     if (!sources.length) continue;
     const raw = await chat(prompt(question, sources), "smart");
     if (raw === null) return { error: 503 as const };
