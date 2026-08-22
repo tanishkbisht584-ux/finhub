@@ -1,17 +1,20 @@
-"""Market data layer (2026-08-22): indices, equities, FX, commodities, crypto
-(and, from phase 3, MF NAVs, macro series and NSE smart-money lists) into the
-`quotes` / `market_blobs` tables, so every phone reads one cached row instead
-of hitting Yahoo itself.
+"""Market data layer (2026-08-22): indices, equities, FX, commodities, crypto,
+MF NAVs, macro series and NSE smart-money lists into the `quotes` /
+`market_blobs` tables, so every phone reads one cached row instead of
+hitting Yahoo itself.
 
-Free and keyless: Yahoo's spark endpoint (20 symbols a call, verified from a
-GitHub runner 2026-08-22), CoinGecko, mfapi.in, NSE's JSON. Called once per
-pipeline loop from run.main(); each group gates its own cadence in memory —
-the process is resident ~5.5 h, a restart just refetches once. No import of
-run.py (it imports us): the PostgREST helper `sb` is passed in.
+Free and keyless where it can be: Yahoo's spark endpoint (20 symbols a call,
+verified from a GitHub runner 2026-08-22), CoinGecko, mfapi.in, NSE's JSON;
+FRED needs a free key. Called once per pipeline loop from run.main(); each
+group gates its own cadence in memory — the process is resident ~5.5 h, a
+restart just refetches once. No import of run.py (it imports us): the
+PostgREST helper `sb` is passed in.
 
 ponytail: Yahoo spark is the single equity source. Trigger to add Twelve Data
 (800/day, keyed): runner 403/429 on >5% of spark calls for a day.
 """
+import os
+import re
 import time
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
@@ -35,6 +38,19 @@ FX = {"USDINR=X": "USD/INR", "EURINR=X": "EUR/INR", "GBPINR=X": "GBP/INR", "JPYI
 COMMODITIES = {"GC=F": "Gold (USD/oz)", "SI=F": "Silver (USD/oz)", "CL=F": "Crude WTI (USD/bbl)"}
 CRYPTO = {"bitcoin": "Bitcoin", "ethereum": "Ethereum", "solana": "Solana"}
 
+# Direct-Growth scheme codes verified against mfapi.in/mf/search on 2026-08-22.
+# Names come from the API (shortened); these are the board everyone sees,
+# followed schemes are added on top.
+DEFAULT_MF = (120716, 119063, 143341, 122639, 118955, 118825, 120586, 125497,
+              118778, 120828, 118968, 119788, 120503, 135781, 119835)
+
+# FRED series (free key). India coverage on FRED is thin; 3-4 series is the
+# honest set. Any id that 400s is skipped, not faked.
+MACRO_SERIES = {"FEDFUNDS": ("US Fed funds rate", "%"),
+                "DGS10": ("US 10Y Treasury yield", "%"),
+                "INDCPIALLMINMEI": ("India CPI (OECD, 2015=100)", "index"),
+                "DEXINUS": ("USD/INR (Fed H.10)", "INR")}
+
 KINDS = {"equity", "index", "fx", "crypto", "commodity", "mf", "macro"}  # mirrors 011 CHECK
 
 Parsed = namedtuple("Parsed", "price prev change_pct as_of closes")
@@ -45,7 +61,7 @@ Parsed = namedtuple("Parsed", "price prev change_pct as_of closes")
 _last_run = {}  # group -> utc datetime of the last attempt (success or not)
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
-INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "macro": 24 * 60}
+INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "macro": 24 * 60, "mf_new": 5}
 
 
 def market_hours(now):
@@ -133,7 +149,7 @@ def upsert(sb, rows, table="quotes", key="symbol"):
     return len(rows)
 
 
-# ---------- groups ----------
+# ---------- phase 1 groups ----------
 
 def refresh_indices(sb, now):
     data = fetch_spark(list(INDICES), rng="1mo")  # ~22 closes for the sparkline
@@ -207,8 +223,245 @@ def refresh_crypto(sb, now):
     return upsert(sb, rows)
 
 
+# ---------- phase 3: mutual funds (mfapi.in, keyless) ----------
+
+def short_mf_name(name):
+    """'Parag Parikh Flexi Cap Fund - Direct Plan - Growth' -> 'Parag Parikh Flexi Cap Fund'."""
+    return re.sub(r"\s*-\s*Direct.*$", "", name or "", flags=re.I).strip()
+
+
+def parse_mf(j):
+    """mfapi /mf/{code}: data newest-first [{date:'21-08-2026', nav:'112.22'}].
+    -> (Parsed with 30 NAV closes, meta with 1m/1y returns) or None."""
+    navs = []
+    for d in (j.get("data") or [])[:400]:
+        try:
+            navs.append((datetime.strptime(d["date"], "%d-%m-%Y").replace(tzinfo=IST), float(d["nav"])))
+        except (KeyError, ValueError, TypeError):
+            continue
+    if not navs:
+        return None
+    navs.reverse()  # oldest first
+    closes = [v for _, v in navs[-30:]]
+    price = closes[-1]
+    prev = closes[-2] if len(closes) > 1 else None
+    pct = round((price - prev) / prev * 100, 2) if prev else None
+
+    def ret(trading_days):
+        if len(navs) > trading_days:
+            return round((price / navs[-1 - trading_days][1] - 1) * 100, 1)
+        return None
+
+    m = j.get("meta") or {}
+    meta = {"fund_house": m.get("fund_house"), "category": m.get("scheme_category"),
+            "ret_1m": ret(21), "ret_1y": ret(250)}
+    return Parsed(price, prev, pct, navs[-1][0].isoformat(), closes), meta
+
+
+def followed_mf(sb):
+    return [int(f["target_id"]) for f in sb("GET", "follows?select=target_id&target_type=eq.mf")
+            if str(f["target_id"]).isdigit()]
+
+
+def refresh_mf(sb, now):
+    """Daily, per NAV slot: the default board plus every followed scheme."""
+    codes = list(DEFAULT_MF)
+    codes += [c for c in followed_mf(sb) if c not in codes]
+    return fetch_mf_rows(sb, codes, now)
+
+
+def refresh_mf_new(sb, now):
+    """Every 5 min: followed schemes with no quote row yet (a follow made since
+    the daily pass), so a fresh follow never stares at a blank until tomorrow."""
+    have = {r["symbol"] for r in sb("GET", "quotes?select=symbol&kind=eq.mf")}
+    codes = [c for c in followed_mf(sb) if f"MF:{c}" not in have]
+    return fetch_mf_rows(sb, codes, now) if codes else 0
+
+
+def fetch_mf_rows(sb, codes, now):
+    rows = []
+    for code in codes:
+        try:
+            r = requests.get(f"https://api.mfapi.in/mf/{code}", headers=BROWSER_UA, timeout=TIMEOUT)
+            r.raise_for_status()
+            j = r.json()
+            parsed = parse_mf(j)
+        except Exception as e:
+            print(f"MARKET mf {code}: {e}")
+            continue
+        if not parsed:
+            continue
+        p, meta = parsed
+        name = short_mf_name((j.get("meta") or {}).get("scheme_name")) or str(code)
+        rows.append(row(f"MF:{code}", "mf", name, p, now, closes=True,
+                        meta={**meta, "scheme_code": code}))
+        time.sleep(0.2)
+    return upsert(sb, rows)
+
+
+# ---------- phase 3: macro (FRED, free key) ----------
+
+def parse_fred(observations):
+    """sort_order=desc observations; '.' is FRED's missing value. Rates move in
+    points, not %, so change_pct is left empty and the delta goes in meta."""
+    vals = []
+    for o in observations or []:
+        v = o.get("value")
+        if v in (None, ".", ""):
+            continue
+        try:
+            vals.append((o.get("date"), float(v)))
+        except (TypeError, ValueError):
+            continue
+    if not vals:
+        return None
+    vals.reverse()
+    closes = [v for _, v in vals]
+    price = closes[-1]
+    prev = closes[-2] if len(closes) > 1 else None
+    p = Parsed(price, prev, None, f"{vals[-1][0]}T00:00:00+00:00", closes)
+    return p, {"period": vals[-1][0], "delta": round(price - prev, 2) if prev is not None else None}
+
+
+def refresh_macro(sb, now):
+    key = os.environ.get("FRED_API_KEY", "").split(",")[0].strip()
+    if not key:
+        return 0  # optional: no key, no Economy section, nothing else changes
+    rows = []
+    for sid, (name, units) in MACRO_SERIES.items():
+        try:
+            r = requests.get("https://api.stlouisfed.org/fred/series/observations",
+                             params={"series_id": sid, "api_key": key, "file_type": "json",
+                                     "sort_order": "desc", "limit": 24},
+                             headers=BROWSER_UA, timeout=TIMEOUT)
+            r.raise_for_status()
+            parsed = parse_fred(r.json().get("observations"))
+        except Exception as e:
+            print(f"MARKET macro {sid}: {e}")
+            continue
+        if not parsed:
+            continue
+        p, meta = parsed
+        rows.append(row(f"MACRO:{sid}", "macro", name, p, now, currency="", closes=True,
+                        meta={**meta, "units": units, "series": sid}))
+    return upsert(sb, rows)
+
+
+# ---------- phase 3: NSE smart-money lists -> market_blobs (keyless) ----------
+
+NSE_API = "https://www.nseindia.com/api/"
+RESULTS_RE = re.compile(r"result|financial", re.I)
+INSIDER_KEYS = {"symbol": "symbol", "company": "company", "acqName": "person",
+                "personCategory": "category", "secType": "security", "secAcq": "qty",
+                "secVal": "value", "tdpTransactionType": "side", "acqMode": "mode",
+                "date": "date", "intimDt": "intimated"}
+
+
+def nse_session():
+    s = requests.Session()
+    s.headers.update({**BROWSER_UA, "Referer": "https://www.nseindia.com/"})
+    try:  # cookie warm-up; a 403 here is fine (verified from a runner 2026-08-22)
+        s.get("https://www.nseindia.com/", timeout=8)
+    except requests.RequestException:
+        pass
+    return s
+
+
+def parse_nse_date(s):
+    try:
+        return datetime.strptime(s or "", "%d-%b-%Y").date()
+    except ValueError:
+        return None
+
+
+def results_calendar(events, meetings, known, now, days=14):
+    """Board meetings in the next `days` whose purpose is results, for symbols
+    we know, from both NSE lists (they overlap but not fully), deduped."""
+    today = now.astimezone(IST).date()
+    end = today + timedelta(days=days)
+    out = {}
+    for e in events or []:
+        sym, d = e.get("symbol"), parse_nse_date(e.get("date"))
+        if sym in known and d and today <= d <= end and RESULTS_RE.search(e.get("purpose") or ""):
+            out.setdefault((sym, d), {"symbol": sym, "company": e.get("company"),
+                                      "date": d.isoformat(), "purpose": e.get("purpose"),
+                                      "desc": e.get("bm_desc")})
+    for m in meetings or []:
+        sym, d = m.get("bm_symbol"), parse_nse_date(m.get("bm_date"))
+        if sym in known and d and today <= d <= end and RESULTS_RE.search(m.get("bm_purpose") or ""):
+            out.setdefault((sym, d), {"symbol": sym, "company": m.get("sm_name"),
+                                      "date": d.isoformat(), "purpose": m.get("bm_purpose"),
+                                      "desc": m.get("bm_desc")})
+    return sorted(out.values(), key=lambda r: (r["date"], r["symbol"]))[:300]
+
+
+def shape_deals(j, cap=100):
+    deals = []
+    for kind, key in (("bulk", "BULK_DEALS_DATA"), ("block", "BLOCK_DEALS_DATA")):
+        for d in j.get(key) or []:
+            try:
+                qty, price = int(float(d.get("qty") or 0)), float(d.get("watp") or 0)
+            except (TypeError, ValueError):
+                continue
+            deals.append({"type": kind, "symbol": d.get("symbol"), "name": d.get("name"),
+                          "side": (d.get("buySell") or "").upper(), "qty": qty, "price": price,
+                          "value": round(qty * price), "client": d.get("clientName"),
+                          "date": d.get("date")})
+    deals.sort(key=lambda x: -x["value"])
+    return {"as_on": j.get("as_on_date"), "deals": deals[:cap]}
+
+
+def shape_insider(j, known, cap=200):
+    data = j.get("data") if isinstance(j, dict) else j
+    return [{v: d.get(k) for k, v in INSIDER_KEYS.items()}
+            for d in data or [] if d.get("symbol") in known][:cap]
+
+
+def shape_indices(j, keep=("BROAD MARKET INDICES", "SECTORAL INDICES")):
+    return [{"index": r.get("index"), "group": r.get("key"), "last": r.get("last"),
+             "pct": r.get("percentChange"), "pe": r.get("pe"), "advances": r.get("advances"),
+             "declines": r.get("declines"), "year_high": r.get("yearHigh"),
+             "year_low": r.get("yearLow"), "pct_30d": r.get("perChange30d"),
+             "pct_1y": r.get("perChange365d")}
+            for r in j.get("data") or [] if r.get("key") in keep]
+
+
+def refresh_nse_blobs(sb, now, session=None):
+    known = {c["nse_symbol"] for c in sb("GET", "companies?select=nse_symbol") if c.get("nse_symbol")}
+    s = session or nse_session()
+
+    def get(path, **params):
+        r = s.get(NSE_API + path, params=params, timeout=25)
+        r.raise_for_status()
+        if "json" not in r.headers.get("content-type", ""):
+            raise RuntimeError(f"non-JSON {r.status_code}")
+        return r.json()
+
+    ist = now.astimezone(IST)
+    jobs = {
+        "results_calendar": lambda: results_calendar(
+            get("event-calendar", index="equities"),
+            get("corporate-board-meetings", index="equities"), known, now),
+        "bulk_deals": lambda: shape_deals(get("snapshot-capital-market-largedeal")),
+        "insider_trades": lambda: shape_insider(
+            get("corporates-pit", index="equities",
+                from_date=(ist - timedelta(days=7)).strftime("%d-%m-%Y"),
+                to_date=ist.strftime("%d-%m-%Y")), known),
+        "nse_indices": lambda: shape_indices(get("allIndices")),
+    }
+    rows = []
+    for key, fn in jobs.items():
+        try:
+            rows.append({"key": key, "payload": fn(), "updated_at": now.isoformat()})
+        except Exception as e:  # the old blob stays; the app shows its age
+            print(f"MARKET NSE {key}: {e}")
+    return upsert(sb, rows, table="market_blobs", key="key")
+
+
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
-          ("fxcom", refresh_fxcom), ("crypto", refresh_crypto))
+          ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
+          ("mf", refresh_mf), ("mf_new", refresh_mf_new), ("macro", refresh_macro),
+          ("nse", refresh_nse_blobs))
 
 
 def refresh(sb, now=None):

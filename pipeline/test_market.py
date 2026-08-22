@@ -93,6 +93,8 @@ def test_equity_cadence_is_15_min_in_market_hours_else_60():
     assert market.interval_minutes("equity", ist(2026, 8, 21, 15, 46)) == 60
     assert market.interval_minutes("equity", ist(2026, 8, 22, 10, 0)) == 60   # Saturday
     assert market.interval_minutes("fxcom", ist(2026, 8, 22, 10, 0)) == 15
+    assert market.interval_minutes("nse", ist(2026, 8, 22, 10, 0)) == 60
+    assert market.interval_minutes("macro", ist(2026, 8, 22, 10, 0)) == 1440
 
 
 def test_due_runs_once_per_interval(monkeypatch):
@@ -157,7 +159,7 @@ def test_upsert_chunks_and_sets_updated_at(monkeypatch):
 
 
 def test_kinds_match_the_migration_check():
-    sql = pathlib.Path(__file__).with_name("migrations").joinpath("011_market_upgrade.sql").read_text()
+    sql = pathlib.Path(__file__).with_name("migrations").joinpath("011_market_upgrade.sql").read_text(encoding="utf-8")
     allowed = set(re.findall(r"'(\w+)'", re.search(r"kind in\s*\(([^)]*)\)", sql).group(1)))
     assert market.KINDS <= allowed
 
@@ -185,3 +187,174 @@ def test_refresh_isolates_a_failing_group(monkeypatch):
 def test_market_is_an_admin_switch():
     from run import SWITCHES
     assert "market" in SWITCHES
+
+
+def test_all_groups_registered():
+    assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new", "macro", "nse"]
+
+
+def test_refresh_mf_new_fetches_only_unquoted_follows(monkeypatch):
+    fetched = []
+    monkeypatch.setattr(market, "fetch_mf_rows", lambda sb, codes, now: fetched.append(codes) or len(codes))
+
+    def sb(method, path, **kw):
+        if path.startswith("quotes"):
+            return [{"symbol": "MF:120503"}]
+        return [{"target_id": "120503"}, {"target_id": "999"}, {"target_id": "x"}]
+
+    assert market.refresh_mf_new(sb, datetime(2026, 8, 22, tzinfo=UTC)) == 1
+    assert fetched == [[999]]
+    monkeypatch.setattr(market, "followed_mf", lambda sb: [120503])
+    assert market.refresh_mf_new(sb, datetime(2026, 8, 22, tzinfo=UTC)) == 0  # nothing new, no fetch
+
+
+# ---------- phase 3: MF ----------
+
+MF = {"meta": {"fund_house": "Axis Mutual Fund", "scheme_category": "Equity Scheme - ELSS",
+               "scheme_name": "Axis ELSS Tax Saver Fund - Direct Plan - Growth Option"},
+      # newest first, 300 days: nav climbs 100 -> 130 one per day
+      "data": [{"date": (datetime(2026, 8, 21) - timedelta(days=i)).strftime("%d-%m-%Y"),
+                "nav": f"{130 - i * 0.1:.4f}"} for i in range(300)]}
+
+
+def test_parse_mf_closes_returns_and_name():
+    p, meta = market.parse_mf(MF)
+    assert p.price == 130.0 and p.prev == 129.9 and len(p.closes) == 30
+    assert p.closes[0] < p.closes[-1]  # oldest first
+    assert p.as_of.startswith("2026-08-21")
+    assert meta["ret_1m"] == round((130 / (130 - 2.1) - 1) * 100, 1)
+    assert meta["ret_1y"] == round((130 / (130 - 25.0) - 1) * 100, 1)
+    assert market.short_mf_name(MF["meta"]["scheme_name"]) == "Axis ELSS Tax Saver Fund"
+    assert market.parse_mf({"data": [{"date": "bad", "nav": "x"}]}) is None
+
+
+def test_refresh_mf_merges_followed_schemes(monkeypatch):
+    seen = {"codes": [], "rows": []}
+
+    class R:
+        def __init__(self, code):
+            self.code = code
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return MF
+
+    monkeypatch.setattr(market.requests, "get",
+                        lambda url, headers, timeout: seen["codes"].append(int(url.rsplit("/", 1)[1])) or R(url))
+    monkeypatch.setattr(market.time, "sleep", lambda s: None)
+
+    def sb(method, path, **kw):
+        if method == "GET":
+            return [{"target_id": "999"}, {"target_id": "120503"}, {"target_id": "nope"}]
+        seen["rows"] += kw["json"]
+
+    n = market.refresh_mf(sb, datetime(2026, 8, 22, tzinfo=UTC))
+    assert n == len(market.DEFAULT_MF) + 1 and 999 in seen["codes"]
+    r = seen["rows"][0]
+    assert r["symbol"].startswith("MF:") and r["kind"] == "mf" and len(r["closes"]) == 30
+    assert r["meta"]["scheme_code"] == market.DEFAULT_MF[0]
+
+
+# ---------- phase 3: macro ----------
+
+def test_parse_fred_skips_missing_and_reports_delta():
+    obs = [{"date": "2026-08-01", "value": "4.33"}, {"date": "2026-07-01", "value": "."},
+           {"date": "2026-06-01", "value": "4.58"}]
+    p, meta = market.parse_fred(obs)
+    assert p.price == 4.33 and p.prev == 4.58 and p.change_pct is None
+    assert meta == {"period": "2026-08-01", "delta": -0.25}
+    assert p.closes == [4.58, 4.33]
+    assert market.parse_fred([{"date": "x", "value": "."}]) is None
+
+
+def test_refresh_macro_is_a_noop_without_a_key(monkeypatch):
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no call")))
+    assert market.refresh_macro(lambda *a, **k: None, datetime(2026, 8, 22, tzinfo=UTC)) == 0
+
+
+# ---------- phase 3: NSE blobs ----------
+
+NOW = ist(2026, 8, 22, 12, 0)
+EVENTS = [{"symbol": "TCS", "company": "TCS Ltd", "purpose": "Financial Results", "date": "28-Aug-2026"},
+          {"symbol": "TCS", "company": "TCS Ltd", "purpose": "Dividend", "date": "28-Aug-2026"},
+          {"symbol": "NOPE", "company": "Unknown", "purpose": "Financial Results", "date": "28-Aug-2026"},
+          {"symbol": "INFY", "company": "Infosys", "purpose": "Financial Results/Other business matters", "date": "20-Sep-2026"},
+          {"symbol": "SBIN", "company": "SBI", "purpose": "Fund Raising", "date": "25-Aug-2026"}]
+MEETINGS = [{"bm_symbol": "TCS", "sm_name": "TCS Ltd", "bm_purpose": "Financial Results", "bm_date": "28-Aug-2026"},
+            {"bm_symbol": "HDFCBANK", "sm_name": "HDFC Bank", "bm_purpose": "Financial Results", "bm_date": "23-Aug-2026"}]
+
+
+def test_results_calendar_filters_window_purpose_known_and_dedupes():
+    cal = market.results_calendar(EVENTS, MEETINGS, {"TCS", "INFY", "SBIN", "HDFCBANK"}, NOW)
+    assert [(r["symbol"], r["date"]) for r in cal] == [("HDFCBANK", "2026-08-23"), ("TCS", "2026-08-28")]
+    assert cal[1]["purpose"] == "Financial Results" and cal[1]["company"] == "TCS Ltd"
+
+
+def test_shape_deals_values_sorted_and_capped():
+    j = {"as_on_date": "21-Aug-2026",
+         "BULK_DEALS_DATA": [{"buySell": "BUY", "clientName": "X", "name": "A", "qty": "14000", "symbol": "A", "watp": "84.1", "date": "21-Aug-2026"},
+                             {"buySell": "sell", "clientName": "Y", "name": "B", "qty": "bad", "symbol": "B", "watp": "1"}],
+         "BLOCK_DEALS_DATA": [{"buySell": "BUY", "clientName": "Z", "name": "C", "qty": "142857", "symbol": "C", "watp": "560"}]}
+    d = market.shape_deals(j, cap=5)
+    assert d["as_on"] == "21-Aug-2026"
+    assert [x["symbol"] for x in d["deals"]] == ["C", "A"]  # bad qty dropped, value-desc
+    assert d["deals"][0]["type"] == "block" and d["deals"][0]["value"] == 142857 * 560
+    assert d["deals"][1]["side"] == "BUY"
+
+
+def test_shape_insider_and_indices():
+    pit = {"data": [{"symbol": "TCS", "company": "TCS", "acqName": "A", "secAcq": "100", "tdpTransactionType": "Buy", "date": "20-Aug-2026"},
+                    {"symbol": "ZZZ", "acqName": "B"}]}
+    ins = market.shape_insider(pit, {"TCS"})
+    assert len(ins) == 1 and ins[0]["person"] == "A" and ins[0]["side"] == "Buy" and ins[0]["qty"] == "100"
+    idx = {"data": [{"key": "SECTORAL INDICES", "index": "NIFTY IT", "last": 30532, "percentChange": -0.46, "pe": "28", "advances": "3", "declines": "7"},
+                    {"key": "STRATEGY INDICES", "index": "NIFTY ALPHA 50", "last": 1}]}
+    out = market.shape_indices(idx)
+    assert [o["index"] for o in out] == ["NIFTY IT"] and out[0]["pct"] == -0.46
+
+
+def test_refresh_nse_blobs_isolates_one_dead_endpoint(monkeypatch):
+    class R:
+        def __init__(self, payload, ok=True):
+            self.p, self.ok_ = payload, ok
+            self.headers = {"content-type": "application/json; charset=utf-8" if ok else "text/html"}
+            self.status_code = 200 if ok else 403
+
+        def raise_for_status(self):
+            if not self.ok_:
+                raise market.requests.HTTPError("403")
+
+        def json(self):
+            return self.p
+
+    class S:
+        def get(self, url, params=None, timeout=None):
+            if url.endswith("allIndices"):
+                return R(None, ok=False)  # Akamai day
+            if url.endswith("event-calendar"):
+                return R(EVENTS)
+            if url.endswith("corporate-board-meetings"):
+                return R(MEETINGS)
+            if url.endswith("snapshot-capital-market-largedeal"):
+                return R({"as_on_date": "21-Aug-2026", "BULK_DEALS_DATA": [], "BLOCK_DEALS_DATA": []})
+            if url.endswith("corporates-pit"):
+                assert params["from_date"] < params["to_date"]
+                return R({"data": []})
+            raise AssertionError(url)
+
+    written = []
+
+    def sb(method, path, **kw):
+        if method == "GET":
+            return [{"nse_symbol": "TCS"}, {"nse_symbol": "HDFCBANK"}]
+        written.append((path, kw["json"]))
+
+    n = market.refresh_nse_blobs(sb, NOW, session=S())
+    assert n == 3 and written[0][0] == "market_blobs?on_conflict=key"
+    keys = {r["key"] for r in written[0][1]}
+    assert keys == {"results_calendar", "bulk_deals", "insider_trades"}  # nse_indices kept its old blob
+    cal = next(r for r in written[0][1] if r["key"] == "results_calendar")["payload"]
+    assert [c["symbol"] for c in cal] == ["HDFCBANK", "TCS"]
