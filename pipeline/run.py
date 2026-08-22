@@ -62,7 +62,8 @@ KNOBS = ("MAX_AI_CALLS_PER_RUN", "AI_CONCURRENCY", "AI_PHASE_SECONDS", "DAILY_AI
          "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "VIDEO_BATCH_CAP",
          "EVENTS_RETENTION_DAYS")
 MODEL_ENVS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL")  # ai.py reads env at call time
-SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "video_match")
+SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "video_match",
+            "market")
 
 
 def load_config():
@@ -1424,12 +1425,20 @@ def main(cfg=None):
     # off = strict manual review; the PENDING_MAX_MINUTES backstop is inside too
     approved = auto_approve() if on("auto_approve") else 0
     retention_sweep()
+    quotes = 0
+    if on("market"):  # prices/FX/crypto into `quotes` (market.py); never blocks news
+        try:
+            import market
+            quotes = sum(market.refresh(sb).values())
+        except Exception as e:
+            print(f"MARKET FAIL: {e}")
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
           + (f", {merged} merged into an existing story" if merged else "")
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
           + f" | editor: {releveled} releveled | alerts: {alerted} sent, {personal} personal alerts, "
           f"{videos} videos attached | "
-          f"self-heal: {healed} recovered, {disabled} retired, {revived} revived, {approved} auto-approved")
+          f"self-heal: {healed} recovered, {disabled} retired, {revived} revived, {approved} auto-approved"
+          + (f" | market: {quotes} quotes" if quotes else ""))
     served = usage_report()
     if served:  # which lane actually carried the run — silent failover is visible
         print("AI served by: " + ", ".join(f"{m}={n}" for m, n in
@@ -1439,7 +1448,7 @@ def main(cfg=None):
             "processed": processed, "dropped": dropped, "flagged": flagged, "merged": merged,
             "quota_blocked": quota_blocked, "held": held, "releveled": releveled,
             "alerted": alerted, "personal": personal, "videos": videos, "healed": healed,
-            "disabled": disabled, "revived": revived, "approved": approved,
+            "disabled": disabled, "revived": revived, "approved": approved, "quotes": quotes,
             "switched_off": [k for k, v in switches.items() if not v]}
 
 
