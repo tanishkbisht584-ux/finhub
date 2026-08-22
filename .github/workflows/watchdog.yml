@@ -13,7 +13,7 @@ name: watchdog
 #       every DB check green while 95% of stories were never scored)
 #   Supabase unreachable                           -> alert (nothing can heal it)
 # Alerts = one open `watchdog` issue at a time; GitHub emails the owner AND
-# an FCM push goes to the 'alerts' topic (the admin's phone). Healthy runs
+# a direct FCM push goes to the ops users' phones (pipeline/ops.py). Healthy runs
 # auto-close any open watchdog issue so the next incident can alert again.
 # App-side failures (stale APK, expired session) are invisible from here.
 on:
@@ -31,8 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4   # pipeline/ops.py (ops push) + run.py
       - name: Install FCM deps
-        run: pip install --quiet google-auth requests
+        run: pip install --quiet google-auth requests feedparser
       - name: Health check
         shell: python
         env:
@@ -213,28 +214,13 @@ jobs:
                                    ).encode(),
                    method="POST")
               # email alone sat unread for 4h on 2026-08-11 — also buzz the
-              # phone via the app's existing 'alerts' FCM topic. Only on issue
-              # creation, so a long incident pings once, not hourly.
-              # ponytail: topic reaches every install; fine at 1 user, gate on
-              # an admin flag before public launch
+              # operator's phone. Direct to the ops users' devices (admin →
+              # Alerts → "Make me the ops user"), never the public 'alerts'
+              # topic. Only on issue creation, so a long incident pings once.
               try:
-                  sa = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
-                  if sa:
-                      from google.oauth2 import service_account
-                      import google.auth.transport.requests as gar
-                      import requests as rq
-                      creds = service_account.Credentials.from_service_account_info(
-                          json.loads(sa),
-                          scopes=["https://www.googleapis.com/auth/firebase.messaging"])
-                      creds.refresh(gar.Request())
-                      rq.post("https://fcm.googleapis.com/v1/projects/"
-                              f"{creds.project_id}/messages:send",
-                              headers={"Authorization": f"Bearer {creds.token}"},
-                              json={"message": {"topic": "alerts", "notification": {
-                                  "title": "FinSwipe pipeline needs attention",
-                                  "body": needs_you[0][:170]}}},
-                              timeout=30).raise_for_status()
-                      print("ops push sent to phone")
+                  sys.path.insert(0, "pipeline")
+                  from ops import ops_push
+                  ops_push("FinSwipe pipeline needs attention", needs_you[0])
               except Exception as e:
                   print("ops push failed (issue+email still raised):", e)
 

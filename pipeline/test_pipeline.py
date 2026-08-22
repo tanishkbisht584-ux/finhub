@@ -927,3 +927,24 @@ def test_run_log_error_lines():
     log = "12 fetched\nFEED FAIL ET: timeout\nTraceback (most recent call last):\ndone: 3 pending"
     assert [l for l in log.splitlines() if run.ERR_RE.search(l)] == [
         "FEED FAIL ET: timeout", "Traceback (most recent call last):"]
+
+
+def test_ops_push_skips_when_no_ops_users(monkeypatch):
+    import ops as watchdog
+    monkeypatch.setattr(watchdog, "load_env", lambda: None)
+    monkeypatch.setattr(watchdog, "load_config", lambda: {"ops_user_ids": []})
+    monkeypatch.setattr(watchdog, "sb", lambda *a, **k: pytest.fail("no lookup without ops users"))
+    assert watchdog.ops_push("t", "b") == 0
+
+
+def test_ops_push_sends_to_each_ops_device(monkeypatch):
+    import ops as watchdog
+    sent = []
+    monkeypatch.setattr(watchdog, "load_env", lambda: None)
+    monkeypatch.setattr(watchdog, "load_config", lambda: {"ops_user_ids": ["u1", "u2"]})
+    monkeypatch.setattr(watchdog, "sb", lambda m, p, **k: [{"id": "u1", "fcm_token": "tok1"},
+                                                            {"id": "u2", "fcm_token": "tok2"}])
+    monkeypatch.setattr(watchdog, "send_fcm_token",
+                        lambda tok, title, body, sid, score: (sent.append((tok, sid)), "sent")[1])
+    assert watchdog.ops_push("t", "b" * 300) == 2
+    assert sent == [("tok1", ""), ("tok2", "")]   # empty story_id => no deep-link
