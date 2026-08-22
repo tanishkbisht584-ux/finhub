@@ -948,3 +948,18 @@ def test_ops_push_sends_to_each_ops_device(monkeypatch):
                         lambda tok, title, body, sid, score: (sent.append((tok, sid)), "sent")[1])
     assert watchdog.ops_push("t", "b" * 300) == 2
     assert sent == [("tok1", ""), ("tok2", "")]   # empty story_id => no deep-link
+
+
+def test_check_keys_detects_duplicate_and_probes_each(monkeypatch):
+    from types import SimpleNamespace
+    import check_keys
+    monkeypatch.setenv("GEMINI_API_KEY", "aaaaaaaaaaaa,aaaaaaaaaaaa")
+    monkeypatch.setenv("GROQ_API_KEY", "bbbbbbbbbbbb")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    probed = []
+    fake = lambda env, k: (probed.append(env), SimpleNamespace(status_code=200 if env.startswith("GEMINI") else 401, text="no"))[1]
+    rows = check_keys.check_keys(probe=fake)
+    assert any("DUPLICATE" in d for _, _, ok, d in rows if ok is False)
+    assert [r for r in rows if r[0] == "GROQ_API_KEY#1"][0][2] is False
+    assert [r for r in rows if r[0] == "OPENROUTER_API_KEY"][0][2] is None
+    assert probed == ["GEMINI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY"]

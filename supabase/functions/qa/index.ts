@@ -27,7 +27,38 @@ type Source = { title: string; body: string; source_name: string; url: string };
 //            leads. llama-3.3-70b was retired from Groq's catalog (gone 18 Aug);
 //            qwen3.6-27b is the strongest live replacement.
 // Same comma-separated multi-key pattern as the pipeline throughout.
-type Lane = { provider: "groq" | "gemini"; key: string; model: string };
+type Lane = { provider: "groq" | "gemini"; key: string; model: string; lane: string };
+const FN = "qa";
+
+// ---------- admin cockpit: remote config + call log ----------
+// app_config.edge is the admin's kill switch / daily cap / lane order for this
+// function. {} (table missing, row missing, any error) = the defaults below.
+type EdgeCfg = {
+  qa_enabled?: boolean; deepread_enabled?: boolean; daily_cap?: number;
+  lanes?: Record<string, [string, string][]>;
+};
+let edgeCfg: EdgeCfg = {}; // set per request; identical for every concurrent request
+async function loadCfg(): Promise<EdgeCfg> {
+  try {
+    const { data } = await sb.from("app_config").select("value").eq("key", "edge").maybeSingle();
+    return (data?.value as EdgeCfg) ?? {};
+  } catch {
+    return {};
+  }
+}
+// edge_log: one row per lane attempt, so the admin can see which provider is
+// failing and why instead of a silent "all lanes down". Never blocks, never throws.
+async function logCall(lane: string, ok: boolean, status: number | null, error: string | null, ms: number) {
+  try {
+    await sb.from("edge_log").insert({ fn: FN, lane, ok, status, error: error?.slice(0, 300) ?? null, ms });
+  } catch { /* logging must never break the answer */ }
+}
+function laneOrder<K extends string>(kind: K, defaults: [("groq" | "gemini"), string][]) {
+  const o = edgeCfg.lanes?.[kind];
+  const valid = Array.isArray(o) && o.length > 0 && o.every((p) =>
+    Array.isArray(p) && (p[0] === "groq" || p[0] === "gemini") && typeof p[1] === "string" && p[1]);
+  return valid ? (o as [("groq" | "gemini"), string][]) : defaults;
+}
 
 function keysOf(...envs: string[]): string[] {
   for (const e of envs) {
@@ -37,21 +68,26 @@ function keysOf(...envs: string[]): string[] {
   return [];
 }
 
+const DEFAULT_ORDER: Record<"smart" | "fast", [("groq" | "gemini"), string][]> = {
+  smart: [["gemini", "gemini-3.7-flash"], ["groq", "openai/gpt-oss-120b"],
+          ["groq", "qwen/qwen3.6-27b"], ["gemini", "gemini-3.5-flash-lite"]],
+  fast: [["groq", "openai/gpt-oss-120b"], ["groq", "qwen/qwen3.6-27b"],
+         ["gemini", "gemini-3.5-flash-lite"]],
+};
+
+// Lane order is overridable per kind from the admin (app_config.edge.lanes.smart / .fast).
 function lanes(kind: "smart" | "fast"): Lane[] {
   const groq = keysOf("GROQ_API_KEYS", "GROQ_API_KEY");
   const gemini = keysOf("GEMINI_API_KEYS", "GEMINI_API_KEY");
-  const order: [("groq" | "gemini"), string][] = kind === "smart"
-    ? [["gemini", "gemini-3.7-flash"], ["groq", "openai/gpt-oss-120b"],
-       ["groq", "qwen/qwen3.6-27b"], ["gemini", "gemini-3.5-flash-lite"]]
-    : [["groq", "openai/gpt-oss-120b"], ["groq", "qwen/qwen3.6-27b"],
-       ["gemini", "gemini-3.5-flash-lite"]];
-  return order.flatMap(([provider, model]) =>
-    (provider === "groq" ? groq : gemini).map((key) => ({ provider, key, model }))
+  return laneOrder(kind, DEFAULT_ORDER[kind]).flatMap(([provider, model]) =>
+    (provider === "groq" ? groq : gemini).map((key, i) =>
+      ({ provider, key, model, lane: `${provider}/${model}#${i}` }))
   );
 }
 
 async function chat(prompt: string, kind: "smart" | "fast" = "fast"): Promise<string | null> {
-  for (const { provider, key, model } of lanes(kind)) {
+  for (const { provider, key, model, lane } of lanes(kind)) {
+    const t0 = Date.now();
     try {
       if (provider === "groq") {
         const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -63,8 +99,13 @@ async function chat(prompt: string, kind: "smart" | "fast" = "fast"): Promise<st
             messages: [{ role: "user", content: prompt }],
           }),
         });
-        if (!r.ok) continue; // 429/503/retired model/anything -> next lane
-        return (await r.json()).choices[0].message.content;
+        if (!r.ok) { // 429/503/retired model/anything -> next lane
+          await logCall(lane, false, r.status, await r.text(), Date.now() - t0);
+          continue;
+        }
+        const text = (await r.json()).choices[0].message.content;
+        await logCall(lane, true, 200, null, Date.now() - t0);
+        return text;
       }
       const r = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -77,12 +118,19 @@ async function chat(prompt: string, kind: "smart" | "fast" = "fast"): Promise<st
           }),
         },
       );
-      if (!r.ok) continue;
-      return (await r.json()).candidates[0].content.parts[0].text;
-    } catch {
+      if (!r.ok) {
+        await logCall(lane, false, r.status, await r.text(), Date.now() - t0);
+        continue;
+      }
+      const text = (await r.json()).candidates[0].content.parts[0].text;
+      await logCall(lane, true, 200, null, Date.now() - t0);
+      return text;
+    } catch (e) {
+      await logCall(lane, false, null, String(e), Date.now() - t0);
       continue; // a provider outage must never surface as a 500
     }
   }
+  await logCall("none", false, null, "all lanes failed", 0);
   return null;
 }
 
@@ -352,6 +400,9 @@ Deno.serve(async (req) => {
   const user = userData?.user;
   if (!user) return new Response("unauthorized", { status: 401 });
 
+  edgeCfg = await loadCfg();
+  if (edgeCfg.qa_enabled === false) return new Response("paused by admin", { status: 503 });
+
   const question = String((await req.json().catch(() => ({}))).question ?? "")
     .trim().slice(0, 300);
   if (!question) return new Response("question required", { status: 400 });
@@ -363,7 +414,7 @@ Deno.serve(async (req) => {
     .select("id", { count: "exact", head: true })
     .eq("user_id", user.id).eq("type", "qa_ask")
     .gte("created_at", midnight.toISOString());
-  if ((count ?? 0) >= 50) return new Response("daily limit", { status: 429 });
+  if ((count ?? 0) >= (edgeCfg.daily_cap ?? 50)) return new Response("daily limit", { status: 429 });
 
   // Cache: identical question inside 15 min costs zero AI (market panic guard).
   const norm = question.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ");
