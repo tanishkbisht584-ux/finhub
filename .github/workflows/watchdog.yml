@@ -1,20 +1,10 @@
 name: watchdog
-# End-to-end health monitor for the whole failure map:
-#   repo gone private (free minutes would die)     -> alert
-#   pipeline crash-looping (bad secret/dep/commit) -> alert (restart is useless)
-#   pipeline dead / cron-lagged                    -> self-heal: dispatch a run
-#   ingesting but nothing approved (gate stalled)  -> alert
-#   AI lanes failing (flagged stories piling up)   -> alert (catches PARTIAL
-#       outages the zero-approvals check misses — 2026-08-11 a retired Gemini
-#       model flagged 3.4k stories over 12h while approvals still trickled)
-#   feed ranking frozen (app's own query checked)  -> alert
-#   AI starved (last run's log: most cycles deferred on quota) -> alert
-#       (2026-08-22: one key per provider for 9 days; a ~10/h trickle kept
-#       every DB check green while 95% of stories were never scored)
-#   Supabase unreachable                           -> alert (nothing can heal it)
-# Alerts = one open `watchdog` issue at a time; GitHub emails the owner AND
-# a direct FCM push goes to the ops users' phones (pipeline/ops.py). Healthy runs
-# auto-close any open watchdog issue so the next incident can alert again.
+# Hourly end-to-end health monitor. The checks, the self-heal and the alerting
+# live in pipeline/ops.py (shared with the admin's Doctor page, which runs the
+# same checks on demand with a fix button next to each). See its docstring for
+# the failure map. Alerts = one open `watchdog` issue at a time (GitHub emails
+# the owner) + a direct FCM push to the ops users' phones, never the public
+# 'alerts' topic. Healthy runs auto-close any open watchdog issue.
 # App-side failures (stale APK, expired session) are invisible from here.
 on:
   schedule:
@@ -31,198 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4   # pipeline/ops.py (ops push) + run.py
-      - name: Install FCM deps
-        run: pip install --quiet google-auth requests feedparser
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: pip install --quiet -r pipeline/requirements.txt
       - name: Health check
-        shell: python
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-        run: |
-          import json, os, sys, urllib.parse, urllib.request
-          from datetime import datetime, timedelta, timezone
-
-          INGEST_MAX_H = 3     # no new approved story for this long => frozen
-          FEED_TOP_MAX_H = 12  # nothing fresh in the feed's visible top => frozen
-
-          def call(url, hdrs, data=None, method=None):
-              req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
-              with urllib.request.urlopen(req) as r:
-                  body = r.read()
-                  return json.loads(body) if body else None
-
-          gh = "https://api.github.com/repos/" + os.environ["REPO"]
-          gh_hdrs = {"Authorization": "Bearer " + os.environ["GH_TOKEN"],
-                     "Accept": "application/vnd.github+json"}
-
-          needs_you, healed = [], []
-
-          # repo must stay public: private caps Actions at 2k min/month and the
-          # resident poller (~340 min/run) exhausts that in about 6 runs
-          if call(gh, gh_hdrs)["private"]:
-              needs_you.append("Repo is PRIVATE — Actions free minutes will run out "
-                               "within a day; make it public or the pipeline stops.")
-
-          # crash loop is invisible from outside: cron keeps 'restarting' a run
-          # that dies in seconds, so the schedule looks alive while nothing works
-          runs = call(gh + "/actions/workflows/pipeline.yml/runs?per_page=10",
-                      gh_hdrs)["workflow_runs"]
-          active = any(r["status"] in ("queued", "in_progress") for r in runs)
-          done = [r for r in runs
-                  if r["status"] == "completed" and r["conclusion"] != "cancelled"]
-          crash_loop = len(done) >= 3 and all(
-              r["conclusion"] == "failure" for r in done[:3])
-          if crash_loop:
-              needs_you.append("Pipeline is CRASH-LOOPING (3 straight failed runs) — "
-                               "restarting won't help. Likely a broken secret, "
-                               f"dependency, or commit. Logs: {done[0]['html_url']}")
-
-          # starvation is invisible to every DB check: 2026-08-22 the secrets held
-          # ONE key per provider, 119 of every 120 stories deferred on quota for
-          # 9 days, and a ~10/h trickle kept "approved recently" green throughout.
-          # The run log says it outright, so read the last completed run's log.
-          starved_cycles = "?"
-          try:
-              import io, zipfile
-              import requests as rq  # drops the bearer on the redirect to blob storage; urllib would not
-              # not `done`: after a cancel storm the last 10 runs can all be
-              # cancelled, so ask for the newest success outright
-              last = call(gh + "/actions/workflows/pipeline.yml/runs?status=success&per_page=1",
-                          gh_hdrs)["workflow_runs"][0]
-              z = zipfile.ZipFile(io.BytesIO(
-                  rq.get(last["logs_url"], headers=gh_hdrs, timeout=60).content))
-              cycles = [l for n in z.namelist()
-                        for l in z.read(n).decode("utf8", "replace").splitlines()
-                        if " done: " in l][-30:]
-              n_starved = sum("awaiting quota" in l for l in cycles)
-              starved_cycles = f"{n_starved}/{len(cycles)}"
-              if cycles and n_starved >= len(cycles) / 2:
-                  needs_you.append(
-                      f"AI STARVED: {starved_cycles} recent cycles deferred stories for "
-                      "lack of quota — keys exhausted or the secrets hold a single key "
-                      "(GEMINI_API_KEY / GROQ_API_KEY are comma lists). Feed is a trickle.")
-          except Exception as e:
-              print("starvation check skipped:", e)
-
-          now = datetime.now(timezone.utc)
-          def age_h(iso):
-              dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-              return (now - dt).total_seconds() / 3600
-
-          starved = False
-          try:
-              sb_url = os.environ["SUPABASE_URL"] + "/rest/v1/"
-              key = os.environ["SUPABASE_SERVICE_KEY"]
-              sb = {"apikey": key, "Authorization": "Bearer " + key}
-
-              def newest_age(filt):
-                  rows = call(sb_url + "stories?select=created_at&" + filt
-                              + "order=created_at.desc&limit=1", sb)
-                  return age_h(rows[0]["created_at"]) if rows else 999
-
-              approved_age = newest_age("status=eq.approved&")
-              ingested_age = newest_age("")  # any status: is anything arriving?
-
-              # the exact query the app runs, so ranking bugs are caught too
-              since = urllib.parse.quote((now - timedelta(hours=48)).isoformat())
-              top = call(sb_url + "stories?select=published_at&status=eq.approved"
-                         f"&published_at=gte.{since}"
-                         "&order=is_featured.desc,published_at.desc&limit=10", sb)
-              top_age = min((age_h(r["published_at"]) for r in top), default=999)
-
-              if approved_age > INGEST_MAX_H:
-                  if ingested_age <= INGEST_MAX_H:
-                      needs_you.append(
-                          f"Stories are ingesting (newest {ingested_age:.1f}h old) but "
-                          f"NONE approved in {approved_age:.1f}h — the approval gate "
-                          "or AI scoring is stalled, not the sources.")
-                  else:
-                      starved = True  # nothing arriving at all => restartable
-              if top_age > FEED_TOP_MAX_H:
-                  needs_you.append(
-                      "Feed ranking frozen: freshest story in the visible top 10 is "
-                      f"{top_age:.1f}h old while ingestion is fine.")
-
-              # partial AI outage: stories flag instead of being scored, while
-              # enough approvals trickle through to keep approved_age young
-              FLAG_SPIKE = 15  # normal is ~0-2/h; an hour at 15+ means lanes are dying
-              hr = urllib.parse.quote((now - timedelta(hours=1)).isoformat())
-              spike = call(sb_url + "stories?select=id&status=eq.flagged"
-                           f"&created_at=gte.{hr}&limit={FLAG_SPIKE}", sb)
-              if len(spike) >= FLAG_SPIKE:
-                  needs_you.append(
-                      f"AI lanes are FAILING: {FLAG_SPIKE}+ stories flagged in the "
-                      "last hour (AI errors, not editorial rejections). Check "
-                      "raw_ai_error on recent flagged rows — likely a dead model "
-                      "or exhausted keys.")
-          except Exception as e:
-              needs_you.append(
-                  f"Supabase unreachable from the watchdog: {e}. If Supabase itself "
-                  "is down, wait it out — the app serves its offline cache; if the "
-                  "project was paused or the key rotated, fix that.")
-
-          # self-heal: restart the pipeline only when that can actually help
-          if starved:
-              msg = f"nothing ingested in {ingested_age:.1f}h"
-              if crash_loop:
-                  pass  # already flagged; another dispatch would just crash again
-              elif active:
-                  needs_you.append(f"{msg} although a pipeline run is active — the "
-                                   "freeze is inside the run; check its logs.")
-              else:
-                  call(gh + "/actions/workflows/pipeline.yml/dispatches", gh_hdrs,
-                       data=json.dumps({"ref": "main"}).encode(), method="POST")
-                  healed.append(f"{msg} and no run was active — dispatched a fresh "
-                                "pipeline run.")
-
-          if not needs_you:
-              # healthy again: close the alarm so the NEXT incident can raise one
-              # (a forgotten open issue used to suppress all future alerts)
-              for i in call(gh + "/issues?labels=watchdog&state=open", gh_hdrs):
-                  call(gh + f"/issues/{i['number']}/comments", gh_hdrs,
-                       data=json.dumps({"body": "Auto-closed: pipeline healthy "
-                                        "again on the next watchdog pass."}).encode(),
-                       method="POST")
-                  call(gh + f"/issues/{i['number']}", gh_hdrs,
-                       data=json.dumps({"state": "closed"}).encode(), method="PATCH")
-                  print(f"closed healed watchdog issue #{i['number']}")
-              state = healed[0] if healed else (
-                  f"healthy: approved {approved_age:.1f}h ago, "
-                  f"feed top {top_age:.1f}h old, ai-starved {starved_cycles}")
-              print("self-healed: " + state if healed else state)
-              sys.exit(0)
-
-          # alert: at most one open watchdog issue; GitHub emails the owner
-          if not call(gh + "/issues?labels=watchdog&state=open", gh_hdrs):
-              body = "\n".join(
-                  ["## Needs you", ""]
-                  + [f"- {p}" for p in needs_you]
-                  + (["", "## Auto-healed", ""] + [f"- {h}" for h in healed]
-                     if healed else [])
-                  + ["", "_Raised automatically by watchdog.yml (hourly)._"])
-              # assign the owner: GitHub always emails an assignee, whereas issues
-              # in an unwatched repo notify nobody
-              call(gh + "/issues", gh_hdrs,
-                   data=json.dumps({"title": "Watchdog: pipeline needs attention",
-                                    "body": body,
-                                    "labels": ["watchdog"],
-                                    "assignees": [os.environ["REPO"].split("/")[0]]}
-                                   ).encode(),
-                   method="POST")
-              # email alone sat unread for 4h on 2026-08-11 — also buzz the
-              # operator's phone. Direct to the ops users' devices (admin →
-              # Alerts → "Make me the ops user"), never the public 'alerts'
-              # topic. Only on issue creation, so a long incident pings once.
-              try:
-                  sys.path.insert(0, "pipeline")
-                  from ops import ops_push
-                  ops_push("FinSwipe pipeline needs attention", needs_you[0])
-              except Exception as e:
-                  print("ops push failed (issue+email still raised):", e)
-
-          print("NEEDS ATTENTION:", " | ".join(needs_you))
-          sys.exit(1)
+        run: python pipeline/ops.py

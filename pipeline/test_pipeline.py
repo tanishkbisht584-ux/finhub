@@ -963,3 +963,30 @@ def test_check_keys_detects_duplicate_and_probes_each(monkeypatch):
     assert [r for r in rows if r[0] == "GROQ_API_KEY#1"][0][2] is False
     assert [r for r in rows if r[0] == "OPENROUTER_API_KEY"][0][2] is None
     assert probed == ["GEMINI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY"]
+
+
+def test_ops_evaluate_maps_facts_to_fixes():
+    import ops
+    healthy = {"errors": {}, "private": False, "crash_loop": False, "gh_active": False,
+               "approved_age": 0.5, "ingested_age": 0.2, "top_age": 1.0, "flagged_hour": 0,
+               "switches": {}, "last_run_ok": True, "edge_calls": 10, "edge_failed": 1}
+    v = ops.evaluate(healthy)
+    assert v["problems"] == [] and v["dispatch"] is False
+    # nothing arriving, no run active -> self-heal by dispatch, no alarm
+    v = ops.evaluate({**healthy, "approved_age": 5, "ingested_age": 5})
+    assert v["dispatch"] is True and v["problems"] == []
+    # same but a run is active -> the freeze is inside the run: alarm, no dispatch
+    v = ops.evaluate({**healthy, "approved_age": 5, "ingested_age": 5, "gh_active": True})
+    assert v["dispatch"] is False and [p["fix"] for p in v["problems"]] == ["logs"]
+    # ingesting but nothing approved -> gate stalled -> review
+    v = ops.evaluate({**healthy, "approved_age": 5, "ingested_age": 1})
+    assert [p["fix"] for p in v["problems"]] == ["review"]
+    # admin paused the pipeline: ingestion silence is expected, only a note
+    v = ops.evaluate({**healthy, "approved_age": 9, "ingested_age": 9, "switches": {"pipeline": False}})
+    assert v["problems"] == [] and v["dispatch"] is False and v["notes"]
+    # failing lanes, starvation and edge errors all point at keys
+    v = ops.evaluate({**healthy, "flagged_hour": 20, "starved": True, "edge_failed": 8})
+    assert {p["fix"] for p in v["problems"]} == {"keys"}
+    # supabase down is its own lever; github down is only a note
+    v = ops.evaluate({"errors": {"supabase": "timeout", "github": "403"}})
+    assert [p["fix"] for p in v["problems"]] == ["supabase"] and v["notes"]
