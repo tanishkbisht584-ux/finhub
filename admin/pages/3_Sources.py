@@ -5,7 +5,8 @@ gate("Sources")
 run = pipeline_mod()
 st.markdown("### Sources")
 
-TYPES = ["rss", "google_news_query", "nse", "bse", "sebi", "rbi", "youtube"]  # migration 007 CHECK
+TYPES = ["rss", "google_news_query", "nse", "bse", "sebi", "rbi", "youtube",
+         "gnews_api", "newsdata", "marketaux"]  # migration 011 CHECK (was 007)
 sources = sb("GET", "sources?select=*&order=name")
 by_name = {s["name"]: s for s in sources}
 day = iso_hours_ago(24)
