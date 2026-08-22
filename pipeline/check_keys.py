@@ -23,6 +23,19 @@ PROBES = {
     "OPENROUTER_API_KEY": lambda k: requests.get(
         "https://openrouter.ai/api/v1/key",
         headers={"Authorization": f"Bearer {k}"}, timeout=30),
+    # markets upgrade (2026-08-22): each probe spends one request of that day's quota
+    "GNEWS_API_KEY": lambda k: requests.get(
+        "https://gnews.io/api/v4/search",
+        params={"q": "nifty", "max": 1, "apikey": k}, timeout=30),
+    "NEWSDATA_API_KEY": lambda k: requests.get(
+        "https://newsdata.io/api/1/latest",
+        params={"apikey": k, "q": "nifty", "country": "in"}, timeout=30),
+    "MARKETAUX_API_KEY": lambda k: requests.get(
+        "https://api.marketaux.com/v1/news/all",
+        params={"api_token": k, "countries": "in", "limit": 1}, timeout=30),
+    "FRED_API_KEY": lambda k: requests.get(
+        "https://api.stlouisfed.org/fred/series",
+        params={"series_id": "FEDFUNDS", "api_key": k, "file_type": "json"}, timeout=30),
 }
 
 

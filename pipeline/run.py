@@ -553,6 +553,103 @@ def fetch_nse(source):
 FETCHERS = {"nse": fetch_nse, "bse": fetch_bse}
 
 
+# ---------- keyed news APIs (2026-08-22): JSON in, the same item dict out ----------
+# Real article URLs and images, unlike Google News proxies. Every free tier is
+# metered per day, so the fetch loop polls these on an interval (POLL_MIN)
+# instead of every 45 s like RSS: GNews.io 100 req/day, NewsData 200/day,
+# MarketAux 100/day (3 articles each — last priority). Keys are comma lists
+# (ai._split) rotated per call. ponytail: MarketAux tags tickers+sentiment in
+# `entities[]` — use them when the AI's company tagging proves weak.
+
+POLL_MIN = {"gnews_api": 30, "newsdata": 20, "marketaux": 20}  # minutes between polls, per row
+_key_turn = {}
+
+
+def api_key(env):
+    import ai  # env is loaded in main(), after import time
+    keys = ai._split(env)
+    if not keys:
+        raise RuntimeError(f"{env} unset — source skipped")
+    i = _key_turn.get(env, 0)
+    _key_turn[env] = i + 1
+    return keys[i % len(keys)]
+
+
+def due_for_poll(source, now):
+    """RSS every loop; a keyed API only once its interval has passed since
+    last_fetched_at (a skipped source is not stamped, so the clock is honest)."""
+    mins = POLL_MIN.get(source["type"])
+    last = source.get("last_fetched_at")
+    if not mins or not last:
+        return True
+    return parse_ts(last) <= now - timedelta(minutes=mins)
+
+
+def parse_api_ts(s):
+    """'2026-08-22T10:00:00Z' / '2026-08-22 10:00:00' / '...T10:00:00.000000Z'
+    -> aware UTC datetime; None when absent or unparseable."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s).strip().replace("Z", "+00:00").replace(" ", "T"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def api_items(source, rows, url_key, title_key, body_key, image_key, ts_key):
+    stale = datetime.now(timezone.utc) - timedelta(hours=48)
+    items = []
+    for a in rows:
+        url, title = a.get(url_key), (a.get(title_key) or "").strip()
+        if not url or not title:
+            continue
+        ts = parse_api_ts(a.get(ts_key))
+        if ts and ts < stale:
+            continue
+        items.append({"source": source, "url": url, "url_hash": url_hash(url),
+                      "headline": title, "body": a.get(body_key) or "",
+                      "image_url": a.get(image_key) or None,
+                      "published_at": ts.isoformat() if ts else None})
+    return items
+
+
+def fetch_gnews_api(source):
+    r = requests.get("https://gnews.io/api/v4/search",
+                     params={"q": source["feed_url"], "lang": "en", "country": "in",
+                             "max": 10, "apikey": api_key("GNEWS_API_KEY")},
+                     headers=UA, timeout=FETCH_TIMEOUT)
+    r.raise_for_status()
+    return api_items(source, r.json().get("articles") or [],
+                     "url", "title", "description", "image", "publishedAt")
+
+
+def fetch_newsdata(source):
+    r = requests.get("https://newsdata.io/api/1/latest",
+                     params={"apikey": api_key("NEWSDATA_API_KEY"), "q": source["feed_url"],
+                             "country": "in", "language": "en"},
+                     headers=UA, timeout=FETCH_TIMEOUT)
+    r.raise_for_status()
+    return api_items(source, r.json().get("results") or [],
+                     "link", "title", "description", "image_url", "pubDate")
+
+
+def fetch_marketaux(source):
+    params = {"api_token": api_key("MARKETAUX_API_KEY"), "countries": "in",
+              "language": "en", "filter_entities": "true"}
+    if source.get("feed_url"):
+        params["search"] = source["feed_url"]
+    r = requests.get("https://api.marketaux.com/v1/news/all", params=params,
+                     headers=UA, timeout=FETCH_TIMEOUT)
+    r.raise_for_status()
+    return api_items(source, r.json().get("data") or [],
+                     "url", "title", "description", "image_url", "published_at")
+
+
+FETCHERS.update({"gnews_api": fetch_gnews_api, "newsdata": fetch_newsdata,
+                 "marketaux": fetch_marketaux})
+
+
 # ---------- broadcaster video (spec M8): media candidates, never stories ----------
 
 VIDEO_MAX_AGE_HOURS = 12   # a clip 12h+ from the story is a different bulletin
@@ -699,6 +796,9 @@ PUBLISHER = {
     "RBI Press": "RBI", "RBI Notifications": "RBI", "RBI Speeches": "RBI",
     "Investing.com": "Investing.com", "Investing Commodities": "Investing.com",
     "Investing Economy": "Investing.com",
+    # Two queries against one aggregator API are one source twice over.
+    "GNews.io Markets IN": "GNews.io", "GNews.io Stocks IN": "GNews.io",
+    "NewsData Business IN": "NewsData", "NewsData Markets IN": "NewsData",
 }
 
 
@@ -1214,7 +1314,10 @@ def main(cfg=None):
             published.append((r["cluster_id"], title_tokens(r["headline"])))
 
     items, fetched_source_ids = [], []
+    poll_now = datetime.now(timezone.utc)
     for s in sources:
+        if not due_for_poll(s, poll_now):  # keyed APIs: quota-paced, not every loop
+            continue
         try:
             items += FETCHERS.get(s["type"], fetch_items)(s)
             fetched_source_ids.append(s["id"])

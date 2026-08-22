@@ -40,6 +40,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # turns send_fcm from a printed no-op into real pushes (M7)
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          # optional, markets upgrade (2026-08-22): keyed news APIs + FRED macro.
+          # Unset = those sources log FEED FAIL / macro skips; nothing else changes.
+          GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
+          NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+          MARKETAUX_API_KEY: ${{ secrets.MARKETAUX_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           # Stay resident ~5.5h polling every 90s, then exit; the queued run
           # (concurrency group, cancel-in-progress: false) takes over, so
           # coverage is continuous regardless of when the cron is honoured.

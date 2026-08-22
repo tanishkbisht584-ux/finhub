@@ -106,3 +106,17 @@ insert into sources (name, type, feed_url, authority) values
   ('CNBC-TV18 Markets',         'rss', 'https://www.cnbctv18.com/commonfeeds/v1/cne/rss/market.xml', 7),
   ('NDTV Profit Latest',        'rss', 'https://feeds.feedburner.com/ndtvprofit-latest', 6)
 on conflict do nothing;
+
+-- Added 2026-08-22 (markets upgrade, phase 2): keyed JSON news APIs. Free
+-- tiers are metered per day, so run.py polls these on POLL_MIN intervals
+-- rather than every loop. Real article URLs + images (unlike Google News
+-- proxies). Needs GNEWS_API_KEY / NEWSDATA_API_KEY / MARKETAUX_API_KEY in
+-- pipeline/.env and the repo secrets; an unset key just logs FEED FAIL and
+-- the row is retired/revived by self-heal like any dead feed.
+insert into sources (name, type, feed_url, authority) values
+  ('GNews.io Markets IN',  'gnews_api', 'nifty OR sensex OR rbi OR sebi', 6),
+  ('GNews.io Stocks IN',   'gnews_api', 'stock market india', 5),
+  ('NewsData Business IN', 'newsdata',  'business', 5),
+  ('NewsData Markets IN',  'newsdata',  'stock market', 5),
+  ('MarketAux India',      'marketaux', '', 6)
+on conflict do nothing;
