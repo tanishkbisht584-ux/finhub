@@ -10,6 +10,7 @@ import 'analytics.dart';
 import 'remote_config.dart';
 import 'screens/ask.dart';
 import 'screens/feed.dart';
+import 'intro.dart';
 import 'screens/interests.dart';
 import 'screens/markets.dart';
 import 'screens/profile.dart';
@@ -72,6 +73,14 @@ Future<void> _maybeSpeak(RemoteMessage m) async {
 // after the first success — token refreshes go through the onTokenRefresh
 // listener instead, not through this flag.
 bool _fcmTokenSaved = false;
+
+/// Cold-start swipe intro: once per process, whatever screen AuthGate lands
+/// on first (sign-in when signed out, interests/feed when signed in).
+bool _introShown = false;
+
+Widget _withIntro(Widget screen) => _introShown
+    ? screen
+    : SwipeIntro(onDone: () => _introShown = true, child: screen);
 
 /// The pipeline needs the device token to send personalized alerts.
 Future<void> _saveFcmToken() async {
@@ -216,7 +225,7 @@ class _AuthGateState extends State<AuthGate> {
           // and profile row, not inherit the previous account's.
           _fcmTokenSaved = false;
           _profileEnsured = false;
-          return const SignInScreen();
+          return _withIntro(const SignInScreen());
         }
         _ensureProfile(session.user);
         _checkInterests(session.user);
@@ -225,10 +234,10 @@ class _AuthGateState extends State<AuthGate> {
           return Scaffold(body: Center(child: appSpinner()));
         }
         if (_needsInterests == true) {
-          return InterestsScreen(
-              onDone: () => setState(() => _needsInterests = false));
+          return _withIntro(InterestsScreen(
+              onDone: () => setState(() => _needsInterests = false)));
         }
-        return const HomeShell();
+        return _withIntro(const HomeShell());
       },
     );
   }

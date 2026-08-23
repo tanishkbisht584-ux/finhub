@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- theme.dart `bg` — the window behind and before every Flutter frame -->
+    <color name="clay_black">#FF0E100F</color>
+</resources>
