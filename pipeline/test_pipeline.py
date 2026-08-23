@@ -17,7 +17,6 @@ def _fresh_process_caches():
     run._recent_cache.update(at=0.0, since=None, start=None, rows={}, col="updated_at")
     run._known_hashes.clear()
     run._companies_cache.update(at=0.0, by_key={})
-    run._last_ran.clear()
     run._seen_images_cache.update(at=0.0, counts={})
 
 
@@ -632,7 +631,7 @@ def test_recent_stories_full_load_then_updated_at_delta(monkeypatch):
     second = run.recent_stories()
     assert [r["id"] for r in second] == [1, 2, 3]          # order kept, no duplicate, no row 0
     assert second[1]["status"] == "rejected"                # the edit landed next lap
-    assert len(calls) == 2 and "select=id,cluster_id,headline,status,created_at,updated_at" in calls[0]
+    assert len(calls) == 2 and "select=id,cluster_id,headline,status,source_name,created_at,updated_at" in calls[0]
     assert run._recent_cache["since"] == "2026-08-23T10:07:00Z"
 
 
@@ -695,15 +694,48 @@ def test_companies_index_is_memoized(monkeypatch):
     assert run.companies_index() is idx and len(calls) == 1
 
 
-def test_due_every_fires_once_per_window(monkeypatch):
+def test_recent_stories_trims_aged_out_rows_locally(monkeypatch):
+    """A row falls out of the window the moment it is 48 h old, without
+    waiting for the next full reload — same as the old per-lap query."""
     import run
-    clock = [1000.0]
-    monkeypatch.setattr(run.time, "monotonic", lambda: clock[0])
-    assert run.due_every("x", 600) is True
-    assert run.due_every("x", 600) is False
-    clock[0] += 601
-    assert run.due_every("x", 600) is True
-    assert run.due_every("y", 600) is True  # independent keys
+    now = datetime.now(timezone.utc)
+    rows = [{"id": 1, "cluster_id": "a", "headline": "A", "status": "pending",
+             "created_at": (now - timedelta(hours=47, minutes=59)).isoformat(),
+             "updated_at": now.isoformat()}]
+    monkeypatch.setattr(run, "sb", lambda *a, **k: rows)
+    assert len(run.recent_stories()) == 1
+    rows[:] = []                      # delta returns nothing
+    run._recent_cache["rows"][1]["created_at"] = (now - timedelta(hours=49)).isoformat()
+    assert run.recent_stories() == []
+
+
+def test_silent_source_check_reads_only_quiet_sources(monkeypatch):
+    """The 48 h window proves most sources productive for free; only the quiet
+    ones are asked of the DB, and only for their own rows."""
+    import run
+    calls = []
+
+    def fake_sb(method, path, **kw):
+        calls.append((method, path))
+        if method == "PATCH":
+            return []
+        if "select=source_name" in path:
+            assert 'source_name=in.("Quiet","Silent")' in path and "Loud" not in path
+            return [{"source_name": "Quiet"}]   # produced on day 3 -> stays
+        if "select=created_at" in path:
+            return [{"created_at": "2026-01-01T00:00:00+00:00"}]
+        return []
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "recent_stories",
+                        lambda: [{"source_name": "Loud", "created_at": datetime.now(timezone.utc).isoformat()}])
+    fresh = datetime.now(timezone.utc).isoformat()
+    sources = [{"id": 1, "name": "Loud", "type": "rss", "last_fetched_at": fresh},
+               {"id": 2, "name": "Quiet", "type": "rss", "last_fetched_at": fresh},
+               {"id": 3, "name": "Silent", "type": "rss", "last_fetched_at": fresh}]
+    assert run.disable_dead_sources(sources) == 1     # only Silent retired
+    assert [p for m, p in calls if m == "PATCH" and "id=eq.3" in p]
+    assert sum(1 for m, p in calls if "select=source_name" in p) == 1
 
 
 def test_retention_cutoff_is_date_truncated(monkeypatch):

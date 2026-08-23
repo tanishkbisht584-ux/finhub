@@ -356,22 +356,10 @@ def usable_image(url, seen_counts):
 # free egress, and the org was put on notice. Everything here keeps one copy
 # per process and asks PostgREST only for what changed since the last lap.
 
-REFRESH_SECONDS = 3600    # full reload of the story window / companies / image counts
-SELF_HEAL_SECONDS = 600   # dead-source sweep + revive probe cadence (retire = 3 d of silence)
+REFRESH_SECONDS = 3600          # companies reload; window reload while 012 is missing
+WINDOW_REFRESH_SECONDS = 6 * 3600   # window reload once 012 deltas carry edits too (~once per CI process)
+IMAGE_REFRESH_SECONDS = 6 * 3600    # 7 d image counts: history only — this process counts its own inserts live
 RECENT_HOURS = 48
-
-_last_ran = {}
-
-
-def due_every(name, seconds):
-    """True once per `seconds` per process — for housekeeping that has no
-    business running on every 45 s lap."""
-    now = time.monotonic()
-    if now - _last_ran.get(name, float("-inf")) < seconds:
-        return False
-    _last_ran[name] = now
-    return True
-
 
 _recent_cache = {"at": 0.0, "since": None, "start": None, "rows": {}, "col": "updated_at"}
 
@@ -379,7 +367,8 @@ _recent_cache = {"at": 0.0, "since": None, "start": None, "rows": {}, "col": "up
 def recent_stories():
     """The RECENT_HOURS story window every lap clusters against, oldest first.
 
-    Full reload once per REFRESH_SECONDS (also drops rows that aged out);
+    Full reload once per WINDOW_REFRESH_SECONDS (REFRESH_SECONDS while the
+    delta can't see edits); rows that age out are dropped locally every call;
     between reloads only rows created OR edited since the last call are
     fetched, via `updated_at` (migration 012), so an admin reject or an editor
     merge is visible next lap exactly as it was when the whole window was
@@ -392,14 +381,15 @@ def recent_stories():
     ascending because refetched rows keep their slot and new ones append."""
     c = _recent_cache
     now = time.monotonic()
-    if now - c["at"] > REFRESH_SECONDS:
-        c.update(at=now, rows={}, since=None,
-                 start=datetime.now(timezone.utc) - timedelta(hours=RECENT_HOURS))
+    start = datetime.now(timezone.utc) - timedelta(hours=RECENT_HOURS)
+    if now - c["at"] > (WINDOW_REFRESH_SECONDS if c["col"] == "updated_at" else REFRESH_SECONDS):
+        c.update(at=now, rows={}, since=None)
+    c["start"] = start
     full = c["since"] is None
     while True:
         col = "created_at" if full else c["col"]
-        since = iso(c["start"]) if full else c["since"]
-        sel = "id,cluster_id,headline,status,created_at" + (",updated_at" if c["col"] == "updated_at" else "")
+        since = iso(start) if full else c["since"]
+        sel = "id,cluster_id,headline,status,source_name,created_at" + (",updated_at" if c["col"] == "updated_at" else "")
         try:
             rows = sb("GET", f"stories?select={sel}&{col}=gte.{since}&order=created_at.asc")
             break
@@ -410,11 +400,14 @@ def recent_stories():
                 continue
             raise
     for r in rows:
-        if parse_ts(r["created_at"]) < c["start"]:
-            continue  # an edited row older than the window is not window
         c["rows"][r["id"]] = r
     if rows:
         c["since"] = iso(max(parse_ts(r[c["col"]]) for r in rows))
+    # Trim here, every call: rows age out of the window at the same moment
+    # they used to fall off the old created_at>=48h query, and an edited row
+    # older than the window never gets in.
+    for sid in [i for i, r in c["rows"].items() if parse_ts(r["created_at"]) < start]:
+        del c["rows"][sid]
     return list(c["rows"].values())
 
 
@@ -461,7 +454,7 @@ def image_seen_counts():
     anyone an image, so they're not evidence of a house image. Ordered so
     sb()'s Range paging can't skip or duplicate a row mid-scan.
 
-    Memoized per process and refreshed once per REFRESH_SECONDS: this runs on
+    Memoized per process and refreshed once per IMAGE_REFRESH_SECONDS: this runs on
     every main() iteration, and a resident poller (LOOP_SECONDS) calls main()
     every 45s in prod — an unmemoized full scan of ~11k rows/week on every
     iteration would be an egress bill for a number that only moves when a run
@@ -471,7 +464,7 @@ def image_seen_counts():
     object lets those increments carry forward into the next iteration too,
     tightening house-image detection within the cache window instead of
     resetting every 45s."""
-    if time.monotonic() - _seen_images_cache["at"] <= REFRESH_SECONDS:
+    if time.monotonic() - _seen_images_cache["at"] <= IMAGE_REFRESH_SECONDS:
         return _seen_images_cache["counts"]
     since = iso(datetime.now(timezone.utc) - timedelta(days=7))
     counts = {}
@@ -1138,8 +1131,9 @@ def retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key):
     return healed
 
 
-def disable_dead_sources():
-    """Two ways a source dies, and only one used to be caught.
+def disable_dead_sources(sources):
+    """Two ways a source dies, and only one used to be caught. `sources` is
+    main()'s active list for this lap (one read, shared).
 
     (a) It stops responding — last_fetched_at goes stale. Caught before.
     (b) It answers HTTP 200 forever with frozen content. last_fetched_at keeps
@@ -1156,9 +1150,20 @@ def disable_dead_sources():
         print(f"SELF-HEAL: disabled unreachable source {s['name']}")
 
     since = iso(now - timedelta(days=SILENT_SOURCE_DAYS))
-    producing = {r["source_name"] for r in
-                 sb("GET", f"stories?select=source_name&created_at=gte.{since}")}
-    for s in sb("GET", "sources?select=id,name,type,last_fetched_at&is_active=eq.true&type=neq.youtube"):
+    # "Produced something in SILENT_SOURCE_DAYS": the 48 h window answers it
+    # for almost every source for free; only the few quiet ones are asked of
+    # the database, and only for their own rows (a quiet source has few).
+    producing = {r["source_name"] for r in recent_stories()}
+    quiet = [s["name"] for s in sources if s["name"] not in producing]
+    if quiet:
+        names = ",".join('"' + n.replace('"', '') + '"' for n in quiet)
+        producing |= {r["source_name"] for r in
+                      sb("GET", f"stories?select=source_name&created_at=gte.{since}"
+                                f"&source_name=in.({names})")}
+    dead_ids = {s["id"] for s in dead}
+    for s in sources:
+        if s["id"] in dead_ids:
+            continue
         # Only judge a source that has had a fair chance: seeded long enough ago
         # that SILENT_SOURCE_DAYS of silence is evidence rather than newness.
         if s["name"] in producing or not s["last_fetched_at"]:
@@ -1446,6 +1451,12 @@ def main(cfg=None):
                 print(f"INSERT FAIL {item['source']['name']}: {e}")
                 continue
             landed.add(base["cluster_id"])
+            if keep and not twin and base["image_url"]:
+                # Count the card's image the moment it lands (this is the
+                # only writer of stories), so the third use of an outlet's
+                # house graphic is refused on the very next lap — the 7 d
+                # reload in image_seen_counts is history, not the live count.
+                seen_images[base["image_url"]] = seen_images.get(base["image_url"], 0) + 1
             processed += 1 if keep else 0
             dropped += 0 if keep else 1
 
@@ -1497,9 +1508,8 @@ def main(cfg=None):
     alerted = alert_engine({s["name"]: s["authority"] for s in sources}, push=on("alerts"))
     personal = personal_alert_engine() if on("personal_alerts") else 0
     healed = retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key)
-    heal = due_every("self_heal", SELF_HEAL_SECONDS)  # 3 d of silence to retire; no need to look every lap
-    disabled = disable_dead_sources() if heal else 0
-    revived = revive_sources() if heal else 0
+    disabled = disable_dead_sources(sources)
+    revived = revive_sources()
     # off = strict manual review; the PENDING_MAX_MINUTES backstop is inside too
     approved = auto_approve() if on("auto_approve") else 0
     retention_sweep()
