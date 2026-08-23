@@ -8,3 +8,6 @@ __pycache__/
 # Supabase CLI
 supabase/.branches
 supabase/.temp
+
+# Firebase service-account keys (downloaded from the console) — never commit
+*firebase-adminsdk*.json
