@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../analysis.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ticks.dart';
@@ -221,6 +222,35 @@ class _StockScreenState extends State<StockScreen> {
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Center(child: appSpinner()),
             ),
+          ValueListenableBuilder<Map<String, Tick>>(
+            valueListenable: ticks,
+            builder: (_, m, __) {
+              final meta = m[widget.company.nseSymbol]?.meta ?? const {};
+              final fund = fundamentalLines(meta);
+              final tech = technicalLines(meta);
+              if (fund.isEmpty && tech.isEmpty) return const SizedBox.shrink();
+              return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (fund.isNotEmpty) ...[
+                      const Divider(height: 40),
+                      Text('FUNDAMENTALS', style: monoLabel),
+                      const SizedBox(height: 8),
+                      for (final (k, v) in fund) _kv(k, v),
+                      Text('Yahoo Finance · as of ${fmtDay(meta['f_at'])}',
+                          style: mono.copyWith(fontSize: 10)),
+                    ],
+                    if (tech.isNotEmpty) ...[
+                      const Divider(height: 40),
+                      Text('TECHNICALS', style: monoLabel),
+                      const SizedBox(height: 8),
+                      for (final (k, v) in tech) _kv(k, v),
+                      Text('computed from 1y daily closes · as of ${fmtDay(meta['t_at'])}',
+                          style: mono.copyWith(fontSize: 10)),
+                    ],
+                  ]);
+            },
+          ),
           if (_events.isNotEmpty) ...[
             const Divider(height: 40),
             Text('ON THE TAPE', style: monoLabel),
@@ -265,6 +295,19 @@ class _StockScreenState extends State<StockScreen> {
     );
   }
 }
+
+/// Fundamentals/Technicals line: label left, value right, both mono.
+Widget _kv(String k, String v) => Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+            width: 110,
+            child: Text(k, style: mono.copyWith(fontSize: 12))),
+        Expanded(
+            child: Text(v,
+                style: mono.copyWith(fontSize: 12, color: ink, height: 1.3))),
+      ]),
+    );
 
 /// One polyline, no chart package: the spec asks for a "light line chart" and
 /// a painter is 20 lines against a dependency.

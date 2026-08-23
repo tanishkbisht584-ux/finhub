@@ -246,6 +246,8 @@ class MarketsBody extends StatelessWidget {
       for (final s in data.list('nse_indices'))
         if (s['group'] == 'SECTORAL INDICES') s
     ];
+    final flows =
+        (data.blobs['flows'] as Map?)?.cast<String, dynamic>() ?? const {};
     final stale = _stale(data.updatedAt);
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -288,6 +290,33 @@ class MarketsBody extends StatelessWidget {
               ]),
             ),
           ]),
+        if (flows.isNotEmpty)
+          _Section('Flows', [
+            for (final side in ['fii', 'dii'])
+              if (flows[side] is Map)
+                _flowRow(side.toUpperCase(),
+                    (flows[side] as Map).cast<String, dynamic>(),
+                    flows['date']?.toString()),
+            if (flows['pcr'] != null)
+              _LineRow(
+                  lead: 'NIFTY',
+                  main: 'options · exp ${flows['expiry'] ?? ''}',
+                  trail: 'PCR ${flows['pcr']}',
+                  trailColor:
+                      (flows['pcr'] as num) >= 1 ? green : red,
+                  sub:
+                      'max OI at ${fmtNum(((flows['max_oi_strike'] ?? 0) as num).toDouble(), decimals: 0)} · spot ${fmtNum(((flows['underlying'] ?? 0) as num).toDouble(), decimals: 0)}'),
+            if (flows['breadth'] is Map)
+              for (final e in (flows['breadth'] as Map).entries)
+                _LineRow(
+                    lead: e.key.toString().replaceFirst('NIFTY ', 'N'),
+                    main: 'advance / decline',
+                    trail: '${e.value['adv']}↑ ${e.value['dec']}↓',
+                    trailColor: ((e.value['adv'] as num?) ?? 0) >=
+                            ((e.value['dec'] as num?) ?? 0)
+                        ? green
+                        : red),
+          ], stamp: data.blobUpdated['flows']),
         if (data.kind('fx').isNotEmpty)
           _Section('Currencies', [
             for (final t in data.kind('fx')) _TickRow(t, spark: true),
@@ -634,6 +663,18 @@ class _MacroRow extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// FII/DII cash-market line: net first, buy/sell underneath. Values are ₹ Cr.
+Widget _flowRow(String who, Map<String, dynamic> d, String? date) {
+  final net = (d['net'] as num?)?.toDouble() ?? 0;
+  return _LineRow(
+      lead: who,
+      main: 'cash market${date == null ? '' : ' · $date'}',
+      trail: '${net >= 0 ? '+' : '−'}₹${fmtNum(net.abs(), decimals: 0)} Cr',
+      trailColor: net >= 0 ? green : red,
+      sub:
+          'buy ₹${fmtNum(((d['buy'] ?? 0) as num).toDouble(), decimals: 0)} Cr · sell ₹${fmtNum(((d['sell'] ?? 0) as num).toDouble(), decimals: 0)} Cr');
 }
 
 /// Sector heatmap tile: index name without the "NIFTY " prefix, tinted by %.

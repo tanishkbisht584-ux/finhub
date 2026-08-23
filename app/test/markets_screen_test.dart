@@ -38,6 +38,14 @@ final _blobs = <String, dynamic>{
     {'symbol': 'TCS', 'person': 'A Person', 'side': 'Buy', 'qty': '100', 'category': 'Promoter',
      'mode': 'Market', 'date': '20-Aug-2026'},
   ],
+  'flows': {
+    'fii': {'buy': 12560.91, 'sell': 13103.62, 'net': -542.71},
+    'dii': {'buy': 15258.71, 'sell': 13134.57, 'net': 2124.14},
+    'date': '21-Aug-2026',
+    'pcr': 1.08, 'ce_oi': 2708660, 'pe_oi': 2918695, 'expiry': '25-Aug-2026',
+    'underlying': 24252, 'max_oi_strike': 24200,
+    'breadth': {'NIFTY 50': {'adv': 25, 'dec': 24}, 'NIFTY 500': {'adv': 217, 'dec': 276}},
+  },
   'nse_indices': [
     {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46},
     {'index': 'NIFTY 100', 'group': 'BROAD MARKET INDICES', 'pct': 0.02},
@@ -111,6 +119,13 @@ void main() {
     expect(find.text('SECTORS'), findsOneWidget);
     expect(find.text('IT'), findsOneWidget);
     expect(find.text('100'), findsNothing);
+    await tester.scrollUntilVisible(find.text('FLOWS'), 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pump();
+    expect(find.text('−₹543 Cr'), findsOneWidget);       // FII net, red side
+    expect(find.text('+₹2,124 Cr'), findsOneWidget);     // DII net
+    expect(find.text('PCR 1.08'), findsOneWidget);
+    expect(find.text('25↑ 24↓'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('MUTUAL FUNDS'), 300,
         scrollable: find.byType(Scrollable).first);
     await tester.pump();

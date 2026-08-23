@@ -29,6 +29,9 @@ CASES = [
     ("What is the Nifty at right now?", False),
     ("How much is gold per 10 grams today?", False),
     ("What is the USD INR rate today?", False),
+    # v0.20.0 analysis grounding: ratios/technicals ride the live-quote source.
+    ("What is the P/E of TCS?", False),
+    ("Is TCS stock overbought right now?", False),
     ("What happened in US markets overnight?", False),
     ("Any major corporate results announced recently?", False),
     # Concept questions (explainer lane): a full sectioned answer, never a

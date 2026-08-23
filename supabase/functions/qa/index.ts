@@ -316,6 +316,24 @@ async function liveQuotes(terms: string[]): Promise<Source[]> {
       .select("symbol,kind,name,price,prev_close,change_pct,currency,as_of,meta")
       .or(ors.join(","))
       .limit(5);
+    // Fundamentals/technicals (market.py writes meta.f / meta.t on equities):
+    // ride the same source so "is TCS expensive?" can cite P/E, not vibes.
+    const analysisOf = (meta: Record<string, unknown>): string => {
+      const f = (meta.f ?? {}) as Record<string, unknown>;
+      const t = (meta.t ?? {}) as Record<string, unknown>;
+      const bits: string[] = [];
+      if (f.pe != null) bits.push(`P/E ${f.pe}${f.fwd_pe != null ? ` (fwd ${f.fwd_pe})` : ""}`);
+      if (f.pb != null) bits.push(`P/B ${f.pb}`);
+      if (f.roe != null) bits.push(`ROE ${f.roe}%`);
+      if (f.margin != null) bits.push(`net margin ${f.margin}%`);
+      if (f.rev_growth != null) bits.push(`revenue growth ${f.rev_growth}% YoY`);
+      if (f.promoter_pct != null) bits.push(`promoter holding ${f.promoter_pct}%`);
+      if (f.rec != null && f.rec !== "none") bits.push(`analyst view ${String(f.rec).replace("_", " ")}${f.target != null ? ` (target ${f.target})` : ""}`);
+      if (t.rsi14 != null) bits.push(`RSI-14 ${t.rsi14}${Number(t.rsi14) >= 70 ? " (overbought)" : Number(t.rsi14) <= 30 ? " (oversold)" : ""}`);
+      if (t.trend != null) bits.push(`trend ${t.trend}${t.above200 === true ? ", above 200-DMA" : t.above200 === false ? ", below 200-DMA" : ""}`);
+      if (t.pos52 != null) bits.push(`at ${Math.round(Number(t.pos52) * 100)}% of its 52-week range`);
+      return bits.length ? ` Analysis: ${bits.join("; ")}.` : "";
+    };
     return (data ?? []).map((q: Record<string, unknown>) => {
       const meta = (q.meta ?? {}) as Record<string, unknown>;
       const units = String(meta.units ?? q.currency ?? "");
@@ -334,7 +352,8 @@ async function liveQuotes(terms: string[]): Promise<Source[]> {
         title: `Live: ${q.name} ${price} ${units}${pct}`,
         body: `${q.name}: ${price} ${units}${pct}${label}${period}` +
           (q.prev_close != null ? `; previous ${Number(q.prev_close).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "") +
-          (asOf ? `. As of ${asOf} IST.` : ".") + ` Source: ${src}.`,
+          (asOf ? `. As of ${asOf} IST.` : ".") + ` Source: ${src}.` +
+          analysisOf((q.meta ?? {}) as Record<string, unknown>),
         source_name: src,
         url: quoteUrl(q),
       };
