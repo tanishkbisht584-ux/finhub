@@ -202,3 +202,4 @@ with tab_v:
              ("pipeline module", getattr(run, "__file__", "?"))])
     st.caption("GitHub Actions secrets are separate from this machine's pipeline/.env; the Lanes tab on AI shows "
                "what CI actually served.")
+    page_link("integrations", "→ Integrations: every key, every store, test / add / push", icon=":material/hub:")

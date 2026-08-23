@@ -3,3 +3,4 @@ requests==2.33.0
 # the admin imports pipeline/run.py (fetchers, FCM senders, constants)
 feedparser==6.0.11
 google-auth==2.40.3
+pynacl==1.6.2   # encrypts GitHub Actions secrets (Integrations page)

@@ -41,8 +41,9 @@ NAV = {
                    ("alerts", "Alerts", ":material/notifications_active:"),
                    ("ai", "AI", ":material/psychology:"),
                    ("doctor", "Doctor", ":material/stethoscope:")],
-    "People & app": [("users", "Users", ":material/group:"),
-                     ("app_config", "App Config", ":material/tune:")],
+    "People": [("users", "Users", ":material/group:")],
+    "Settings": [("integrations", "Integrations", ":material/hub:"),
+                 ("app_config", "App Config", ":material/tune:")],
 }
 
 
@@ -410,6 +411,8 @@ def error_card(exc):
         hint = "GitHub token rejected — set GITHUB_TOKEN in .streamlit/secrets.toml."
     elif "Management API" in msg:
         hint = "Supabase Management API refused the call — check SUPABASE_ACCESS_TOKEN."
+    elif "nacl" in msg:
+        hint = "pynacl is missing — `pip install pynacl` in the admin's Python (needed to encrypt GitHub secrets)."
     elif "ConnectionError" in type(exc).__name__ or "Max retries" in msg:
         hint = "Network: Supabase / GitHub unreachable from this machine."
     st.markdown(f"<div class='fs-note' style='border-color:{RED}'><b>This page hit an error.</b> "
