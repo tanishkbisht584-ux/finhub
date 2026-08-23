@@ -3,7 +3,7 @@ from common import *  # noqa: F401,F403
 
 run = pipeline_mod()
 
-TYPES = ["rss", "google_news_query", "nse", "bse", "sebi", "rbi", "youtube",
+TYPES = ["rss", "google_news_query", "nse", "bse", "sebi", "rbi",
          "gnews_api", "newsdata", "marketaux"]  # migration 011 CHECK (was 007)
 sources = sb("GET", "sources?select=*&order=name")
 by_name = {s["name"]: s for s in sources}
@@ -63,7 +63,7 @@ with tab_a:
         a1, a2 = st.columns([2, 1])
         name = a1.text_input("Name")
         typ = a2.selectbox("Type", TYPES)
-        feed_url = st.text_input("Feed URL / query", help="RSS url, Google News query, or YouTube channel feed")
+        feed_url = st.text_input("Feed URL / query", help="RSS url or Google News query")
         auth = st.slider("Authority", 1, 10, 6, help="8+ can alert solo after 5 min; 10 = primary source")
         if st.form_submit_button("Add source", type="primary", icon=":material/add:") and name.strip():
             sb("POST", "sources", json={"name": name.strip(), "type": typ, "feed_url": feed_url.strip() or None,
@@ -79,7 +79,7 @@ with tab_t:
     if t1.button("Test fetch", type="primary", icon=":material/play_arrow:"):
         with st.spinner(f"fetching {pick} …"):
             try:
-                fetcher = run.fetch_videos if s["type"] == "youtube" else run.FETCHERS.get(s["type"], run.fetch_items)
+                fetcher = run.FETCHERS.get(s["type"], run.fetch_items)
                 t0 = time.monotonic()
                 items = fetcher(s)
                 st.success(f"{len(items)} item(s) in {time.monotonic() - t0:.1f}s")

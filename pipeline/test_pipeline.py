@@ -557,77 +557,6 @@ def test_og_image_never_raises(monkeypatch):
     assert run.og_image("https://x.com/file.pdf", {}) is None
 
 
-# ---------- M8: video matching ----------
-
-def test_youtube_sources_never_enter_the_story_path():
-    """A youtube source must be split out before the FETCHERS loop — its items
-    are media candidates, and fetch_items would happily turn them into stories."""
-    from run import split_sources
-    sources = [{"type": "rss"}, {"type": "youtube"}, {"type": "nse"}]
-    story_sources, yt_sources = split_sources(sources)
-    assert {s["type"] for s in story_sources} == {"rss", "nse"}
-    assert [s["type"] for s in yt_sources] == ["youtube"]
-
-
-def test_video_candidates_gate_on_cluster_and_recency():
-    from run import video_candidates, title_tokens
-    now = datetime.now(timezone.utc)
-    recent = [("c1", title_tokens("RBI cuts repo rate by 25 bps"))]
-    stories = {"c1": {"id": 7, "headline": "RBI cuts repo rate by 25 bps",
-                      "published_at": now.isoformat(), "video_url": None,
-                      "image_url": None}}
-    vids = [
-        # same cluster, fresh -> candidate
-        {"title": "RBI cuts repo rate 25 bps: what it means", "video_id": "a1",
-         "published_at": now.isoformat()},
-        # no cluster match -> discarded, no AI spent
-        {"title": "Closing Bell: Sensex today", "video_id": "b2",
-         "published_at": now.isoformat()},
-        # matches but 13h stale -> discarded
-        {"title": "RBI cuts repo rate by 25 bps analysis", "video_id": "c3",
-         "published_at": (now - timedelta(hours=13)).isoformat()},
-    ]
-    cands = video_candidates(vids, recent, stories)
-    assert [c["video_id"] for c in cands] == ["a1"]
-    assert cands[0]["story_id"] == 7
-
-
-def test_match_videos_patches_only_the_confirmed_story(monkeypatch):
-    """match_videos end-to-end: a matching + a non-matching video, one story
-    without an image. Asserts the one PATCH that actually writes stories."""
-    import run
-
-    now = datetime.now(timezone.utc)
-    story = {"id": 42, "cluster_id": "c1", "headline": "RBI cuts repo rate by 25 bps",
-             "published_at": now.isoformat(), "image_url": None, "video_url": None}
-    recent = [("c1", run.title_tokens(story["headline"]))]
-
-    calls = []
-    def fake_sb(method, path, **kwargs):
-        calls.append((method, path, kwargs.get("json")))
-        if method == "GET" and path.startswith("stories?"):
-            return [story]
-        return None
-    monkeypatch.setattr(run, "sb", fake_sb)
-    monkeypatch.setattr(run, "fetch_videos", lambda source: [
-        {"title": "RBI cuts repo rate 25 bps: what it means", "video_id": "a1",
-         "published_at": now.isoformat()},          # matches the story's cluster
-        {"title": "Closing Bell: Sensex today", "video_id": "b2",
-         "published_at": now.isoformat()},           # no cluster match -> gated out
-    ])
-    stub_video_match = lambda pairs: [0]  # confirms the sole surviving candidate
-
-    attached = run.match_videos([{"id": 99, "name": "Test Video", "feed_url": "http://x"}],
-                                 recent, {}, stub_video_match)
-
-    assert attached == 1
-    story_patches = [c for c in calls if c[0] == "PATCH" and c[1] == "stories?id=eq.42"]
-    assert len(story_patches) == 1
-    patch = story_patches[0][2]
-    assert patch["video_url"] == "https://www.youtube.com/watch?v=a1"
-    assert patch["image_url"] == "https://img.youtube.com/vi/a1/hqdefault.jpg"
-
-
 def test_image_seen_counts_filters_status_and_memoizes(monkeypatch):
     """Only approved/pending rows count toward house-image detection (a
     rejected/duplicate row never showed anyone an image), and a resident
@@ -653,7 +582,7 @@ def test_image_seen_counts_filters_status_and_memoizes(monkeypatch):
     assert len(calls) == 1
     assert second is first
 
-    # a mutation by a caller (og fallback / match_videos) survives the cache
+    # a mutation by a caller (og fallback) survives the cache
     first["https://x.com/a.jpg"] += 1
     assert run.image_seen_counts()["https://x.com/a.jpg"] == 3
 

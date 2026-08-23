@@ -11,7 +11,6 @@ HELP = {
     "alerts": "OFF = no broadcast pushes. Qualifying stories still publish, silently.",
     "personal_alerts": "OFF = no per-user (followed company/sector) pushes.",
     "chief_editor": "OFF = no comparative relevel/merge/feature pass (saves 1 AI call per cycle).",
-    "video_match": "OFF = no YouTube matching (saves 1 AI call per cycle).",
     "market": "OFF = no quotes/FX/crypto refresh into `quotes` (market.py). News is unaffected.",
 }
 sw = {s: bool((pc.get("switches") or {}).get(s, True)) for s in run.SWITCHES}

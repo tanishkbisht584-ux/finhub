@@ -59,11 +59,9 @@ KNOBS = ("MAX_AI_CALLS_PER_RUN", "AI_CONCURRENCY", "AI_PHASE_SECONDS", "DAILY_AI
          "PENDING_MAX_MINUTES", "AUTO_APPROVE_MINUTES", "FAST_LANE_SCORE", "BREAKING_MINUTES",
          "SILENT_SOURCE_DAYS", "REVIVE_AFTER_HOURS", "TRUSTED_SOLO_MINUTES", "TRUSTED_AUTHORITY",
          "MAX_ALERTS_PER_DAY", "QUIET_START_IST", "QUIET_END_IST", "QUIET_PIERCE_SCORE",
-         "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "VIDEO_BATCH_CAP",
-         "EVENTS_RETENTION_DAYS")
+         "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "EVENTS_RETENTION_DAYS")
 MODEL_ENVS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL")  # ai.py reads env at call time
-SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "video_match",
-            "market")
+SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "market")
 
 
 def load_config():
@@ -366,7 +364,7 @@ def image_seen_counts():
     iteration would be an egress bill for a number that only moves when a run
     actually inserts a new image. The returned dict is the cached object
     itself, not a copy: callers increment counts into it as they assign
-    images (see the og-fallback site and match_videos), and reusing the same
+    images (see the og-fallback site), and reusing the same
     object lets those increments carry forward into the next iteration too,
     tightening house-image detection within the cache window instead of
     resetting every 45s."""
@@ -648,110 +646,6 @@ def fetch_marketaux(source):
 
 FETCHERS.update({"gnews_api": fetch_gnews_api, "newsdata": fetch_newsdata,
                  "marketaux": fetch_marketaux})
-
-
-# ---------- broadcaster video (spec M8): media candidates, never stories ----------
-
-VIDEO_MAX_AGE_HOURS = 12   # a clip 12h+ from the story is a different bulletin
-VIDEO_BATCH_CAP = 20       # one AI call; keep the prompt readable
-
-
-def split_sources(sources):
-    """YouTube channels are media feeds, not news sources: their items must
-    never become story rows, so they leave the story path here."""
-    story = [s for s in sources if s["type"] != "youtube"]
-    yt = [s for s in sources if s["type"] == "youtube"]
-    return story, yt
-
-
-def fetch_videos(source):
-    """YouTube channel feed -> [{title, video_id, published_at}]. Plain RSS;
-    feedparser exposes <yt:videoId> as entry.yt_videoid."""
-    resp = requests.get(source["feed_url"], headers=UA, timeout=FETCH_TIMEOUT)
-    resp.raise_for_status()
-    vids = []
-    for e in feedparser.parse(resp.content).entries:
-        vid = e.get("yt_videoid")
-        title = (e.get("title") or "").strip()
-        if vid and title:
-            vids.append({"title": title, "video_id": vid,
-                         "published_at": entry_published(e)})
-    return vids
-
-
-def video_candidates(vids, recent, stories_by_cluster):
-    """Free deterministic gates before any AI: the video's title must land in
-    an existing story's cluster, and the clip must be within
-    VIDEO_MAX_AGE_HOURS of the story. Survivors carry their story.
-
-    One candidate per story_id, first wins: two channels covering the same
-    story would otherwise both PATCH it, and the second write silently
-    clobbers the first with no error and an inflated attached-count."""
-    # cluster_of() appends any unmatched video title to `recent` as a new
-    # cluster seed. A shallow copy keeps those appends local to this call —
-    # without it, video titles would leak into story clustering state if this
-    # ever runs before (or interleaved with) the story pass that owns `recent`.
-    recent = list(recent)
-    out = []
-    seen_stories = set()
-    for v in vids:
-        cid, known = cluster_of(v["title"], recent)
-        story = stories_by_cluster.get(cid) if known else None
-        if not story or story["video_url"] or story["id"] in seen_stories:
-            continue
-        v_ts, s_ts = v.get("published_at"), story.get("published_at")
-        if not v_ts or not s_ts:
-            continue
-        if abs((parse_ts(v_ts) - parse_ts(s_ts)).total_seconds()) > VIDEO_MAX_AGE_HOURS * 3600:
-            continue
-        seen_stories.add(story["id"])
-        out.append({**v, "story_id": story["id"],
-                    "story_headline": story["headline"],
-                    "story_image": story.get("image_url")})
-    return out
-
-
-def match_videos(yt_sources, recent, seen_images, video_match):
-    """The whole video path: fetch channels, gate, one batched AI call, patch
-    matched stories. Every failure path costs a video, never a story."""
-    vids = []
-    for s in yt_sources:
-        try:
-            vids += fetch_videos(s)
-            sb("PATCH", f"sources?id=eq.{s['id']}",
-               json={"last_fetched_at": datetime.now(timezone.utc).isoformat()})
-        except Exception as e:
-            print(f"VIDEO FEED FAIL {s['name']}: {e}")
-    if not vids:
-        return 0
-    since = iso(datetime.now(timezone.utc) - timedelta(hours=48))
-    stories_by_cluster = {}
-    # Ordered oldest-first so setdefault keeps the EARLIEST member of each
-    # cluster — the seed that started it (see cluster_of) — rather than
-    # whatever row PostgREST happened to return first. The seed is the card;
-    # attaching the video to it, not to a later duplicate, is the whole point.
-    for r in sb("GET", f"stories?select=id,cluster_id,headline,published_at,"
-                       f"image_url,video_url&created_at=gte.{since}"
-                       "&status=in.(approved,pending)&order=created_at.asc"):
-        stories_by_cluster.setdefault(r["cluster_id"], r)
-    cands = video_candidates(vids, recent, stories_by_cluster)[:VIDEO_BATCH_CAP]
-    confirmed = video_match([(c["title"], c["story_headline"]) for c in cands])
-    attached = 0
-    for i in confirmed:
-        c = cands[i]
-        patch = {"video_url": f"https://www.youtube.com/watch?v={c['video_id']}"}
-        if not c["story_image"]:
-            thumb = usable_image(
-                f"https://img.youtube.com/vi/{c['video_id']}/hqdefault.jpg", seen_images)
-            if thumb:
-                patch["image_url"] = thumb
-                # seen_images is read-only otherwise: without this, the same
-                # channel thumbnail could be assigned to every candidate this
-                # run before any run ever sees it HOUSE_IMAGE_USES times.
-                seen_images[thumb] = seen_images.get(thumb, 0) + 1
-        sb("PATCH", f"stories?id=eq.{c['story_id']}", json=patch)
-        attached += 1
-    return attached
 
 
 # ---------- alert engine (spec §7 machine gate) ----------
@@ -1160,11 +1054,7 @@ def disable_dead_sources():
     since = iso(now - timedelta(days=SILENT_SOURCE_DAYS))
     producing = {r["source_name"] for r in
                  sb("GET", f"stories?select=source_name&created_at=gte.{since}")}
-    for s in sb("GET", "sources?select=id,name,type,last_fetched_at&is_active=eq.true"):
-        # YouTube channels never produce stories by design (spec M8) — judging
-        # them "silent" by story output would retire every one of them in 3 days.
-        if s["type"] == "youtube":
-            continue
+    for s in sb("GET", "sources?select=id,name,type,last_fetched_at&is_active=eq.true&type=neq.youtube"):
         # Only judge a source that has had a fair chance: seeded long enough ago
         # that SILENT_SOURCE_DAYS of silence is evidence rather than newness.
         if s["name"] in producing or not s["last_fetched_at"]:
@@ -1192,15 +1082,11 @@ def revive_sources():
     so the next attempt is naturally spaced rather than hammering a dead host."""
     cutoff = iso(datetime.now(timezone.utc) - timedelta(hours=REVIVE_AFTER_HOURS))
     revived = 0
-    for s in sb("GET", "sources?select=*&is_active=eq.false"):
+    for s in sb("GET", "sources?select=*&is_active=eq.false&type=neq.youtube"):
         if s["last_fetched_at"] and s["last_fetched_at"] > cutoff:
             continue  # probed recently enough
         try:
-            # A retired youtube source is a video feed, not a story feed —
-            # probing it with fetch_items would be the exact split_sources()
-            # invariant this pipeline otherwise enforces everywhere else.
-            items = (fetch_videos(s) if s["type"] == "youtube"
-                     else FETCHERS.get(s["type"], fetch_items)(s))
+            items = FETCHERS.get(s["type"], fetch_items)(s)
         except Exception as e:
             print(f"REVIVE probe failed {s['name']}: {str(e)[:80]}")
             continue
@@ -1285,10 +1171,11 @@ def main(cfg=None):
     switches = apply_config(load_config() if cfg is None else cfg)
     on = switches.get
     from ai import (AIError, QuotaExhausted, editor_pass, process_story,
-                    usage_report, video_match)  # after env load
+                    usage_report)  # after env load
 
-    sources = sb("GET", "sources?select=*&is_active=eq.true")
-    sources, yt_sources = split_sources(sources)  # youtube items never enter the story path
+    # type=neq.youtube: the video feature was retired 2026-08-23 (pictures only);
+    # channel rows stay in the table but must never enter the story path.
+    sources = sb("GET", "sources?select=*&is_active=eq.true&type=neq.youtube")
     companies_by_key = {}
     for c in sb("GET", "companies?select=id,name,nse_symbol,aliases"):
         if c.get("nse_symbol"):
@@ -1450,7 +1337,7 @@ def main(cfg=None):
                 og_fetches += 1
                 base["image_url"] = og_image(fetch_url, seen_images)
                 if base["image_url"]:
-                    # Same reason as match_videos: seen_images is read-only
+                    # seen_images is read-only
                     # for the rest of this run otherwise, and one generic
                     # og:image could land on up to OG_FETCH_CAP cards before
                     # any run ever counts it 3 times.
@@ -1521,7 +1408,6 @@ def main(cfg=None):
     releveled = chief_editor(editor_pass) if processed and on("chief_editor") else 0
     alerted = alert_engine({s["name"]: s["authority"] for s in sources}, push=on("alerts"))
     personal = personal_alert_engine() if on("personal_alerts") else 0
-    videos = match_videos(yt_sources, recent, seen_images, video_match) if on("video_match") else 0
     healed = retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key)
     disabled = disable_dead_sources()
     revived = revive_sources()
@@ -1538,8 +1424,7 @@ def main(cfg=None):
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
           + (f", {merged} merged into an existing story" if merged else "")
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
-          + f" | editor: {releveled} releveled | alerts: {alerted} sent, {personal} personal alerts, "
-          f"{videos} videos attached | "
+          + f" | editor: {releveled} releveled | alerts: {alerted} sent, {personal} personal alerts | "
           f"self-heal: {healed} recovered, {disabled} retired, {revived} revived, {approved} auto-approved"
           + (f" | market: {quotes} quotes" if quotes else ""))
     served = usage_report()
@@ -1550,7 +1435,7 @@ def main(cfg=None):
             "dupes": len(dupes), "noise": len(noise), "deferred": skipped,
             "processed": processed, "dropped": dropped, "flagged": flagged, "merged": merged,
             "quota_blocked": quota_blocked, "held": held, "releveled": releveled,
-            "alerted": alerted, "personal": personal, "videos": videos, "healed": healed,
+            "alerted": alerted, "personal": personal, "healed": healed,
             "disabled": disabled, "revived": revived, "approved": approved, "quotes": quotes,
             "switched_off": [k for k, v in switches.items() if not v]}
 
