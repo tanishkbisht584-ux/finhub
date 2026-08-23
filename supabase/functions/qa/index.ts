@@ -322,8 +322,10 @@ async function liveQuotes(terms: string[]): Promise<Source[]> {
       const price = Number(q.price).toLocaleString("en-IN", { maximumFractionDigits: 2 });
       const pct = q.change_pct == null ? "" :
         ` (${Number(q.change_pct) >= 0 ? "▲" : "▼"}${Math.abs(Number(q.change_pct)).toFixed(2)}% on the day)`;
+      // Date only: Yahoo's daily bars are stamped at session open, so a
+      // clock time would read as "09:15" for what is really that day's close.
       const asOf = q.as_of ? new Date(String(q.as_of)).toLocaleString("en-IN",
-        { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+        { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" }) + " (last session)" : "";
       const src = q.kind === "crypto" ? "CoinGecko" : q.kind === "mf" ? "mfapi.in (AMFI NAV)" :
         q.kind === "macro" ? "FRED" : "Yahoo Finance (delayed)";
       const label = meta.label ? ` — ${meta.label}` : "";
