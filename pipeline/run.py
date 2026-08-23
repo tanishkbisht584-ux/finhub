@@ -349,6 +349,109 @@ def usable_image(url, seen_counts):
     return url
 
 
+# ---------- per-process caches (egress) ----------
+# Measured 2026-08-23: the resident poller re-downloaded ~2 MB of unchanged
+# rows on every lap — 48 h of stories, every company, 3 days of source_name,
+# ~1,600 already-known url hashes — about 55 GB/month against Supabase's 5 GB
+# free egress, and the org was put on notice. Everything here keeps one copy
+# per process and asks PostgREST only for what changed since the last lap.
+
+REFRESH_SECONDS = 3600    # full reload of the story window / companies / image counts
+SELF_HEAL_SECONDS = 600   # dead-source sweep + revive probe cadence (retire = 3 d of silence)
+RECENT_HOURS = 48
+
+_last_ran = {}
+
+
+def due_every(name, seconds):
+    """True once per `seconds` per process — for housekeeping that has no
+    business running on every 45 s lap."""
+    now = time.monotonic()
+    if now - _last_ran.get(name, float("-inf")) < seconds:
+        return False
+    _last_ran[name] = now
+    return True
+
+
+_recent_cache = {"at": 0.0, "since": None, "start": None, "rows": {}, "col": "updated_at"}
+
+
+def recent_stories():
+    """The RECENT_HOURS story window every lap clusters against, oldest first.
+
+    Full reload once per REFRESH_SECONDS (also drops rows that aged out);
+    between reloads only rows created OR edited since the last call are
+    fetched, via `updated_at` (migration 012), so an admin reject or an editor
+    merge is visible next lap exactly as it was when the whole window was
+    re-read each time. Until 012 is applied PostgREST 400s on the column; then
+    we fall back to a `created_at` delta — this process's own inserts still
+    arrive next lap, edits wait for the hourly reload.
+
+    `gte` plus an id-keyed dict: rows sharing the boundary second are fetched
+    again and replace themselves, never skipped; dict order stays created_at
+    ascending because refetched rows keep their slot and new ones append."""
+    c = _recent_cache
+    now = time.monotonic()
+    if now - c["at"] > REFRESH_SECONDS:
+        c.update(at=now, rows={}, since=None,
+                 start=datetime.now(timezone.utc) - timedelta(hours=RECENT_HOURS))
+    full = c["since"] is None
+    while True:
+        col = "created_at" if full else c["col"]
+        since = iso(c["start"]) if full else c["since"]
+        sel = "id,cluster_id,headline,status,created_at" + (",updated_at" if c["col"] == "updated_at" else "")
+        try:
+            rows = sb("GET", f"stories?select={sel}&{col}=gte.{since}&order=created_at.asc")
+            break
+        except requests.HTTPError as e:
+            if c["col"] == "updated_at" and "updated_at" in str(e):
+                print("RECENT WINDOW: migration 012 not applied — created_at delta, edits land hourly")
+                c["col"] = "created_at"
+                continue
+            raise
+    for r in rows:
+        if parse_ts(r["created_at"]) < c["start"]:
+            continue  # an edited row older than the window is not window
+        c["rows"][r["id"]] = r
+    if rows:
+        c["since"] = iso(max(parse_ts(r[c["col"]]) for r in rows))
+    return list(c["rows"].values())
+
+
+_known_hashes = set()
+
+
+def existing_hashes(hashes):
+    """Which of `hashes` already have a story row. A row is never deleted, so a
+    hash once seen here (or inserted by insert_story) is remembered for the
+    life of the process: the same ~1,600 feed items come back every lap and
+    used to be echoed back from the database each time (~130 KB/lap)."""
+    ask = [h for h in dict.fromkeys(hashes) if h not in _known_hashes]
+    for i in range(0, len(ask), 100):
+        chunk = ",".join(f'"{h}"' for h in ask[i:i + 100])
+        for row in sb("GET", f"stories?select=url_hash&url_hash=in.({chunk})"):
+            _known_hashes.add(row["url_hash"])
+    return {h for h in hashes if h in _known_hashes}
+
+
+_companies_cache = {"at": 0.0, "by_key": {}}
+
+
+def companies_index():
+    """nse_symbol / name / alias -> company id, reloaded hourly. Nothing in
+    this pipeline inserts companies, so an hour-old copy tags exactly as well."""
+    if time.monotonic() - _companies_cache["at"] > REFRESH_SECONDS:
+        by_key = {}
+        for c in sb("GET", "companies?select=id,name,nse_symbol,aliases"):
+            if c.get("nse_symbol"):
+                by_key[c["nse_symbol"].upper()] = c["id"]
+            by_key[c["name"].casefold()] = c["id"]
+            for a in c.get("aliases") or []:
+                by_key[a.casefold()] = c["id"]
+        _companies_cache.update(at=time.monotonic(), by_key=by_key)
+    return _companies_cache["by_key"]
+
+
 _seen_images_cache = {"at": 0.0, "counts": {}}
 
 
@@ -358,7 +461,7 @@ def image_seen_counts():
     anyone an image, so they're not evidence of a house image. Ordered so
     sb()'s Range paging can't skip or duplicate a row mid-scan.
 
-    Memoized per process and refreshed at most every 10 minutes: this runs on
+    Memoized per process and refreshed once per REFRESH_SECONDS: this runs on
     every main() iteration, and a resident poller (LOOP_SECONDS) calls main()
     every 45s in prod — an unmemoized full scan of ~11k rows/week on every
     iteration would be an egress bill for a number that only moves when a run
@@ -368,7 +471,7 @@ def image_seen_counts():
     object lets those increments carry forward into the next iteration too,
     tightening house-image detection within the cache window instead of
     resetting every 45s."""
-    if time.monotonic() - _seen_images_cache["at"] <= 600:
+    if time.monotonic() - _seen_images_cache["at"] <= REFRESH_SECONDS:
         return _seen_images_cache["counts"]
     since = iso(datetime.now(timezone.utc) - timedelta(days=7))
     counts = {}
@@ -984,15 +1087,16 @@ def parse_ts(s):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def remaining_budget_today():
+def remaining_budget_today(window):
     """Free-tier calls left today, paced so the day doesn't get spent by dawn.
     Counts non-duplicate rows since IST midnight — every one cost roughly a call
     (duplicates and low-value filtering are free). Slight overcount is deliberate:
-    running out early is worse than pacing conservatively."""
-    midnight = iso(datetime.now(timezone.utc).astimezone(IST).replace(
-        hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
-    spent = len(sb("GET", f"stories?select=id&created_at=gte.{midnight}"
-                          "&status=neq.duplicate"))
+    running out early is worse than pacing conservatively. `window` is
+    recent_stories(): 48 h always covers "since midnight", no extra read."""
+    midnight = datetime.now(timezone.utc).astimezone(IST).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    spent = sum(1 for r in window
+                if r["status"] != "duplicate" and parse_ts(r["created_at"]) >= midnight)
     left = max(0, DAILY_AI_BUDGET - spent)
     if left == 0:
         print(f"daily AI budget spent ({spent}/{DAILY_AI_BUDGET}); "
@@ -1144,17 +1248,9 @@ def retention_sweep():
 
 # ---------- main ----------
 
-def existing_hashes(hashes):
-    found = set()
-    for i in range(0, len(hashes), 100):
-        chunk = ",".join(f'"{h}"' for h in hashes[i:i + 100])
-        for row in sb("GET", f"stories?select=url_hash&url_hash=in.({chunk})"):
-            found.add(row["url_hash"])
-    return found
-
-
 def insert_story(row, companies_by_key, card=None):
     story = sb("POST", "stories", json=row, headers={"Prefer": "return=representation"})[0]
+    _known_hashes.add(row["url_hash"])
     links = []
     for c in (card or {}).get("companies", []):
         cid = (companies_by_key.get(str(c.get("nse_symbol", "")).upper())
@@ -1176,22 +1272,14 @@ def main(cfg=None):
     # type=neq.youtube: the video feature was retired 2026-08-23 (pictures only);
     # channel rows stay in the table but must never enter the story path.
     sources = sb("GET", "sources?select=*&is_active=eq.true&type=neq.youtube")
-    companies_by_key = {}
-    for c in sb("GET", "companies?select=id,name,nse_symbol,aliases"):
-        if c.get("nse_symbol"):
-            companies_by_key[c["nse_symbol"].upper()] = c["id"]
-        companies_by_key[c["name"].casefold()] = c["id"]
-        for a in c.get("aliases") or []:
-            companies_by_key[a.casefold()] = c["id"]
-
+    companies_by_key = companies_index()
     seen_images = image_seen_counts()
 
-    since = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Oldest first, one entry per cluster: the seed decides what the cluster is
     # about (see cluster_of). Loading every member is what let clusters chain.
+    window = recent_stories()
     recent, seen_clusters, published = [], set(), []
-    for r in sb("GET", f"stories?select=cluster_id,headline,status&created_at=gte.{since}"
-                       "&order=created_at.asc"):
+    for r in window:
         if r["cluster_id"] not in seen_clusters:
             seen_clusters.add(r["cluster_id"])
             recent.append((r["cluster_id"], title_tokens(r["headline"])))
@@ -1244,7 +1332,7 @@ def main(cfg=None):
     # The daily one only started mattering once the poller ran continuously —
     # 3800 passes/day against a ~3000-call budget would spend the day by 02:00
     # and leave the feed frozen until midnight.
-    cap = min(MAX_AI_CALLS_PER_RUN, remaining_budget_today())
+    cap = min(MAX_AI_CALLS_PER_RUN, remaining_budget_today(window))
     skipped = max(0, len(to_process) - cap)
     to_process = to_process[:cap]
     print(f"{len(items)} fetched, {len(fresh)} new -> {len(to_process)} to AI, "
@@ -1409,8 +1497,9 @@ def main(cfg=None):
     alerted = alert_engine({s["name"]: s["authority"] for s in sources}, push=on("alerts"))
     personal = personal_alert_engine() if on("personal_alerts") else 0
     healed = retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key)
-    disabled = disable_dead_sources()
-    revived = revive_sources()
+    heal = due_every("self_heal", SELF_HEAL_SECONDS)  # 3 d of silence to retire; no need to look every lap
+    disabled = disable_dead_sources() if heal else 0
+    revived = revive_sources() if heal else 0
     # off = strict manual review; the PENDING_MAX_MINUTES backstop is inside too
     approved = auto_approve() if on("auto_approve") else 0
     retention_sweep()

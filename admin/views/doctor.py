@@ -18,7 +18,8 @@ PAGE_FOR = {"logs": ("pipeline", "Pipeline · last run + stdout"),
 # migration file prefix -> PostgREST probe that 404/400s until it is applied
 MARKERS = {"001": "stories?select=id", "003": "profiles?select=id", "004": "stories?select=fts",
            "007": "stories?select=video_url", "008": "stories?select=deep_read",
-           "010": "app_config?select=key", "011": "quotes?select=symbol"}
+           "010": "app_config?select=key", "011": "quotes?select=symbol",
+           "012": "stories?select=updated_at"}
 MIG_DIR = REPO / "pipeline" / "migrations"
 
 

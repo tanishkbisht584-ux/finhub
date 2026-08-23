@@ -9,6 +9,18 @@ from run import assign_cluster, canonical_url, title_tokens, url_hash
 from seed.companies_seed import display_name
 
 
+@pytest.fixture(autouse=True)
+def _fresh_process_caches():
+    """run.py memoizes per process (egress fix, 2026-08-23); tests must not
+    see each other's cached windows, hashes or companies."""
+    import run
+    run._recent_cache.update(at=0.0, since=None, start=None, rows={}, col="updated_at")
+    run._known_hashes.clear()
+    run._companies_cache.update(at=0.0, by_key={})
+    run._last_ran.clear()
+    run._seen_images_cache.update(at=0.0, counts={})
+
+
 def test_url_hash_strips_tracking_and_normalizes():
     a = url_hash("https://ET.com/story/1?utm_source=rss&utm_medium=x&gclid=abc")
     b = url_hash("https://et.com/story/1/")
@@ -561,9 +573,8 @@ def test_image_seen_counts_filters_status_and_memoizes(monkeypatch):
     """Only approved/pending rows count toward house-image detection (a
     rejected/duplicate row never showed anyone an image), and a resident
     poller calling this every 45s must not re-scan every time -- only after
-    the 10-minute cache window."""
+    the cache window."""
     import run
-    run._seen_images_cache = {"at": 0.0, "counts": {}}
     calls = []
 
     def fake_sb(method, path, **kw):
@@ -585,6 +596,114 @@ def test_image_seen_counts_filters_status_and_memoizes(monkeypatch):
     # a mutation by a caller (og fallback) survives the cache
     first["https://x.com/a.jpg"] += 1
     assert run.image_seen_counts()["https://x.com/a.jpg"] == 3
+
+
+# ---------- egress caches (2026-08-23) ----------
+
+def test_recent_stories_full_load_then_updated_at_delta(monkeypatch):
+    """Lap 1 loads the 48 h window by created_at; lap 2 asks only for rows
+    updated since the newest updated_at seen; a re-fetched row replaces
+    itself (no duplicate), an edited row's new status shows, and a row older
+    than the window is ignored even when it was edited."""
+    import run
+    calls = []
+    t0 = datetime(2026, 8, 23, 10, 0, tzinfo=timezone.utc)
+    ts = lambda m: (t0 + timedelta(minutes=m)).isoformat()
+
+    def fake_sb(method, path, **kw):
+        calls.append(path)
+        if "created_at=gte." in path:
+            return [{"id": 1, "cluster_id": "a", "headline": "A", "status": "pending",
+                     "created_at": ts(0), "updated_at": ts(0)},
+                    {"id": 2, "cluster_id": "b", "headline": "B", "status": "approved",
+                     "created_at": ts(1), "updated_at": ts(1)}]
+        assert "updated_at=gte.2026-08-23T10:01:00Z" in path, path
+        return [{"id": 2, "cluster_id": "b", "headline": "B", "status": "rejected",
+                 "created_at": ts(1), "updated_at": ts(5)},             # edited in admin
+                {"id": 3, "cluster_id": "c", "headline": "C", "status": "pending",
+                 "created_at": ts(6), "updated_at": ts(6)},             # new
+                {"id": 0, "cluster_id": "z", "headline": "old", "status": "approved",
+                 "created_at": (t0 - timedelta(days=9)).isoformat(),    # edited but aged out
+                 "updated_at": ts(7)}]
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    first = run.recent_stories()
+    assert [r["id"] for r in first] == [1, 2]
+    second = run.recent_stories()
+    assert [r["id"] for r in second] == [1, 2, 3]          # order kept, no duplicate, no row 0
+    assert second[1]["status"] == "rejected"                # the edit landed next lap
+    assert len(calls) == 2 and "select=id,cluster_id,headline,status,created_at,updated_at" in calls[0]
+    assert run._recent_cache["since"] == "2026-08-23T10:07:00Z"
+
+
+def test_recent_stories_falls_back_to_created_at_before_012(monkeypatch, capsys):
+    import run, requests
+    calls = []
+
+    def fake_sb(method, path, **kw):
+        calls.append(path)
+        if "updated_at" in path:
+            raise requests.HTTPError('400 stories: column stories.updated_at does not exist')
+        return [{"id": 1, "cluster_id": "a", "headline": "A", "status": "pending",
+                 "created_at": "2026-08-23T10:00:00+00:00"}]
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    assert [r["id"] for r in run.recent_stories()] == [1]
+    run.recent_stories()
+    assert "012 not applied" in capsys.readouterr().out
+    assert calls[-1].count("updated_at") == 0 and "created_at=gte.2026-08-23T10:00:00Z" in calls[-1]
+    assert len(calls) == 3  # failed probe, full load, delta — and never the column again
+
+
+def test_remaining_budget_counts_the_window_locally(monkeypatch):
+    import run
+    monkeypatch.setattr(run, "DAILY_AI_BUDGET", 10)
+    monkeypatch.setattr(run, "sb", lambda *a, **k: pytest.fail("no DB read expected"))
+    today = datetime.now(timezone.utc).isoformat()
+    yday = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+    window = [{"status": "pending", "created_at": today},
+              {"status": "duplicate", "created_at": today},   # free
+              {"status": "rejected", "created_at": yday}]     # yesterday
+    assert run.remaining_budget_today(window) == 9
+
+
+def test_existing_hashes_remembers_and_insert_marks_known(monkeypatch):
+    import run
+    asked = []
+
+    def fake_sb(method, path, **kw):
+        if method == "POST":
+            return [{"id": 7}]
+        asked.append(path)
+        return [{"url_hash": "h1"}] if '"h1"' in path else []
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    assert run.existing_hashes(["h1", "h2"]) == {"h1"}
+    assert len(asked) == 1
+    run.insert_story({"url_hash": "h2"}, {})
+    assert run.existing_hashes(["h1", "h2", "h3"]) == {"h1", "h2"}
+    assert len(asked) == 2 and '"h3"' in asked[1] and '"h1"' not in asked[1]  # only the unknown one
+
+
+def test_companies_index_is_memoized(monkeypatch):
+    import run
+    calls = []
+    monkeypatch.setattr(run, "sb", lambda m, p, **k: calls.append(p) or
+                        [{"id": 1, "name": "Tata Consultancy Services", "nse_symbol": "tcs", "aliases": ["TCS Ltd"]}])
+    idx = run.companies_index()
+    assert idx["TCS"] == 1 and idx["tcs ltd"] == 1 and idx["tata consultancy services"] == 1
+    assert run.companies_index() is idx and len(calls) == 1
+
+
+def test_due_every_fires_once_per_window(monkeypatch):
+    import run
+    clock = [1000.0]
+    monkeypatch.setattr(run.time, "monotonic", lambda: clock[0])
+    assert run.due_every("x", 600) is True
+    assert run.due_every("x", 600) is False
+    clock[0] += 601
+    assert run.due_every("x", 600) is True
+    assert run.due_every("y", 600) is True  # independent keys
 
 
 def test_retention_cutoff_is_date_truncated(monkeypatch):
