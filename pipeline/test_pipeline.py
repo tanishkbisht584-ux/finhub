@@ -750,6 +750,9 @@ def test_retention_cutoff_is_date_truncated(monkeypatch):
     assert method == "DELETE"
     assert "events?created_at=lt." in path
     assert "T00:00:00" in path
+    # rejected cards too — and ONLY rejected: an approved card is the product
+    rej = [p for m, p in calls if p.startswith("stories?")]
+    assert rej == [p for p in rej if "status=eq.rejected" in p and "T00:00:00" in p] and len(rej) == 1
 
 
 def test_dead_model_lane_benched_not_fatal(monkeypatch):

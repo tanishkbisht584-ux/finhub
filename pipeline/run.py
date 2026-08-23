@@ -59,7 +59,8 @@ KNOBS = ("MAX_AI_CALLS_PER_RUN", "AI_CONCURRENCY", "AI_PHASE_SECONDS", "DAILY_AI
          "PENDING_MAX_MINUTES", "AUTO_APPROVE_MINUTES", "FAST_LANE_SCORE", "BREAKING_MINUTES",
          "SILENT_SOURCE_DAYS", "REVIVE_AFTER_HOURS", "TRUSTED_SOLO_MINUTES", "TRUSTED_AUTHORITY",
          "MAX_ALERTS_PER_DAY", "QUIET_START_IST", "QUIET_END_IST", "QUIET_PIERCE_SCORE",
-         "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "EVENTS_RETENTION_DAYS")
+         "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "EVENTS_RETENTION_DAYS",
+         "REJECTED_RETENTION_DAYS")
 MODEL_ENVS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL")  # ai.py reads env at call time
 SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "market")
 
@@ -1231,6 +1232,10 @@ def auto_approve():
 
 EVENTS_RETENTION_DAYS = 90   # spec M8: events grows on every swipe, forever,
                              # against a 500 MB free tier — this makes it run for years
+REJECTED_RETENTION_DAYS = 30  # 2026-08-23: rejected rows were 26% of stories (9.6k) and
+                              # nobody ever sees one; they only exist as "seen this url".
+                              # ~2k stories/day since the throughput fix → 500 MB in ~4
+                              # months; this roughly halves that. Approved cards: never.
 
 
 def retention_sweep():
@@ -1241,6 +1246,11 @@ def retention_sweep():
         .replace(hour=0, minute=0, second=0, microsecond=0)
     try:
         sb("DELETE", f"events?created_at=lt.{iso(cutoff)}")
+        # A rejected story's only job after a month is holding a url_hash; a
+        # feed that resurfaces a 30-day-old link just gets it rejected again.
+        rej = (datetime.now(timezone.utc) - timedelta(days=REJECTED_RETENTION_DAYS)) \
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+        sb("DELETE", f"stories?status=eq.rejected&created_at=lt.{iso(rej)}")
         # run/edge logs: 1 run row per loop iteration (~1900/day) would eat the
         # free tier in months — keep failures 14 d, healthy runs 48 h, edge 30 d
         now = datetime.now(timezone.utc)
