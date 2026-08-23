@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # run as a script from repo root
-from run import load_config, load_env, sb, send_fcm_token  # noqa: E402
+from run import iso, load_config, load_env, sb, send_fcm_token  # noqa: E402
 
 INGEST_MAX_H = 3     # no new approved story for this long => frozen
 FEED_TOP_MAX_H = 12  # nothing fresh in the feed's visible top => frozen
@@ -90,11 +90,11 @@ def gather(repo, gh_token):
             return _age_h(rows[0]["created_at"], now) if rows else 999
         f["approved_age"] = newest_age("status=eq.approved&")
         f["ingested_age"] = newest_age("")
-        since = (now - timedelta(hours=48)).isoformat()
+        since = iso(now - timedelta(hours=48))  # Z, not +00:00: "+" is a space in a URL
         top = sb("GET", "stories?select=published_at&status=eq.approved"
                         f"&published_at=gte.{since}&order=is_featured.desc,published_at.desc&limit=10")
         f["top_age"] = min((_age_h(r["published_at"], now) for r in top), default=999)
-        hr = (now - timedelta(hours=1)).isoformat()
+        hr = iso(now - timedelta(hours=1))
         f["flagged_hour"] = len(sb("GET", f"stories?select=id&status=eq.flagged&created_at=gte.{hr}&limit={FLAG_SPIKE}"))
         f["switches"] = load_config().get("switches") or {}
     except Exception as e:  # noqa: BLE001
@@ -116,7 +116,7 @@ def gather(repo, gh_token):
             f["starved"] = bool(cycles) and len(starved) >= len(cycles) / 2
         stuck = [r for r in runs if not r["finished_at"] and _age_h(r["started_at"], now) * 60 > RUN_STUCK_MIN]
         f["stuck_run"] = stuck[0]["id"] if stuck else None
-        hr = (now - timedelta(hours=1)).isoformat()
+        hr = iso(now - timedelta(hours=1))
         edge = sb("GET", f"edge_log?select=ok&created_at=gte.{hr}")
         f["edge_calls"], f["edge_failed"] = len(edge), sum(1 for e in edge if not e["ok"])
     except Exception as e:  # noqa: BLE001
