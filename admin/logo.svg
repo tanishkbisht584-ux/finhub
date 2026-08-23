@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="168" height="32" viewBox="0 0 168 32">
+  <rect x="0" y="0" width="32" height="32" rx="8" fill="#3ECF8E"/>
+  <path d="M8 22 L14 13 L18 18 L24 9" fill="none" stroke="#0C0F0E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="42" y="22" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="17" font-weight="700" fill="#E7EAE8">FinSwipe</text>
+  <text x="118" y="22" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#8E9792">Admin</text>
+</svg>
