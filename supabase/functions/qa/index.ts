@@ -137,7 +137,8 @@ async function chat(prompt: string, kind: "smart" | "fast" = "fast"): Promise<st
 function prompt(question: string, sources: Source[]): string {
   const listing = sources.map((s, i) => `[${i + 1}] ${s.title}\n${s.body}`).join("\n\n");
   return `You explain Indian market news to retail investors. Answer ONLY from the numbered sources below. Never use outside knowledge. If the sources do not clearly answer the question, set refused=true.
-HARD RULE: if the question asks for investment advice, a recommendation, or a prediction (should I buy/sell, will it rise, price targets, which stock to pick), set refused=true no matter what the sources say. Describing news about a company is not permission to advise on it.
+A source starting with "Live:" carries current market data — price, day move, and an Analysis line with ratios (P/E, P/B, ROE), holdings, RSI and trend. A question asking for one of those current numbers IS fully answered by that source: state the number plainly, never refuse it.
+HARD RULE: if the question asks for investment advice, a recommendation, or a prediction (should I buy/sell, will it rise, price targets, which stock to pick), set refused=true no matter what the sources say. Describing news about a company is not permission to advise on it. Reporting a current measured number (price, P/E, RSI, overbought/oversold state) is data, not advice.
 
 Question: ${question}
 
@@ -167,11 +168,18 @@ kind:
   "refuse"  - investment advice, a recommendation, a prediction or a price target;
               OR clearly not about finance, markets, banking, tax or economics;
               OR unknowable (a private person's opinion, the future).
+              NOT a question about a CURRENT, measurable number or state - "is X
+              overbought", "what is X's P/E", "where is the nifty" ask what IS,
+              not what WILL BE; those are "news".
   "concept" - asks what something IS or HOW it works: a term, abbreviation,
               product, rule, process or institution. "what is X" is concept even
               when X is unfamiliar to you - never refuse a term just because it
-              is ambiguous or misspelled.
-  "news"    - asks what happened, or why something moved.
+              is ambiguous or misspelled. BUT when the question asks that term's
+              value FOR a named company or index ("P/E of TCS", "TCS RSI"), it
+              is "news" - the asker wants the number, not the definition.
+  "news"    - asks what happened, why something moved, or for a current number:
+              price, level, ratio (P/E, P/B), RSI, overbought/oversold, FII/DII
+              flows - live market data answers these.
 
 terms: 3-10 lowercase words to search a news archive with. INCLUDE synonyms and
   expansions the question did not use itself ("central bank" -> rbi, reserve;
