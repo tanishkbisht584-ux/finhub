@@ -190,7 +190,8 @@ def test_market_is_an_admin_switch():
 
 
 def test_all_groups_registered():
-    assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new", "macro", "nse"]
+    assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new",
+                                             "fundamentals", "technicals", "macro", "nse"]
 
 
 def test_refresh_mf_new_fetches_only_unquoted_follows(monkeypatch):

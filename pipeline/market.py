@@ -75,19 +75,27 @@ def interval_minutes(group, now):
     return INTERVAL[group]
 
 
-def nav_slot(now):
-    """mfapi posts the day's NAV ~22:00-23:00 IST; before 22:30 the slot is
-    still yesterday's NAV day, so one fetch per slot is one fetch per NAV."""
+def day_slot(now, hh, mm):
+    """One run per IST day, opening at hh:mm — before that the slot is still
+    yesterday's, so one fetch per slot is one fetch per publication."""
     t = now.astimezone(IST)
-    return t.date() if (t.hour, t.minute) >= (22, 30) else t.date() - timedelta(days=1)
+    return t.date() if (t.hour, t.minute) >= (hh, mm) else t.date() - timedelta(days=1)
+
+
+def nav_slot(now):
+    return day_slot(now, 22, 30)  # mfapi posts the day's NAV ~22:00-23:00 IST
+
+
+DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15)}
 
 
 def due(group, now):
     last = _last_run.get(group)
     if last is None:
         return True
-    if group == "mf":
-        return nav_slot(now) != nav_slot(last)
+    if group in DAILY_SLOT:
+        hh, mm = DAILY_SLOT[group]
+        return day_slot(now, hh, mm) != day_slot(last, hh, mm)
     return now - last >= timedelta(minutes=interval_minutes(group, now))
 
 
@@ -126,11 +134,17 @@ def parse_spark(entry):
 
 # ---------- rows ----------
 
-def row(symbol, kind, name, parsed, now, currency="INR", closes=False, meta=None):
-    return {"symbol": symbol, "kind": kind, "name": name, "price": parsed.price,
-            "prev_close": parsed.prev, "change_pct": parsed.change_pct, "currency": currency,
-            "closes": parsed.closes if closes else None, "as_of": parsed.as_of,
-            "updated_at": now.isoformat(), "meta": meta}
+_OMIT = object()  # row(): "no meta" must mean "leave the column alone", not "null it"
+
+
+def row(symbol, kind, name, parsed, now, currency="INR", closes=False, meta=_OMIT):
+    r = {"symbol": symbol, "kind": kind, "name": name, "price": parsed.price,
+         "prev_close": parsed.prev, "change_pct": parsed.change_pct, "currency": currency,
+         "closes": parsed.closes if closes else None, "as_of": parsed.as_of,
+         "updated_at": now.isoformat()}
+    if meta is not _OMIT:
+        r["meta"] = meta
+    return r
 
 
 def gold_inr_row(gc, usdinr, now):
@@ -347,6 +361,268 @@ def refresh_macro(sb, now):
     return upsert(sb, rows)
 
 
+# ---------- v0.20.0: fundamentals (Yahoo quoteSummary, crumb dance) ----------
+# Verified from a GitHub runner 2026-08-23: fc.yahoo cookie -> getcrumb ->
+# quoteSummary 200 for .NS symbols. Ratios, growth, holders and 4 quarters of
+# revenue/PAT land in quotes.meta.f; technicals computed from the 1y chart land
+# in meta.t. The price refresh omits `meta` entirely, so these survive it.
+
+QS_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/"
+CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+QS_MODULES = ("summaryDetail,defaultKeyStatistics,financialData,"
+              "incomeStatementHistoryQuarterly,majorHoldersBreakdown,assetProfile")
+ANALYSIS_MAX_AGE_H = 20  # a process restart must not redo the whole universe
+
+_yahoo = {"session": None, "crumb": None}
+
+
+def yahoo_session(force=False):
+    if _yahoo["crumb"] and not force:
+        return _yahoo["session"], _yahoo["crumb"]
+    s = requests.Session()
+    s.headers.update(BROWSER_UA)
+    try:  # sets the cookie the crumb is bound to; its own status is irrelevant
+        s.get("https://fc.yahoo.com/", timeout=TIMEOUT)
+    except requests.RequestException:
+        pass
+    r = s.get(CRUMB_URL, timeout=TIMEOUT)
+    r.raise_for_status()
+    crumb = r.text.strip()
+    if not crumb or "<" in crumb:
+        raise RuntimeError(f"no crumb: {crumb[:40]!r}")
+    _yahoo.update(session=s, crumb=crumb)
+    return s, crumb
+
+
+def parse_fundamentals(j):
+    result = (j.get("quoteSummary") or {}).get("result") or []
+    if not result:
+        return {}
+    r = result[0]
+
+    def raw(module, key):
+        return ((r.get(module) or {}).get(key) or {}).get("raw")
+
+    def pct(v):
+        return round(v * 100, 1) if v is not None else None
+
+    de = raw("financialData", "debtToEquity")
+    f = {"pe": raw("summaryDetail", "trailingPE"), "fwd_pe": raw("summaryDetail", "forwardPE"),
+         "mcap": raw("summaryDetail", "marketCap"), "div_yield": pct(raw("summaryDetail", "dividendYield")),
+         "pb": raw("defaultKeyStatistics", "priceToBook"), "eps": raw("defaultKeyStatistics", "trailingEps"),
+         "beta": raw("defaultKeyStatistics", "beta"), "roe": pct(raw("financialData", "returnOnEquity")),
+         "de": round(de / 100, 2) if de is not None else None,  # Yahoo reports it in percent
+         "margin": pct(raw("financialData", "profitMargins")),
+         "rev_growth": pct(raw("financialData", "revenueGrowth")),
+         "earn_growth": pct(raw("financialData", "earningsGrowth")),
+         "target": raw("financialData", "targetMeanPrice"),
+         "rec": (r.get("financialData") or {}).get("recommendationKey"),
+         "promoter_pct": pct(raw("majorHoldersBreakdown", "insidersPercentHeld")),
+         "inst_pct": pct(raw("majorHoldersBreakdown", "institutionsPercentHeld")),
+         "sector": (r.get("assetProfile") or {}).get("sector"),
+         "industry": (r.get("assetProfile") or {}).get("industry")}
+    quarters = [{"end": (q.get("endDate") or {}).get("fmt"),
+                 "revenue": (q.get("totalRevenue") or {}).get("raw"),
+                 "net_income": (q.get("netIncome") or {}).get("raw")}
+                for q in ((r.get("incomeStatementHistoryQuarterly") or {})
+                          .get("incomeStatementHistory") or [])[:4]]
+    if quarters:
+        f["quarters"] = quarters
+    f = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in f.items() if v is not None}
+    return f
+
+
+def needs_refresh(symbols, existing_meta, stamp, now):
+    """Symbols whose `stamp` in meta is older than ANALYSIS_MAX_AGE_H (or absent)."""
+    cutoff = now - timedelta(hours=ANALYSIS_MAX_AGE_H)
+    out = []
+    for s in symbols:
+        at = (existing_meta.get(s) or {}).get(stamp)
+        done = False
+        if at:
+            try:
+                done = datetime.fromisoformat(at) > cutoff
+            except ValueError:
+                pass
+        if not done:
+            out.append(s)
+    return out
+
+
+def merge_meta(sb, updates, key, now):
+    """Merge {symbol: dict} into quotes.meta[key] (+ key_at stamp) for rows that
+    exist; a symbol with no quote row yet waits for the next price pass."""
+    existing = {r["symbol"]: r for r in
+                sb("GET", "quotes?select=symbol,kind,name,price,meta&kind=eq.equity")}
+    rows = []
+    for sym, d in updates.items():
+        base = existing.get(sym)
+        if not base:
+            continue
+        meta = {**(base.get("meta") or {}), key: d, f"{key}_at": now.isoformat()}
+        rows.append({**{k: base[k] for k in ("symbol", "kind", "name", "price")}, "meta": meta})
+    return upsert(sb, rows)
+
+
+def refresh_fundamentals(sb, now):
+    session, crumb = yahoo_session()
+    universe = equity_universe(sb, now)
+    existing = {r["symbol"]: (r.get("meta") or {}) for r in
+                sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
+    todo = needs_refresh([s for s, _ in universe], existing, "f_at", now)
+    updates = {}
+    for sym in todo:
+        try:
+            r = session.get(f"{QS_URL}{sym}.NS", params={"modules": QS_MODULES, "crumb": crumb},
+                            timeout=TIMEOUT)
+            if r.status_code == 401:  # crumb expired mid-run: one refresh, retry once
+                session, crumb = yahoo_session(force=True)
+                r = session.get(f"{QS_URL}{sym}.NS", params={"modules": QS_MODULES, "crumb": crumb},
+                                timeout=TIMEOUT)
+            r.raise_for_status()
+            f = parse_fundamentals(r.json())
+            if f:
+                updates[sym] = f
+        except Exception as e:
+            print(f"MARKET fundamentals {sym}: {e}")
+        time.sleep(0.4)
+    return merge_meta(sb, updates, "f", now) if updates else 0
+
+
+# ---------- v0.20.0: technicals, computed from the 1y daily chart ----------
+
+def _ema(values, n):
+    k = 2 / (n + 1)
+    e = values[0]
+    out = [e]
+    for v in values[1:]:
+        e = v * k + e * (1 - k)
+        out.append(e)
+    return out
+
+
+def compute_technicals(closes, volumes):
+    c = [x for x in (closes or []) if x is not None]
+    if not c:
+        return {}
+    last = c[-1]
+    t = {"close": round(last, 2)}
+
+    def sma(n):
+        return round(sum(c[-n:]) / n, 2) if len(c) >= n else None
+
+    for n in (20, 50, 200):
+        v = sma(n)
+        if v is not None:
+            t[f"sma{n}"] = v
+    if len(c) >= 15:  # Wilder RSI over the whole series
+        gains = losses = 0.0
+        for a, b in zip(c[:15], c[1:15]):
+            d = b - a
+            gains += max(d, 0)
+            losses += max(-d, 0)
+        avg_g, avg_l = gains / 14, losses / 14
+        for a, b in zip(c[14:], c[15:]):
+            d = b - a
+            avg_g = (avg_g * 13 + max(d, 0)) / 14
+            avg_l = (avg_l * 13 + max(-d, 0)) / 14
+        t["rsi14"] = round(100.0 if avg_l == 0 else 100 - 100 / (1 + avg_g / avg_l), 1)
+    if len(c) >= 35:
+        macd = [a - b for a, b in zip(_ema(c, 12), _ema(c, 26))]
+        t["macd_hist"] = round(macd[-1] - _ema(macd, 9)[-1], 2)
+    hi, lo = max(c), min(c)
+    t["hi52"], t["lo52"] = round(hi, 2), round(lo, 2)
+    t["pos52"] = round((last - lo) / (hi - lo), 2) if hi > lo else 0.5
+    v = [x for x in (volumes or []) if x]
+    if len(v) >= 20 and sum(v[-20:]):
+        t["vol_ratio"] = round(v[-1] / (sum(v[-20:]) / 20), 2)
+    if t.get("sma200") is not None:
+        t["above200"] = last > t["sma200"]
+        t["vs200"] = round((last / t["sma200"] - 1) * 100, 1)
+    if t.get("sma50") is not None:
+        t["vs50"] = round((last / t["sma50"] - 1) * 100, 1)
+    if t.get("sma50") is not None and t.get("sma200") is not None:
+        if t["sma50"] > t["sma200"] and last > t["sma50"]:
+            t["trend"] = "up"
+        elif t["sma50"] < t["sma200"] and last < t["sma50"]:
+            t["trend"] = "down"
+        else:
+            t["trend"] = "mixed"
+    else:
+        t["trend"] = "mixed"
+    return t
+
+
+def refresh_technicals(sb, now):
+    universe = equity_universe(sb, now)
+    existing = {r["symbol"]: (r.get("meta") or {}) for r in
+                sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
+    todo = needs_refresh([s for s, _ in universe], existing, "t_at", now)
+    updates = {}
+    for sym in todo:
+        try:
+            r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
+                             params={"range": "1y", "interval": "1d"},
+                             headers=BROWSER_UA, timeout=TIMEOUT)
+            r.raise_for_status()
+            q = r.json()["chart"]["result"][0]["indicators"]["quote"][0]
+            t = compute_technicals(q.get("close"), q.get("volume"))
+            if t:
+                updates[sym] = t
+        except Exception as e:
+            print(f"MARKET technicals {sym}: {e}")
+        time.sleep(0.3)
+    return merge_meta(sb, updates, "t", now) if updates else 0
+
+
+# ---------- v0.20.0: flows (FII/DII, PCR, breadth) -> market_blobs.flows ----------
+
+def parse_fiidii(rows):
+    out = {}
+    for r in rows or []:
+        cat = "fii" if "FII" in (r.get("category") or "") else "dii"
+        try:
+            out[cat] = {"buy": float(r["buyValue"]), "sell": float(r["sellValue"]),
+                        "net": float(r["netValue"])}
+            out["date"] = r.get("date")
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def nearest_expiry(contract_info):
+    dates = (contract_info or {}).get("expiryDates") or []
+    return dates[0] if dates else None
+
+
+def parse_option_chain(j, expiry):
+    f = (j.get("filtered") or {})
+    ce, pe = (f.get("CE") or {}).get("totOI"), (f.get("PE") or {}).get("totOI")
+    if not ce or not pe:
+        return {}
+    out = {"pcr": round(pe / ce, 2), "ce_oi": ce, "pe_oi": pe, "expiry": expiry,
+           "underlying": (j.get("records") or {}).get("underlyingValue")}
+    best, best_oi = None, -1
+    for row_ in (j.get("records") or {}).get("data") or []:
+        oi = ((row_.get("CE") or {}).get("openInterest") or 0) +              ((row_.get("PE") or {}).get("openInterest") or 0)
+        if oi > best_oi:
+            best, best_oi = row_.get("strikePrice"), oi
+    if best is not None:
+        out["max_oi_strike"] = best
+    return out
+
+
+def breadth(indices):
+    out = {}
+    for r in indices or []:
+        if r.get("index") in ("NIFTY 50", "NIFTY 500") and r.get("advances") is not None:
+            try:
+                out[r["index"]] = {"adv": int(r["advances"]), "dec": int(r["declines"])}
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 # ---------- phase 3: NSE smart-money lists -> market_blobs (keyless) ----------
 
 NSE_API = "https://www.nseindia.com/api/"
@@ -438,6 +714,29 @@ def refresh_nse_blobs(sb, now, session=None):
         return r.json()
 
     ist = now.astimezone(IST)
+
+    def flows():
+        out = {}
+        try:
+            out.update(parse_fiidii(get("fiidiiTradeReact")))
+        except Exception as e:
+            print(f"MARKET NSE fiidii: {e}")
+        try:
+            exp = nearest_expiry(get("option-chain-contract-info", symbol="NIFTY"))
+            if exp:
+                out.update(parse_option_chain(
+                    get("option-chain-v3", type="Indices", symbol="NIFTY", expiry=exp), exp))
+        except Exception as e:
+            print(f"MARKET NSE pcr: {e}")
+        try:  # raw rows: NIFTY 50 lives in the derivatives group, which
+              # shape_indices filters out for the sector heatmap
+            out["breadth"] = breadth((get("allIndices") or {}).get("data"))
+        except Exception as e:
+            print(f"MARKET NSE breadth: {e}")
+        if not out:
+            raise RuntimeError("all flow pieces failed")  # keep the old blob
+        return out
+
     jobs = {
         "results_calendar": lambda: results_calendar(
             get("event-calendar", index="equities"),
@@ -448,6 +747,7 @@ def refresh_nse_blobs(sb, now, session=None):
                 from_date=(ist - timedelta(days=7)).strftime("%d-%m-%Y"),
                 to_date=ist.strftime("%d-%m-%Y")), known),
         "nse_indices": lambda: shape_indices(get("allIndices")),
+        "flows": flows,
     }
     rows = []
     for key, fn in jobs.items():
@@ -460,8 +760,9 @@ def refresh_nse_blobs(sb, now, session=None):
 
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
-          ("mf", refresh_mf), ("mf_new", refresh_mf_new), ("macro", refresh_macro),
-          ("nse", refresh_nse_blobs))
+          ("mf", refresh_mf), ("mf_new", refresh_mf_new),
+          ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
+          ("macro", refresh_macro), ("nse", refresh_nse_blobs))
 
 
 def refresh(sb, now=None):
