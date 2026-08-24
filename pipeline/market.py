@@ -627,10 +627,17 @@ def breadth(indices):
 
 NSE_API = "https://www.nseindia.com/api/"
 RESULTS_RE = re.compile(r"result|financial", re.I)
-INSIDER_KEYS = {"symbol": "symbol", "company": "company", "acqName": "person",
-                "personCategory": "category", "secType": "security", "secAcq": "qty",
-                "secVal": "value", "tdpTransactionType": "side", "acqMode": "mode",
-                "date": "date", "intimDt": "intimated"}
+# 21 Aug 2026: /api/corporates-pit went dark (200, data:[]) — the site now calls
+# /api/corporates-pit-gg, which lists filings only; person/qty/side moved into
+# each filing's inline-XBRL doc (BSE/NSE shared taxonomy, single-quoted attrs).
+PIT_XBRL_KEYS = {"NameOfThePerson": "person", "CategoryOfPerson": "category",
+                 "TypeOfInstrument": "security",
+                 "SecuritiesAcquiredOrDisposedNumberOfSecurity": "qty",
+                 "SecuritiesAcquiredOrDisposedValueOfSecurity": "value",
+                 "SecuritiesAcquiredOrDisposedTransactionType": "side",
+                 "ModeOfAcquisitionOrDisposal": "mode",
+                 "DateOfAllotmentAdviceOrAcquisitionOfSharesOrSaleOfSharesSpecifyFromDate": "date",
+                 "DateOfIntimationToCompany": "intimated"}
 
 
 def nse_session():
@@ -687,10 +694,38 @@ def shape_deals(j, cap=100):
     return {"as_on": j.get("as_on_date"), "deals": deals[:cap]}
 
 
-def shape_insider(j, known, cap=200):
-    data = j.get("data") if isinstance(j, dict) else j
-    return [{v: d.get(k) for k, v in INSIDER_KEYS.items()}
-            for d in data or [] if d.get("symbol") in known][:cap]
+def parse_pit_xbrl(html):
+    """{person, qty, side, ...} facts out of one insider iXBRL filing."""
+    out = {}
+    for name, val in re.findall(
+            r"<ix:non(?:Numeric|Fraction)[^>]*name=['\"]([^'\"]+)['\"][^>]*>(.*?)"
+            r"</ix:non(?:Numeric|Fraction)>", html, re.S):
+        key = PIT_XBRL_KEYS.get(name.split(":")[-1])
+        if key and key not in out:
+            out[key] = re.sub(r"<[^>]+>", "", val).strip()
+    return out
+
+
+def shape_insider(j, known, prev=None, fetch=None, cap=200, fetch_cap=40):
+    """pit-gg lists filings; the details cost one doc fetch each, so parse only
+    filings not already in the previous blob (appId) and keep the newest `cap`."""
+    seen = {r.get("appId") for r in prev or []}
+    data = (j.get("data") if isinstance(j, dict) else j) or []
+    fresh, fetched = [], 0
+    for d in data:  # API order is newest-first; keep it
+        if d.get("symbol") not in known or not d.get("ixbrl") or d.get("appId") in seen:
+            continue
+        if fetched >= fetch_cap:  # first run catches up over a few hourly passes
+            break
+        fetched += 1
+        try:
+            facts = parse_pit_xbrl(fetch(d["ixbrl"]))
+        except Exception as e:
+            print(f"MARKET insider {d.get('symbol')}: {e}")
+            continue
+        fresh.append({"appId": d.get("appId"), "symbol": d.get("symbol"),
+                      "company": d.get("companyName"), **facts})
+    return (fresh + list(prev or []))[:cap]
 
 
 def shape_indices(j, keep=("BROAD MARKET INDICES", "SECTORAL INDICES")):
@@ -743,9 +778,12 @@ def refresh_nse_blobs(sb, now, session=None):
             get("corporate-board-meetings", index="equities"), known, now),
         "bulk_deals": lambda: shape_deals(get("snapshot-capital-market-largedeal")),
         "insider_trades": lambda: shape_insider(
-            get("corporates-pit", index="equities",
+            get("corporates-pit-gg", index="equities",
                 from_date=(ist - timedelta(days=7)).strftime("%d-%m-%Y"),
-                to_date=ist.strftime("%d-%m-%Y")), known),
+                to_date=ist.strftime("%d-%m-%Y")), known,
+            prev=next((r["payload"] for r in
+                       sb("GET", "market_blobs?select=payload&key=eq.insider_trades")), None),
+            fetch=lambda u: s.get(u, timeout=25).text),
         "nse_indices": lambda: shape_indices(get("allIndices")),
         "flows": flows,
     }

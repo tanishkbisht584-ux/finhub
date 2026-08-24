@@ -306,11 +306,31 @@ def test_shape_deals_values_sorted_and_capped():
     assert d["deals"][1]["side"] == "BUY"
 
 
+PIT_DOC = ("<html xmlns:ix='x'><body>"
+           "<ix:nonNumeric name='in-bse-co:NameOfThePerson' contextRef='M'>A</ix:nonNumeric>"
+           "<ix:nonNumeric name='in-bse-co:CategoryOfPerson'>Promoter</ix:nonNumeric>"
+           "<ix:nonFraction name='in-bse-co:SecuritiesAcquiredOrDisposedNumberOfSecurity'>"
+           "<b>100</b></ix:nonFraction>"
+           "<ix:nonNumeric name='in-bse-co:SecuritiesAcquiredOrDisposedTransactionType'>Buy</ix:nonNumeric>"
+           "<ix:nonNumeric name='in-bse-co:DateOfAllotmentAdviceOrAcquisitionOfSharesOrSaleOfSharesSpecifyFromDate'>"
+           "20-08-2026</ix:nonNumeric></body></html>")
+
+
 def test_shape_insider_and_indices():
-    pit = {"data": [{"symbol": "TCS", "company": "TCS", "acqName": "A", "secAcq": "100", "tdpTransactionType": "Buy", "date": "20-Aug-2026"},
-                    {"symbol": "ZZZ", "acqName": "B"}]}
-    ins = market.shape_insider(pit, {"TCS"})
-    assert len(ins) == 1 and ins[0]["person"] == "A" and ins[0]["side"] == "Buy" and ins[0]["qty"] == "100"
+    pit = {"data": [{"symbol": "TCS", "companyName": "TCS", "appId": "1", "ixbrl": "http://x/1.html"},
+                    {"symbol": "ZZZ", "appId": "2", "ixbrl": "http://x/2.html"},
+                    {"symbol": "TCS", "appId": "3", "ixbrl": "http://x/3.html"}]}
+    fetched = []
+
+    def fetch(u):
+        fetched.append(u)
+        return PIT_DOC
+
+    ins = market.shape_insider(pit, {"TCS"}, prev=[{"appId": "3", "person": "old"}], fetch=fetch)
+    assert fetched == ["http://x/1.html"]  # ZZZ unknown, appId 3 already in the blob
+    assert len(ins) == 2 and ins[1]["person"] == "old"
+    assert ins[0] == {"appId": "1", "symbol": "TCS", "company": "TCS", "person": "A",
+                      "category": "Promoter", "qty": "100", "side": "Buy", "date": "20-08-2026"}
     idx = {"data": [{"key": "SECTORAL INDICES", "index": "NIFTY IT", "last": 30532, "percentChange": -0.46, "pe": "28", "advances": "3", "declines": "7"},
                     {"key": "STRATEGY INDICES", "index": "NIFTY ALPHA 50", "last": 1}]}
     out = market.shape_indices(idx)
@@ -341,7 +361,7 @@ def test_refresh_nse_blobs_isolates_one_dead_endpoint(monkeypatch):
                 return R(MEETINGS)
             if url.endswith("snapshot-capital-market-largedeal"):
                 return R({"as_on_date": "21-Aug-2026", "BULK_DEALS_DATA": [], "BLOCK_DEALS_DATA": []})
-            if url.endswith("corporates-pit"):
+            if url.endswith("corporates-pit-gg"):
                 assert params["from_date"] < params["to_date"]
                 return R({"data": []})
             raise AssertionError(url)
@@ -350,6 +370,8 @@ def test_refresh_nse_blobs_isolates_one_dead_endpoint(monkeypatch):
 
     def sb(method, path, **kw):
         if method == "GET":
+            if path.startswith("market_blobs"):
+                return []
             return [{"nse_symbol": "TCS"}, {"nse_symbol": "HDFCBANK"}]
         written.append((path, kw["json"]))
 

@@ -207,7 +207,7 @@ def test_refresh_nse_blobs_writes_flows_and_survives_partial_failure():
                 "allIndices": R({"data": [{"key": "BROAD MARKET INDICES", "index": "NIFTY 50", "last": 1, "percentChange": 0.1, "advances": "25", "declines": "24"}]}),
                 "event-calendar": R([]), "corporate-board-meetings": R([]),
                 "snapshot-capital-market-largedeal": R({"as_on_date": "x", "BULK_DEALS_DATA": [], "BLOCK_DEALS_DATA": []}),
-                "corporates-pit": R({"data": []}),
+                "corporates-pit-gg": R({"data": []}),
                 "fiidiiTradeReact": R([{"buyValue": "1", "category": "FII/FPI", "date": "d", "netValue": "-1", "sellValue": "2"}]),
                 "option-chain-contract-info": R(None, ok=False),   # PCR unavailable today
             }[tail]
@@ -216,6 +216,8 @@ def test_refresh_nse_blobs_writes_flows_and_survives_partial_failure():
 
     def sb(method, path, **kw):
         if method == "GET":
+            if path.startswith("market_blobs"):
+                return []
             return [{"nse_symbol": "TCS"}]
         written.extend(kw["json"])
 
