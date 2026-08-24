@@ -29,11 +29,42 @@ class _StockScreenState extends State<StockScreen> {
   bool _following = false;
   bool _togglingFollow = false;
   List<String> _events = const []; // NSE results/deals/insider lines (market_blobs)
+  Timer? _analysisPoll;
+  int _analysisPolls = 0;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _analysisPoll?.cancel();
+    super.dispose();
+  }
+
+  /// Out-of-universe stock: no meta.f/meta.t yet. Ask the pipeline to backfill
+  /// (fire-and-forget, like _logView — a duplicate-key "already requested"
+  /// error is as ignorable as a network one), then re-read ticks a few times so
+  /// the strips appear without reopening the page (they're a
+  /// ValueListenableBuilder on ticks).
+  void _maybeRequestAnalysis() {
+    final sb = Supabase.instance.client;
+    final uid = sb.auth.currentUser?.id;
+    final sym = widget.company.nseSymbol;
+    if (uid == null || sym.isEmpty) return;
+    if (!needsAnalysisRequest(ticks.value[sym]?.meta ?? const {})) return;
+    sb.from('analysis_requests').insert({'symbol': sym}).then((_) {}, onError: (_) {});
+    _analysisPoll ??= Timer.periodic(const Duration(seconds: 75), (t) {
+      if (!mounted ||
+          ++_analysisPolls > 5 ||
+          !needsAnalysisRequest(ticks.value[sym]?.meta ?? const {})) {
+        t.cancel();
+        return;
+      }
+      loadTicks([sym]);
+    });
   }
 
   Future<void> _load() async {
@@ -55,8 +86,12 @@ class _StockScreenState extends State<StockScreen> {
 
     if (ticks.value[sym] != null) {
       seed();
+      _maybeRequestAnalysis();
     } else {
-      unawaited(loadTicks([sym]).then((_) => seed()));
+      unawaited(loadTicks([sym]).then((_) {
+        seed();
+        _maybeRequestAnalysis();
+      }));
     }
     // Three independent fetches; each failure degrades its own section only.
     http

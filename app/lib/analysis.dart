@@ -105,3 +105,9 @@ List<(String, String)> technicalLines(Map<String, dynamic> meta) {
   add('MACD', macd == null ? null : macd > 0 ? 'bullish' : macd < 0 ? 'bearish' : 'flat');
   return out;
 }
+
+/// True when the pipeline has produced neither strip for this symbol — the
+/// signal to drop a row into analysis_requests (market.refresh_analysis_new
+/// backfills it within ~5 min).
+bool needsAnalysisRequest(Map<String, dynamic> meta) =>
+    meta['f'] == null && meta['t'] == null;

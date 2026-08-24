@@ -124,6 +124,8 @@ def test_equity_universe_followed_first_then_tagged_capped(monkeypatch):
             return [{"target_id": "1"}, {"target_id": "2"}, {"target_id": "x"}]
         if path.startswith("story_companies"):
             return [{"company_id": 2}, {"company_id": 3}, {"company_id": 4}]
+        if path.startswith("analysis_requests"):
+            return []
         if path.startswith("companies"):
             ids = re.search(r"id=in\.\(([^)]*)\)", path).group(1).split(",")
             return [{"id": int(i), "nse_symbol": f"C{i}", "name": f"Co {i}"} for i in ids]
@@ -191,7 +193,8 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new",
-                                             "fundamentals", "technicals", "macro", "nse"]
+                                             "analysis_new", "fundamentals", "technicals",
+                                             "macro", "nse"]
 
 
 def test_refresh_mf_new_fetches_only_unquoted_follows(monkeypatch):

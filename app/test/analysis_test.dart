@@ -65,4 +65,11 @@ void main() {
     expect(fmtDay('2026-08-23T16:35:00+00:00'), '23 Aug');
     expect(fmtDay(null), '');
   });
+
+  test('needsAnalysisRequest fires only when both strips are absent', () {
+    expect(needsAnalysisRequest(const {}), isTrue);
+    expect(needsAnalysisRequest(const {'f': null, 't': null}), isTrue);
+    expect(needsAnalysisRequest(const {'f': {'pe': 10.0}}), isFalse);
+    expect(needsAnalysisRequest(const {'t': {'rsi14': 50.0}}), isFalse);
+  });
 }

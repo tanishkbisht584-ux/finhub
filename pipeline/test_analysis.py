@@ -226,3 +226,101 @@ def test_refresh_nse_blobs_writes_flows_and_survives_partial_failure():
     assert flows["fii"]["net"] == -1.0 and flows["breadth"]["NIFTY 50"] == {"adv": 25, "dec": 24}
     assert "pcr" not in flows                                  # missing piece, not a missing blob
     assert {r["key"] for r in written} == {"results_calendar", "bulk_deals", "insider_trades", "nse_indices", "flows"}
+
+
+# ---------- on-demand backfill (analysis_requests) ----------
+
+def _req_sb(requests_rows, companies, quotes, log):
+    """sb stub that records every call and reflects the given tables."""
+    def sb(method, path, **kw):
+        log.append((method, path))
+        if method == "GET":
+            if path.startswith("analysis_requests"):
+                return requests_rows
+            if path.startswith("companies"):
+                return companies
+            if path.startswith("quotes"):
+                return quotes
+            return []
+        return None
+    return sb
+
+
+def test_refresh_analysis_new_creates_row_and_merges_both_metas(monkeypatch):
+    log, upserts = [], []
+    sb = _req_sb([{"symbol": "ABC"}], [{"nse_symbol": "ABC", "name": "ABC Ltd"}], [], log)
+    monkeypatch.setattr(market, "fetch_spark",
+                        lambda syms: {"ABC.NS": {"timestamp": [1], "close": [10.0],
+                                                 "chartPreviousClose": 9.0}})
+    monkeypatch.setattr(market, "upsert",
+                        lambda sb_, rows, **kw: upserts.append(rows) or len(rows))
+    monkeypatch.setattr(market, "fetch_fundamentals_for",
+                        lambda syms: {"ABC": {"pe": 10.0}} if syms == ["ABC"] else {})
+    monkeypatch.setattr(market, "fetch_technicals_for",
+                        lambda syms: {"ABC": {"rsi14": 50.0}} if syms == ["ABC"] else {})
+    merged = []
+    monkeypatch.setattr(market, "merge_meta",
+                        lambda sb_, updates, key, now: merged.append((key, updates)) or 1)
+    n = market.refresh_analysis_new(sb, NOW)
+    assert n == 2
+    assert "meta" not in upserts[0][0]                       # _OMIT invariant holds
+    assert [k for k, _ in merged] == ["f", "t"]
+    # served request KEPT (only the 48 h prune delete fired)
+    deletes = [p for m, p in log if m == "DELETE"]
+    assert len(deletes) == 1 and deletes[0].startswith("analysis_requests?requested_at=lt.")
+
+
+def test_refresh_analysis_new_prunes_invalid_and_urlquotes(monkeypatch):
+    log = []
+    sb = _req_sb([{"symbol": "M&M"}, {"symbol": "NOPE"}],
+                 [{"nse_symbol": "OTHER", "name": "Other"}], [], log)
+    monkeypatch.setattr(market, "fetch_spark", lambda syms: {})
+    n = market.refresh_analysis_new(sb, NOW)
+    assert n == 0
+    deletes = [p for m, p in log if m == "DELETE"]
+    assert "analysis_requests?symbol=eq.M%26M" in deletes    # & never hits the URL raw
+    assert "analysis_requests?symbol=eq.NOPE" in deletes
+
+
+def test_refresh_analysis_new_partial_failure_retries_only_missing_half(monkeypatch):
+    calls = {"f": [], "t": []}
+    sb = _req_sb([{"symbol": "ABC"}], [{"nse_symbol": "ABC", "name": "ABC Ltd"}],
+                 [{"symbol": "ABC", "meta": {"t": {"rsi14": 50}, "t_at": NOW.isoformat()}}], [])
+    monkeypatch.setattr(market, "fetch_fundamentals_for",
+                        lambda syms: calls["f"].append(list(syms)) or {})   # Yahoo down
+    monkeypatch.setattr(market, "fetch_technicals_for",
+                        lambda syms: calls["t"].append(list(syms)) or {})
+    assert market.refresh_analysis_new(sb, NOW) == 0
+    assert calls["f"] == [["ABC"]] and calls["t"] == [[]]    # fresh t_at skipped
+
+
+def test_refresh_analysis_new_served_symbol_costs_nothing(monkeypatch):
+    fetched = []
+    sb = _req_sb([{"symbol": "ABC"}], [{"nse_symbol": "ABC", "name": "ABC Ltd"}],
+                 [{"symbol": "ABC", "meta": {"f_at": NOW.isoformat(), "t_at": NOW.isoformat()}}], [])
+    monkeypatch.setattr(market, "fetch_fundamentals_for", lambda syms: fetched.append(list(syms)) or {})
+    monkeypatch.setattr(market, "fetch_technicals_for", lambda syms: fetched.append(list(syms)) or {})
+    monkeypatch.setattr(market, "fetch_spark", lambda syms: (_ for _ in ()).throw(AssertionError("no spark")))
+    assert market.refresh_analysis_new(sb, NOW) == 0
+    assert fetched == [[], []]
+
+
+def test_equity_universe_orders_followed_requested_tagged_and_caps(monkeypatch):
+    def sb(method, path, **kw):
+        if path.startswith("follows"):
+            return [{"target_id": "1"}]
+        if path.startswith("story_companies"):
+            return [{"company_id": 2}, {"company_id": 1}]
+        if path.startswith("analysis_requests"):
+            return [{"symbol": "M&M"}]
+        if path.startswith("companies?select=id"):
+            return [{"id": 1, "nse_symbol": "AAA", "name": "A"},
+                    {"id": 2, "nse_symbol": "BBB", "name": "B"}]
+        if path.startswith("companies?select=nse_symbol"):
+            assert "M%26M" in path                           # quoted in.() value
+            return [{"nse_symbol": "M&M", "name": "Mahindra"}]
+        raise AssertionError(path)
+    out = market.equity_universe(sb, NOW)
+    assert out == [("AAA", "A"), ("M&M", "Mahindra"), ("BBB", "B")]
+    monkeypatch.setattr(market, "EQUITY_CAP", 2)
+    assert market.equity_universe(sb, NOW) == [("AAA", "A"), ("M&M", "Mahindra")]

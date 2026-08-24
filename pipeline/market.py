@@ -18,6 +18,7 @@ import re
 import time
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import requests
 
@@ -61,7 +62,8 @@ Parsed = namedtuple("Parsed", "price prev change_pct as_of closes")
 _last_run = {}  # group -> utc datetime of the last attempt (success or not)
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
-INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "macro": 24 * 60, "mf_new": 5}
+INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "macro": 24 * 60, "mf_new": 5,
+            "analysis_new": 5}
 
 
 def market_hours(now):
@@ -173,8 +175,9 @@ def refresh_indices(sb, now):
 
 
 def equity_universe(sb, now):
-    """[(nse_symbol, name)] — followed companies first, then those tagged on a
-    story in the last 48 h, capped. Only these get a quote row."""
+    """[(nse_symbol, name)] — followed companies first, then user-requested
+    symbols (analysis_requests, <48 h), then those tagged on a story in the
+    last 48 h, deduped, capped. Only these get a quote row."""
     since = (now - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
     followed = [int(f["target_id"]) for f in sb("GET", "follows?select=target_id&target_type=eq.company")
                 if str(f["target_id"]).isdigit()]
@@ -186,14 +189,27 @@ def equity_universe(sb, now):
         if cid not in seen:
             seen.add(cid)
             ids.append(cid)
-    ids = ids[:EQUITY_CAP]
     by_id = {}
     for i in range(0, len(ids), 200):
         chunk = ",".join(str(c) for c in ids[i:i + 200])
         for c in sb("GET", f"companies?select=id,nse_symbol,name&id=in.({chunk})"):
             if c.get("nse_symbol"):
                 by_id[c["id"]] = (c["nse_symbol"], c["name"])
-    return [by_id[c] for c in ids if c in by_id]
+    followed_n = len([c for c in followed if c in by_id])
+    pairs = [by_id[c] for c in ids if c in by_id]
+    requested = [r["symbol"] for r in
+                 sb("GET", f"analysis_requests?select=symbol&requested_at=gte.{since}")]
+    if requested:  # values quoted: M&M etc. would break a bare in.() filter
+        vals = ",".join(f'"{quote(s, safe="")}"' for s in requested)
+        req_pairs = [(c["nse_symbol"], c["name"]) for c in
+                     sb("GET", f"companies?select=nse_symbol,name&nse_symbol=in.({vals})")]
+        pairs = pairs[:followed_n] + req_pairs + pairs[followed_n:]
+    out, have = [], set()
+    for sym, name in pairs:
+        if sym not in have:
+            have.add(sym)
+            out.append((sym, name))
+    return out[:EQUITY_CAP]
 
 
 def refresh_equities(sb, now):
@@ -372,6 +388,7 @@ CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 QS_MODULES = ("summaryDetail,defaultKeyStatistics,financialData,"
               "incomeStatementHistoryQuarterly,majorHoldersBreakdown,assetProfile")
 ANALYSIS_MAX_AGE_H = 20  # a process restart must not redo the whole universe
+ANALYSIS_NEW_CAP = 10    # requested-symbol backfills per pass; bursts drain over a few 5-min passes
 
 _yahoo = {"session": None, "crumb": None}
 
@@ -464,14 +481,14 @@ def merge_meta(sb, updates, key, now):
     return upsert(sb, rows)
 
 
-def refresh_fundamentals(sb, now):
+def fetch_fundamentals_for(symbols):
+    """{symbol: parsed f-dict} via quoteSummary; owns the crumb dance including
+    the one 401 retry. Per-symbol failures are logged and skipped."""
+    if not symbols:
+        return {}
     session, crumb = yahoo_session()
-    universe = equity_universe(sb, now)
-    existing = {r["symbol"]: (r.get("meta") or {}) for r in
-                sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
-    todo = needs_refresh([s for s, _ in universe], existing, "f_at", now)
     updates = {}
-    for sym in todo:
+    for sym in symbols:
         try:
             r = session.get(f"{QS_URL}{sym}.NS", params={"modules": QS_MODULES, "crumb": crumb},
                             timeout=TIMEOUT)
@@ -486,6 +503,15 @@ def refresh_fundamentals(sb, now):
         except Exception as e:
             print(f"MARKET fundamentals {sym}: {e}")
         time.sleep(0.4)
+    return updates
+
+
+def refresh_fundamentals(sb, now):
+    universe = equity_universe(sb, now)
+    existing = {r["symbol"]: (r.get("meta") or {}) for r in
+                sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
+    updates = fetch_fundamentals_for(
+        needs_refresh([s for s, _ in universe], existing, "f_at", now))
     return merge_meta(sb, updates, "f", now) if updates else 0
 
 
@@ -553,13 +579,10 @@ def compute_technicals(closes, volumes):
     return t
 
 
-def refresh_technicals(sb, now):
-    universe = equity_universe(sb, now)
-    existing = {r["symbol"]: (r.get("meta") or {}) for r in
-                sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
-    todo = needs_refresh([s for s, _ in universe], existing, "t_at", now)
+def fetch_technicals_for(symbols):
+    """{symbol: computed t-dict} from the 1y daily chart, one call per symbol."""
     updates = {}
-    for sym in todo:
+    for sym in symbols:
         try:
             r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
                              params={"range": "1y", "interval": "1d"},
@@ -572,7 +595,57 @@ def refresh_technicals(sb, now):
         except Exception as e:
             print(f"MARKET technicals {sym}: {e}")
         time.sleep(0.3)
+    return updates
+
+
+def refresh_technicals(sb, now):
+    universe = equity_universe(sb, now)
+    existing = {r["symbol"]: (r.get("meta") or {}) for r in
+                sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
+    updates = fetch_technicals_for(
+        needs_refresh([s for s, _ in universe], existing, "t_at", now))
     return merge_meta(sb, updates, "t", now) if updates else 0
+
+
+def refresh_analysis_new(sb, now):
+    """Every 5 min: backfill f/t for symbols users requested from a stock page
+    outside the universe (analysis_requests, app-inserted). Served rows are
+    KEPT until the 48 h prune — their presence holds the symbol in
+    equity_universe while it's hot; needs_refresh makes re-serving free."""
+    sb("DELETE", "analysis_requests?requested_at=lt."
+       + (now - timedelta(hours=48)).isoformat())
+    reqs = sb("GET", "analysis_requests?select=symbol&order=requested_at")
+    if not reqs:
+        return 0
+    names = {c["nse_symbol"]: c["name"] for c in
+             sb("GET", "companies?select=nse_symbol,name") if c.get("nse_symbol")}
+    for r in reqs:  # typos, delisted; one call each — M&M breaks an in.() filter
+        if r["symbol"] not in names:
+            sb("DELETE", f"analysis_requests?symbol=eq.{quote(r['symbol'], safe='')}")
+    todo = [r["symbol"] for r in reqs if r["symbol"] in names][:ANALYSIS_NEW_CAP]
+    if not todo:
+        return 0
+    existing = {r["symbol"]: (r.get("meta") or {}) for r in
+                sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
+    # merge_meta only touches rows that exist: give quote-less symbols a price
+    # row first (row() omits meta, so this write can never clobber analysis).
+    missing = [s for s in todo if s not in existing]
+    if missing:
+        data = fetch_spark([f"{s}.NS" for s in missing])
+        rows = [row(s, "equity", names[s], p, now)
+                for s in missing if (p := parse_spark(data.get(f"{s}.NS", {})))]
+        if rows:
+            upsert(sb, rows)
+            existing.update({r["symbol"]: {} for r in rows})
+    todo = [s for s in todo if s in existing]  # a spark miss retries next pass
+    n = 0
+    f_updates = fetch_fundamentals_for(needs_refresh(todo, existing, "f_at", now))
+    if f_updates:
+        n += merge_meta(sb, f_updates, "f", now)
+    t_updates = fetch_technicals_for(needs_refresh(todo, existing, "t_at", now))
+    if t_updates:
+        n += merge_meta(sb, t_updates, "t", now)
+    return n
 
 
 # ---------- v0.20.0: flows (FII/DII, PCR, breadth) -> market_blobs.flows ----------
@@ -799,6 +872,7 @@ def refresh_nse_blobs(sb, now, session=None):
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
+          ("analysis_new", refresh_analysis_new),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs))
 

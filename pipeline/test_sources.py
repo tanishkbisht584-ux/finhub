@@ -9,8 +9,10 @@ import pytest
 import run
 
 NOW = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
-FRESH = "2026-08-22T10:00:00Z"
-OLD = "2026-08-01T10:00:00Z"
+# The fetchers judge staleness against the real clock, so these must be
+# relative — hardcoded dates rotted after two days.
+FRESH = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+OLD = (datetime.now(timezone.utc) - timedelta(days=21)).strftime("%Y-%m-%dT%H:%M:%SZ")
 SRC = {"id": 1, "name": "GNews.io Markets IN", "type": "gnews_api", "feed_url": "nifty", "authority": 6}
 
 ITEM_KEYS = {"source", "url", "url_hash", "headline", "body", "image_url", "published_at"}
@@ -53,18 +55,18 @@ def test_gnews_shapes_items_and_drops_stale(api):
     items = run.fetch_gnews_api(SRC)
     assert len(items) == 1 and set(items[0]) == ITEM_KEYS
     assert items[0]["image_url"] == "https://i/1.jpg" and items[0]["url_hash"] == run.url_hash("https://a/1")
-    assert items[0]["published_at"] == "2026-08-22T10:00:00+00:00"
+    assert items[0]["published_at"] == FRESH.replace("Z", "+00:00")
     assert calls[0][1]["q"] == "nifty" and calls[0][1]["country"] == "in"
 
 
 def test_newsdata_and_marketaux_field_maps(api):
     api({"results": [{"title": "RBI holds", "link": "https://n/1", "description": "d",
-                      "image_url": None, "pubDate": "2026-08-22 10:00:00"}]})
+                      "image_url": None, "pubDate": FRESH.replace("T", " ").replace("Z", "")}]})
     nd = run.fetch_newsdata({**SRC, "type": "newsdata", "feed_url": "business"})
     assert nd[0]["url"] == "https://n/1" and nd[0]["image_url"] is None
-    assert nd[0]["published_at"] == "2026-08-22T10:00:00+00:00"
+    assert nd[0]["published_at"] == FRESH.replace("Z", "+00:00")
     calls = api({"data": [{"title": "TCS Q1", "url": "https://m/1", "description": "d",
-                           "image_url": "https://m/i.jpg", "published_at": "2026-08-22T10:00:00.000000Z",
+                           "image_url": "https://m/i.jpg", "published_at": FRESH.replace("Z", ".000000Z"),
                            "entities": [{"symbol": "TCS.NSE"}]}]})
     ma = run.fetch_marketaux({**SRC, "type": "marketaux", "feed_url": ""})
     assert ma[0]["headline"] == "TCS Q1" and "search" not in calls[-1][1]
