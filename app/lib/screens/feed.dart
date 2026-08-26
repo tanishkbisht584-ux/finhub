@@ -44,8 +44,8 @@ const marketsTab = 1;
 
 /// Put the feed on [id]'s card. False when the story isn't in the loaded list,
 /// so the caller can fall back to the standalone detail screen.
-bool jumpToStory(PageController pc, List<Story> list, int id) {
-  final i = list.indexWhere((s) => s.id == id);
+bool jumpToStory(PageController pc, List<FeedEntry> entries, int id) {
+  final i = entries.indexWhere((e) => e.story?.id == id);
   if (i < 0) return false;
   if (pc.hasClients) pc.jumpToPage(i);
   return true;
@@ -143,6 +143,25 @@ Future<void> setHorizonFilter(String v) async {
       : await prefs.setString(_horizonPrefsKey, v);
 }
 
+/// Newest published_at that was on screen at the last visit. The feed opens
+/// on the newest card, so loaded-at-top counts as seen. Frozen for the
+/// session (the setter only persists) so the caught-up divider doesn't chase
+/// the live feed mid-session.
+final lastSeenAtLaunch = ValueNotifier<DateTime?>(null);
+const _lastSeenPrefsKey = 'feed_last_seen_v1';
+
+Future<void> loadLastSeenStamp() async {
+  final prefs = await SharedPreferences.getInstance();
+  lastSeenAtLaunch.value =
+      DateTime.tryParse(prefs.getString(_lastSeenPrefsKey) ?? '');
+}
+
+/// Persist only — never touches [lastSeenAtLaunch] mid-session.
+Future<void> setLastSeenStamp(DateTime t) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_lastSeenPrefsKey, t.toIso8601String());
+}
+
 /// An alerted story must never be invisible because a filter excludes it:
 /// open the feed back up.
 void resetFilterForAlert() {
@@ -214,6 +233,53 @@ List<Story> visibleStories(
                         s.impactHorizon == 'both')))
           s
     ];
+
+/// One page of the feed's vertical PageView: a story, the caught-up divider
+/// (carrying the count of stories newer than the last-visit stamp), or the
+/// end-of-feed page.
+class FeedEntry {
+  const FeedEntry.story(Story this.story)
+      : newCount = null,
+        isEnd = false;
+  const FeedEntry.caughtUp(int this.newCount)
+      : story = null,
+        isEnd = false;
+  const FeedEntry.end()
+      : story = null,
+        newCount = null,
+        isEnd = true;
+  final Story? story;
+  final int? newCount; // non-null = the divider page
+  final bool isEnd;
+}
+
+/// The exact page list the PageView consumes — index math lives here, nowhere
+/// else. The divider sits before the first OLD story that follows a NEW one,
+/// so the pinned featured card (old, index 0) can't suppress it and LIVE
+/// splices below the boundary can't move it. No new→old transition (first
+/// install, nothing new, everything new) means no divider — the feed looks
+/// exactly as it always did. Invariants callers rely on: index 0 is always a
+/// story when [shown] is non-empty; divider/end are always preceded by one.
+List<FeedEntry> feedEntries(
+    List<Story> shown, DateTime? lastSeen, bool exhausted) {
+  bool fresh(Story s) =>
+      lastSeen != null && (s.publishedAt?.isAfter(lastSeen) ?? false);
+  var at = -1;
+  for (var i = 1; i < shown.length; i++) {
+    if (!fresh(shown[i]) && fresh(shown[i - 1])) {
+      at = i;
+      break;
+    }
+  }
+  final newCount = at < 0 ? 0 : shown.where(fresh).length;
+  return [
+    for (var i = 0; i < shown.length; i++) ...[
+      if (i == at) FeedEntry.caughtUp(newCount),
+      FeedEntry.story(shown[i]),
+    ],
+    if (exhausted) const FeedEntry.end(),
+  ];
+}
 
 final storiesProvider = FutureProvider<List<Story>>((ref) async {
   // Feed ranking: the single current featured story pinned, then newest
@@ -378,9 +444,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     minImpact.addListener(_onFilterChanged);
     horizonFilter.addListener(_onFilterChanged);
     liveMode.addListener(_onLiveToggle);
+    // The stamp read is async and may land after the first data build.
+    lastSeenAtLaunch.addListener(_rebuild);
     loadEnabledCategories();
     loadMinImpact();
     loadHorizonFilter();
+    loadLastSeenStamp();
     WidgetsBinding.instance.addObserver(this);
     _startFreshTimer();
   }
@@ -408,6 +477,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     minImpact.removeListener(_onFilterChanged);
     horizonFilter.removeListener(_onFilterChanged);
     liveMode.removeListener(_onLiveToggle);
+    lastSeenAtLaunch.removeListener(_rebuild);
     _pc.dispose();
     super.dispose();
   }
@@ -446,6 +516,25 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       // cache banner the provider already raises.
     } finally {
       if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  /// The newest loaded story is on screen (the feed opens at the top) — that's
+  /// next launch's divider stamp. Write only when it advances; a cache-served
+  /// feed no-ops (its newest can't beat the stamp it was saved under).
+  DateTime? _seenStamped;
+  void _recordSeen() {
+    DateTime? newest;
+    for (final s in _feed) {
+      if (s.publishedAt != null &&
+          (newest == null || s.publishedAt!.isAfter(newest))) {
+        newest = s.publishedAt;
+      }
+    }
+    if (newest != null &&
+        (_seenStamped == null || newest.isAfter(_seenStamped!))) {
+      _seenStamped = newest;
+      setLastSeenStamp(newest);
     }
   }
 
@@ -516,9 +605,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       final shown =
           visibleStories(_feed, enabledCategories.value, minImpact.value,
               horizonFilter.value);
+      final entries =
+          feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
       final page = _pc.hasClients ? _pc.page?.round() : null;
       if (page != null && shown.isNotEmpty) {
-        anchorId = shown[page.clamp(0, shown.length - 1)].id;
+        final i = page.clamp(0, entries.length - 1);
+        // Sitting on the divider or end page: anchor to the story just above
+        // (safe — sentinels are never at index 0 and always follow a story).
+        anchorId = (entries[i].story ?? entries[i - 1].story)?.id;
       }
       final grown = insertFresh(_feed, fresh, anchorId);
       if (grown.length != _feed.length) {
@@ -547,7 +641,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
 
   /// Called after the frame that built the PageView, so the controller has
   /// clients to jump with.
-  void _land(List<Story> list) {
+  void _land() {
     final id = pendingStory.value;
     if (id == null || !mounted) return;
     pendingStory.value = null;
@@ -557,7 +651,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     resetFilterForAlert();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (jumpToStory(_pc, list, id)) return;
+      // The same entries the PageView shows — _feed, not the provider page,
+      // so LIVE splices and the divider can't skew the landing index.
+      final entries = feedEntries(
+          visibleStories(_feed, enabledCategories.value, minImpact.value,
+              horizonFilter.value),
+          lastSeenAtLaunch.value,
+          _exhausted);
+      if (jumpToStory(_pc, entries, id)) return;
       // Aged past the feed's 48h window, unapproved since the alert went out,
       // or we are serving the offline cache. One card beats the wrong card.
       Navigator.of(context).push(
@@ -574,12 +675,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       error: (e, _) => _Offline(onRetry: () => ref.refresh(storiesProvider)),
       data: (list) {
         if (pendingStory.value != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) => _land(list));
+          WidgetsBinding.instance.addPostFrameCallback((_) => _land());
         }
         final combined = _seeded(list);
+        _recordSeen();
         final shown =
             visibleStories(combined, enabledCategories.value, minImpact.value,
                 horizonFilter.value);
+        final entries =
+            feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
         // A short visible list can't reach onPageChanged's load trigger (one
         // card can't swipe at all), so pull older pages until the filter has
         // enough to show or the 48h window is drained. Each round either grows
@@ -650,18 +754,25 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                             child: PageView.builder(
                               controller: _pc,
                               scrollDirection: Axis.vertical,
-                              itemCount: shown.length + (_exhausted ? 1 : 0),
+                              itemCount: entries.length,
                               onPageChanged: (i) {
-                                if (i < shown.length) _logView(shown[i].id);
+                                final s = entries[i].story;
+                                if (s != null) _logView(s.id);
                                 // A few cards from the bottom: fetch the
                                 // next page before the reader gets there.
-                                if (i >= shown.length - 4) {
+                                if (i >= entries.length - 4) {
                                   _loadMore();
                                 }
                               },
-                              itemBuilder: (context, i) => i < shown.length
-                                  ? StoryPager(story: shown[i])
-                                  : const _EndOfFeed(),
+                              itemBuilder: (context, i) {
+                                final e = entries[i];
+                                return e.story != null
+                                    ? StoryPager(story: e.story!)
+                                    : e.isEnd
+                                        ? const _EndOfFeed()
+                                        : _CaughtUpPage(
+                                            newCount: e.newCount!);
+                              },
                             ),
                           ),
                     if (_refreshing)
@@ -691,14 +802,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   }
 
   void _logView(int storyId) {
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return;
-    Supabase.instance.client
-        .from('events')
-        .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'}).then(
-            (_) {},
-            onError: (_) {});
-    track('view', {'story_id': storyId});
+    // A view log is bookkeeping, never worth an error surface (also lets
+    // widget tests swipe the real feed with Supabase uninitialized).
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) return;
+      Supabase.instance.client
+          .from('events')
+          .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'}).then(
+              (_) {},
+              onError: (_) {});
+      track('view', {'story_id': storyId});
+    } catch (_) {}
   }
 }
 
@@ -718,6 +833,74 @@ class _EndOfFeed extends StatelessWidget {
         const SizedBox(height: 6),
         Text("That's the last 48 hours of market news.",
             style: mono.copyWith(fontSize: 11.5)),
+      ]),
+    );
+  }
+}
+
+/// The caught-up divider: one full page at the boundary between stories newer
+/// than the last visit and older ones, with today's index pulse for
+/// orientation. Copy deliberately distinct from _EndOfFeed's "You're all
+/// caught up".
+class _CaughtUpPage extends StatefulWidget {
+  const _CaughtUpPage({required this.newCount});
+  final int newCount;
+
+  @override
+  State<_CaughtUpPage> createState() => _CaughtUpPageState();
+}
+
+class _CaughtUpPageState extends State<_CaughtUpPage> {
+  @override
+  void initState() {
+    super.initState();
+    loadTicks(const ['^NSEI', '^BSESN']); // bonus data, silent-fail
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final n = widget.newCount;
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.vertical_align_top_rounded, size: 30, color: inkDim),
+        const SizedBox(height: 12),
+        Text("That's everything new",
+            style: serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        Text(
+            n == 1
+                ? '1 new story since your last visit — older news below.'
+                : '$n new stories since your last visit — older news below.',
+            style: mono.copyWith(fontSize: 11.5)),
+        ValueListenableBuilder<Map<String, Tick>>(
+          valueListenable: ticks,
+          builder: (_, m, __) {
+            final rows = [
+              for (final (sym, label) in const [
+                ('^NSEI', 'NIFTY'),
+                ('^BSESN', 'SENSEX'),
+              ])
+                if (m[sym]?.changePct != null) (label, m[sym]!)
+            ];
+            if (rows.isEmpty) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                for (final (label, t) in rows) ...[
+                  if (label != rows.first.$1)
+                    Text(' · ',
+                        style: mono.copyWith(fontSize: 11.5, color: inkDim)),
+                  Text('$label ', style: mono.copyWith(fontSize: 11.5)),
+                  Text(fmtPct(t.changePct, decimals: 1),
+                      style: mono.copyWith(
+                          fontSize: 11.5, color: t.up ? green : red)),
+                ],
+                Text(' today',
+                    style: mono.copyWith(fontSize: 11.5, color: inkDim)),
+              ]),
+            );
+          },
+        ),
       ]),
     );
   }
@@ -1921,6 +2104,12 @@ class _Offline extends StatelessWidget {
 /// vertical PageView rebuilt its State is instant, no second round trip.
 final _deepReadMemo = <int, DeepRead>{};
 
+/// After the deepread daily cap (429), prefetch pauses so every card viewed
+/// doesn't burn a doomed invoke. Manual opens still try — a tap is intent,
+/// and the admin may have raised the cap via app_config.edge.
+/// ponytail: flat 10-min pause, not a server retry-after.
+DateTime? _deepReadCapUntil;
+
 /// Page 0 is the story card; swiping LEFT reveals the AI-written whole story
 /// as newspaper pages (spec 2026-08-16). Generated on first open by the
 /// `deepread` edge function, which caches in stories.deep_read forever after —
@@ -1939,6 +2128,7 @@ class _StoryPagerState extends State<StoryPager> {
   DeepRead? _read;
   bool _requested = false; // invoke fired for this story (open or prefetch)
   bool _failed = false; // network failure — distinct from an AI refusal
+  int? _failedStatus; // HTTP status behind _failed (429 = daily cap)
   bool _onDeep = false; // past the card — back should return, not exit
   bool _opened = false; // the reader actually went deep (analytics gate)
   bool _tracked = false; // deep_read logged once per story per session
@@ -1962,6 +2152,7 @@ class _StoryPagerState extends State<StoryPager> {
       _read = _deepReadMemo[widget.story.id];
       _requested = false;
       _failed = false;
+      _failedStatus = null;
       _onDeep = false;
       _opened = false;
       _tracked = false;
@@ -1987,6 +2178,8 @@ class _StoryPagerState extends State<StoryPager> {
   void _armPrefetch() {
     _prefetch?.cancel();
     if (_read != null) return; // memo hit — nothing to warm
+    final cap = _deepReadCapUntil;
+    if (cap != null && DateTime.now().isBefore(cap)) return; // capped
     final id = widget.story.id;
     _prefetch = Timer(const Duration(seconds: 2), () {
       if (mounted && widget.story.id == id) _ensureRead();
@@ -2003,7 +2196,9 @@ class _StoryPagerState extends State<StoryPager> {
       if (deep) {
         _opened = true;
         _maybeTrack();
-        if (_failed && !_retriedOnOpen) {
+        // Not for a capped user: the silent retry would just burn another
+        // doomed invoke — the button and its honest copy take over.
+        if (_failed && !_retriedOnOpen && _failedStatus != 429) {
           _retriedOnOpen = true;
           _retryRead();
         }
@@ -2043,12 +2238,27 @@ class _StoryPagerState extends State<StoryPager> {
         setState(() => _read = read);
         _maybeTrack();
       }
+    } on FunctionException catch (e) {
+      // The daily cap is an expected state, not an outage (ask.dart
+      // precedent): keep the status so the failure page can say so.
+      if (e.status == 429) {
+        _deepReadCapUntil = DateTime.now().add(const Duration(minutes: 10));
+      }
+      if (mounted && widget.story.id == id) {
+        setState(() {
+          _failed = true;
+          _failedStatus = e.status;
+        });
+      }
     } catch (_) {
       if (mounted && widget.story.id == id) {
         // _requested stays true: _onScroll fires per scroll pixel while the
         // deep read is showing, and resetting here turned one offline moment
         // into a burst of invokes. Retry is the button's job now.
-        setState(() => _failed = true);
+        setState(() {
+          _failed = true;
+          _failedStatus = null;
+        });
       }
     }
   }
@@ -2056,6 +2266,7 @@ class _StoryPagerState extends State<StoryPager> {
   void _retryRead() {
     setState(() {
       _failed = false;
+      _failedStatus = null;
       _requested = false;
     });
     _ensureRead();
@@ -2092,7 +2303,10 @@ class _StoryPagerState extends State<StoryPager> {
           }
           // Network failure and AI refusal are different stories: one deserves
           // a retry button, the other the honest fallback in DeepReadPages.
-          if (_failed) return _FailedPage(onRetry: _retryRead);
+          if (_failed) {
+            return _FailedPage(
+                onRetry: _retryRead, capped: _failedStatus == 429);
+          }
           if (read == null) return const _WritingPage();
           return DeepReadPages(
             read: read.hasContent ? read : DeepRead(const []),
@@ -2137,8 +2351,9 @@ class _WritingPage extends StatelessWidget {
 /// the AI-refusal fallback inside DeepReadPages — that one means "this story
 /// can't be written", this one means "try again".
 class _FailedPage extends StatelessWidget {
-  const _FailedPage({required this.onRetry});
+  const _FailedPage({required this.onRetry, this.capped = false});
   final VoidCallback onRetry;
+  final bool capped; // daily deep-read cap (429), not a network problem
 
   @override
   Widget build(BuildContext context) {
@@ -2147,7 +2362,11 @@ class _FailedPage extends StatelessWidget {
       color: surface,
       child: Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text("Couldn't load the full story — check your connection.",
+          Text(
+              capped
+                  ? "That's a lot of deep reads for one day — full stories "
+                      'return tomorrow.'
+                  : "Couldn't load the full story — check your connection.",
               textAlign: TextAlign.center,
               style: mono.copyWith(fontSize: 11.5)),
           const SizedBox(height: 16),
