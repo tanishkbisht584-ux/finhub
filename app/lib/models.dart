@@ -38,6 +38,10 @@ class Story {
   final String? imageUrl;
   final String? videoUrl;
 
+  /// Pipeline event cluster. Approved siblings can ship (the collapse is
+  /// best-effort server-side); the feed keeps one card per cluster.
+  final String? clusterId;
+
   /// Pagination cursor for the infinite feed — the feed is ordered on it.
   final DateTime? publishedAt;
 
@@ -69,6 +73,7 @@ class Story {
         sectors = List<String>.from(j['sectors'] ?? const []),
         imageUrl = j['image_url'],
         videoUrl = j['video_url'],
+        clusterId = j['cluster_id'],
         publishedAt = DateTime.tryParse(j['published_at'] ?? ''),
         // Attached by the feed query and carried into the offline cache, so a
         // cached card keeps its outlet list too.

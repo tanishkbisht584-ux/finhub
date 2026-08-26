@@ -212,6 +212,20 @@ List<Story> insertFresh(List<Story> feed, List<Story> fresh, int? anchorId) {
   return [...feed.sublist(0, at + 1), ...add, ...feed.sublist(at + 1)];
 }
 
+/// One card per event: same-cluster approved siblings do ship (the pipeline's
+/// collapse is best-effort — "Chandrasekaran resigns" once ran as 6 cards),
+/// and every card already credits the whole cluster's outlets, so dropping
+/// siblings loses nothing. Input pages are newest-first: first occurrence
+/// wins. [have] = clusters already in the feed, so a late sibling of a card
+/// the reader may be looking at is dropped, never swapped in under them.
+List<Story> collapseClusters(List<Story> list, {Set<String> have = const {}}) {
+  final seen = {...have};
+  return [
+    for (final s in list)
+      if (s.clusterId == null || seen.add(s.clusterId!)) s
+  ];
+}
+
 /// The one feed the reader scrolls. A story with a null category (shouldn't
 /// happen for approved rows, but guard) shows only when nothing is excluded;
 /// a null impact score counts as 0.
@@ -548,6 +562,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     return _feed;
   }
 
+  /// Clusters already represented in the feed — a fresh sibling of one of
+  /// these is a duplicate card, not news.
+  Set<String> _feedClusters() =>
+      {for (final s in _feed) if (s.clusterId != null) s.clusterId!};
+
+  /// What the PageView actually shows: one card per cluster, then the
+  /// reader's filters. _feed itself stays RAW (siblings kept) so the
+  /// pagination cursor and exhaustion logic never miss ground that display
+  /// collapsed away.
+  List<Story> _shownStories() => visibleStories(collapseClusters(_feed),
+      enabledCategories.value, minImpact.value, horizonFilter.value);
+
   Future<void> _loadMore() async {
     if (_loadingMore || _exhausted) return;
     _loadingMore = true;
@@ -597,14 +623,16 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     }
     if (newest == null) return;
     try {
-      final fresh = await fetchFeedPage(after: newest);
+      // ponytail: a fresh sibling of a card already in the feed is DROPPED,
+      // not swapped in — replacing could yank the card being read, and the
+      // existing card's outlet credits already tell the multi-source story.
+      final fresh = collapseClusters(await fetchFeedPage(after: newest),
+          have: _feedClusters());
       if (fresh.isEmpty || !mounted) return;
       // Anchor on the card being read RIGHT NOW: the fresh cards become the
       // very next swipe, seamlessly — never a jump, never behind the reader.
       int? anchorId;
-      final shown =
-          visibleStories(_feed, enabledCategories.value, minImpact.value,
-              horizonFilter.value);
+      final shown = _shownStories();
       final entries =
           feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
       final page = _pc.hasClients ? _pc.page?.round() : null;
@@ -653,11 +681,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       if (!mounted) return;
       // The same entries the PageView shows — _feed, not the provider page,
       // so LIVE splices and the divider can't skew the landing index.
-      final entries = feedEntries(
-          visibleStories(_feed, enabledCategories.value, minImpact.value,
-              horizonFilter.value),
-          lastSeenAtLaunch.value,
-          _exhausted);
+      final entries =
+          feedEntries(_shownStories(), lastSeenAtLaunch.value, _exhausted);
       if (jumpToStory(_pc, entries, id)) return;
       // Aged past the feed's 48h window, unapproved since the alert went out,
       // or we are serving the offline cache. One card beats the wrong card.
@@ -677,11 +702,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
         if (pendingStory.value != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _land());
         }
-        final combined = _seeded(list);
+        _seeded(list);
         _recordSeen();
-        final shown =
-            visibleStories(combined, enabledCategories.value, minImpact.value,
-                horizonFilter.value);
+        final shown = _shownStories();
         final entries =
             feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
         // A short visible list can't reach onPageChanged's load trigger (one
