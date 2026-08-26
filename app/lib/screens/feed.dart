@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../analytics.dart';
 import '../feed_cache.dart';
+import '../follows.dart';
 import '../models.dart';
 import '../publishers.dart';
 import '../remote_config.dart';
@@ -248,6 +249,76 @@ List<Story> visibleStories(
           s
     ];
 
+/// Watchlist boost, bucketed: within 6-hour bands of published_at (absolute
+/// epoch bands — deterministic), stories tagging a followed company float to
+/// the band top; order is stable otherwise (explicit index tiebreak — Dart's
+/// sort isn't stable). Chronology stays sacred at macro scale: a watchlist
+/// story can jump at most ~6h, so "this morning" never outranks "right now"
+/// (the owner removed severity-first ordering for exactly that failure).
+/// Empty watchlist = identity. Null publishedAt sinks with the oldest.
+List<Story> rankStories(List<Story> list, Set<int> watchlist) {
+  if (watchlist.isEmpty || list.length < 2) return list;
+  int band(Story s) => s.publishedAt == null
+      ? -1
+      : s.publishedAt!.toUtc().millisecondsSinceEpoch ~/
+          Duration.millisecondsPerHour ~/
+          6;
+  bool hit(Story s) => s.companies.any((c) => watchlist.contains(c.id));
+  final idx = {for (var i = 0; i < list.length; i++) list[i].id: i};
+  return [...list]..sort((a, b) {
+      final ba = band(a), bb = band(b);
+      if (ba != bb) return bb.compareTo(ba); // newer band first
+      final ha = hit(a), hb = hit(b);
+      if (ha != hb) return ha ? -1 : 1;
+      return idx[a.id]!.compareTo(idx[b.id]!);
+    });
+}
+
+/// First open of a new IST day (fixed UTC+5:30, no DST)? The launch stamp is
+/// frozen per session, so this stays true across a mid-session refresh —
+/// consistent, not a bug.
+bool isDigestMorning(DateTime? lastSeen, DateTime now) {
+  if (lastSeen == null) return false;
+  DateTime ist(DateTime t) =>
+      t.toUtc().add(const Duration(hours: 5, minutes: 30));
+  final a = ist(lastSeen), b = ist(now);
+  return a.year != b.year || a.month != b.month || a.day != b.day;
+}
+
+/// Ordering for a page-1 seed. Index 0 stays pinned (the featured card, or
+/// simply the newest). The rest splits at the last-visit boundary and each
+/// side orders independently — a float can never drag an old story above a
+/// new one, which would corrupt feedEntries' divider detection. The new
+/// segment gets the morning digest (impact desc, ties keep recency) on the
+/// first open of an IST day, watchlist rank otherwise; the old segment
+/// always gets watchlist rank.
+List<Story> orderSeed(List<Story> page,
+    {DateTime? lastSeen, Set<int> watchlist = const {}, bool digest = false}) {
+  if (page.length < 2) return [...page];
+  bool fresh(Story s) =>
+      lastSeen != null && (s.publishedAt?.isAfter(lastSeen) ?? false);
+  final rest = page.sublist(1);
+  final newer = [
+    for (final s in rest)
+      if (fresh(s)) s
+  ];
+  final older = [
+    for (final s in rest)
+      if (!fresh(s)) s
+  ];
+  List<Story> newSeg;
+  if (digest && newer.length > 1) {
+    final idx = {for (var i = 0; i < newer.length; i++) newer[i].id: i};
+    newSeg = [...newer]..sort((a, b) {
+        final d = (b.impactScore ?? 0).compareTo(a.impactScore ?? 0);
+        return d != 0 ? d : idx[a.id]!.compareTo(idx[b.id]!);
+      });
+  } else {
+    newSeg = rankStories(newer, watchlist);
+  }
+  return [page.first, ...newSeg, ...rankStories(older, watchlist)];
+}
+
 /// One page of the feed's vertical PageView: a story, the caught-up divider
 /// (carrying the count of stories newer than the last-visit stamp), or the
 /// end-of-feed page.
@@ -464,6 +535,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     loadMinImpact();
     loadHorizonFilter();
     loadLastSeenStamp();
+    loadFollowedCompanies();
     WidgetsBinding.instance.addObserver(this);
     _startFreshTimer();
   }
@@ -556,7 +628,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   List<Story> _seeded(List<Story> page1) {
     if (!identical(page1, _page1Ref)) {
       _page1Ref = page1;
-      _feed = [...page1];
+      // ponytail: the prefs stamp read could in theory land after this
+      // network fetch — accepted; segmenting and digest just no-op once.
+      _feed = orderSeed(page1,
+          lastSeen: lastSeenAtLaunch.value,
+          watchlist: followedCompanyIds.value,
+          digest: isDigestMorning(lastSeenAtLaunch.value, DateTime.now()));
       _exhausted = false;
     }
     return _feed;
@@ -588,7 +665,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
         }
       }
       if (cursor == null) return;
-      final page = await fetchFeedPage(before: cursor);
+      // Older pages sit below the caught-up divider: plain watchlist rank,
+      // no segmenting. Same ids either way, so exhaustion math is untouched.
+      final page = rankStories(
+          await fetchFeedPage(before: cursor), followedCompanyIds.value);
       final merged = mergeStories(_feed, page);
       if (merged.length == _feed.length) {
         _exhausted = true; // the 48h window is drained — the feed may end

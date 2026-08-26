@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../analysis.dart';
+import '../follows.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ticks.dart';
@@ -172,6 +173,10 @@ class _StockScreenState extends State<StockScreen> {
     _togglingFollow = true;
     final was = _following;
     setState(() => _following = !was); // optimistic, like save
+    // Mirror into the feed's watchlist set the same optimistic way.
+    final next = {...followedCompanyIds.value};
+    was ? next.remove(widget.company.id) : next.add(widget.company.id);
+    followedCompanyIds.value = next;
     try {
       if (was) {
         await sb.from('follows').delete().match({
@@ -188,6 +193,9 @@ class _StockScreenState extends State<StockScreen> {
       }
     } catch (_) {
       if (mounted) setState(() => _following = was);
+      final undo = {...followedCompanyIds.value};
+      was ? undo.add(widget.company.id) : undo.remove(widget.company.id);
+      followedCompanyIds.value = undo;
     } finally {
       _togglingFollow = false;
     }
