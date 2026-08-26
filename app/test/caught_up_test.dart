@@ -122,9 +122,6 @@ void main() {
       await swipeUp(tester); // -> divider
       expect(find.text("That's everything new"), findsOneWidget);
       expect(find.textContaining('2 new stories'), findsOneWidget);
-      // Ticks can't load with Supabase uninitialized: the pulse row is
-      // simply absent, never an error.
-      expect(find.textContaining('NIFTY'), findsNothing);
       await swipeUp(tester); // -> story 3, feed continues past the divider
       expect(find.text('Hook 3'), findsOneWidget);
     });

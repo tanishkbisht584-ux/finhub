@@ -839,27 +839,14 @@ class _EndOfFeed extends StatelessWidget {
 }
 
 /// The caught-up divider: one full page at the boundary between stories newer
-/// than the last visit and older ones, with today's index pulse for
-/// orientation. Copy deliberately distinct from _EndOfFeed's "You're all
-/// caught up".
-class _CaughtUpPage extends StatefulWidget {
+/// than the last visit and older ones. Copy deliberately distinct from
+/// _EndOfFeed's "You're all caught up".
+class _CaughtUpPage extends StatelessWidget {
   const _CaughtUpPage({required this.newCount});
   final int newCount;
 
   @override
-  State<_CaughtUpPage> createState() => _CaughtUpPageState();
-}
-
-class _CaughtUpPageState extends State<_CaughtUpPage> {
-  @override
-  void initState() {
-    super.initState();
-    loadTicks(const ['^NSEI', '^BSESN']); // bonus data, silent-fail
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final n = widget.newCount;
     return Center(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.vertical_align_top_rounded, size: 30, color: inkDim),
@@ -868,39 +855,11 @@ class _CaughtUpPageState extends State<_CaughtUpPage> {
             style: serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
         const SizedBox(height: 6),
         Text(
-            n == 1
+            newCount == 1
                 ? '1 new story since your last visit — older news below.'
-                : '$n new stories since your last visit — older news below.',
+                : '$newCount new stories since your last visit — '
+                    'older news below.',
             style: mono.copyWith(fontSize: 11.5)),
-        ValueListenableBuilder<Map<String, Tick>>(
-          valueListenable: ticks,
-          builder: (_, m, __) {
-            final rows = [
-              for (final (sym, label) in const [
-                ('^NSEI', 'NIFTY'),
-                ('^BSESN', 'SENSEX'),
-              ])
-                if (m[sym]?.changePct != null) (label, m[sym]!)
-            ];
-            if (rows.isEmpty) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.only(top: 14),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                for (final (label, t) in rows) ...[
-                  if (label != rows.first.$1)
-                    Text(' · ',
-                        style: mono.copyWith(fontSize: 11.5, color: inkDim)),
-                  Text('$label ', style: mono.copyWith(fontSize: 11.5)),
-                  Text(fmtPct(t.changePct, decimals: 1),
-                      style: mono.copyWith(
-                          fontSize: 11.5, color: t.up ? green : red)),
-                ],
-                Text(' today',
-                    style: mono.copyWith(fontSize: 11.5, color: inkDim)),
-              ]),
-            );
-          },
-        ),
       ]),
     );
   }
