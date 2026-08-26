@@ -144,6 +144,40 @@ Future<void> setHorizonFilter(String v) async {
       : await prefs.setString(_horizonPrefsKey, v);
 }
 
+/// Muted publishers and tickers — curation, not a lens: no dial glow, and
+/// neither the dial's Reset nor an alert's resetFilterForAlert touches them.
+/// Unmute lives in the dial sheet's MUTED row.
+final mutedSources = ValueNotifier<Set<String>>({}); // publisher() keys
+final mutedSymbols = ValueNotifier<Set<String>>({}); // NSE symbols
+const _mutedSourcesPrefsKey = 'feed_muted_sources_v1';
+const _mutedSymbolsPrefsKey = 'feed_muted_symbols_v1';
+
+Future<void> loadMutes() async {
+  final prefs = await SharedPreferences.getInstance();
+  mutedSources.value =
+      (prefs.getStringList(_mutedSourcesPrefsKey) ?? const []).toSet();
+  mutedSymbols.value =
+      (prefs.getStringList(_mutedSymbolsPrefsKey) ?? const []).toSet();
+}
+
+Future<void> _toggleMute(ValueNotifier<Set<String>> muted, String prefsKey,
+    String kind, String key) async {
+  final next = {...muted.value};
+  final on = !next.remove(key);
+  if (on) next.add(key);
+  muted.value = next;
+  track('filter_mute', {'kind': kind, 'key': key, 'on': on});
+  final prefs = await SharedPreferences.getInstance();
+  next.isEmpty
+      ? await prefs.remove(prefsKey)
+      : await prefs.setStringList(prefsKey, next.toList()..sort());
+}
+
+Future<void> toggleMuteSource(String pub) =>
+    _toggleMute(mutedSources, _mutedSourcesPrefsKey, 'source', pub);
+Future<void> toggleMuteSymbol(String sym) =>
+    _toggleMute(mutedSymbols, _mutedSymbolsPrefsKey, 'symbol', sym);
+
 /// Newest published_at that was on screen at the last visit. The feed opens
 /// on the newest card, so loaded-at-top counts as seen. Frozen for the
 /// session (the setter only persists) so the caught-up divider doesn't chase
@@ -231,13 +265,16 @@ List<Story> collapseClusters(List<Story> list, {Set<String> have = const {}}) {
 /// happen for approved rows, but guard) shows only when nothing is excluded;
 /// a null impact score counts as 0.
 List<Story> visibleStories(
-        List<Story> list, Set<String> enabled, int minImp, String horizon) =>
+        List<Story> list, Set<String> enabled, int minImp, String horizon,
+        {Set<String> mutedSrc = const {}, Set<String> mutedSym = const {}}) =>
     [
       for (final s in list)
         if ((s.category == null
                 ? enabled.length == feedCategories.length
                 : enabled.contains(s.category)) &&
             (s.impactScore ?? 0) >= minImp &&
+            !mutedSrc.contains(publisher(s.sourceName)) &&
+            !s.companies.any((c) => mutedSym.contains(c.nseSymbol)) &&
             // Same convention as null category: a story with no horizon shows
             // only when the lens is wide open. 'both' belongs to either lens.
             (horizon == 'all' ||
@@ -248,6 +285,49 @@ List<Story> visibleStories(
                         s.impactHorizon == 'both')))
           s
     ];
+
+/// This session's reading, fed by onPageChanged. Module state, never reset:
+/// the process lifetime IS the session.
+final sessionViewedIds = <int>{};
+final sessionCategoryCounts = <String, int>{};
+final sessionSymbols = <String>{};
+
+void recordSessionView(Story s) {
+  if (!sessionViewedIds.add(s.id)) return;
+  final c = s.category;
+  if (c != null) {
+    sessionCategoryCounts[c] = (sessionCategoryCounts[c] ?? 0) + 1;
+  }
+  for (final co in s.companies) {
+    if (co.nseSymbol.isNotEmpty) sessionSymbols.add(co.nseSymbol);
+  }
+}
+
+String? topCategory(Map<String, int> counts) {
+  String? best;
+  var n = 0;
+  for (final e in counts.entries) {
+    if (e.value > n) {
+      n = e.value;
+      best = e.key;
+    }
+  }
+  return best;
+}
+
+/// Largest absolute day move among [symbols] with a live tick; null when
+/// none have one.
+({String symbol, double pct})? biggestMover(
+    Set<String> symbols, Map<String, Tick> ticks) {
+  ({String symbol, double pct})? best;
+  for (final s in symbols) {
+    final p = ticks[s]?.changePct;
+    if (p != null && (best == null || p.abs() > best.pct.abs())) {
+      best = (symbol: s, pct: p);
+    }
+  }
+  return best;
+}
 
 /// Watchlist boost, bucketed: within 6-hour bands of published_at (absolute
 /// epoch bands — deterministic), stories tagging a followed company float to
@@ -325,17 +405,26 @@ List<Story> orderSeed(List<Story> page,
 class FeedEntry {
   const FeedEntry.story(Story this.story)
       : newCount = null,
-        isEnd = false;
+        isEnd = false,
+        isRecap = false;
   const FeedEntry.caughtUp(int this.newCount)
       : story = null,
-        isEnd = false;
+        isEnd = false,
+        isRecap = false;
   const FeedEntry.end()
       : story = null,
         newCount = null,
-        isEnd = true;
+        isEnd = true,
+        isRecap = false;
+  const FeedEntry.recap()
+      : story = null,
+        newCount = null,
+        isEnd = false,
+        isRecap = true;
   final Story? story;
   final int? newCount; // non-null = the divider page
   final bool isEnd;
+  final bool isRecap; // session recap interstitial
 }
 
 /// The exact page list the PageView consumes — index math lives here, nowhere
@@ -343,8 +432,12 @@ class FeedEntry {
 /// so the pinned featured card (old, index 0) can't suppress it and LIVE
 /// splices below the boundary can't move it. No new→old transition (first
 /// install, nothing new, everything new) means no divider — the feed looks
-/// exactly as it always did. Invariants callers rely on: index 0 is always a
-/// story when [shown] is non-empty; divider/end are always preceded by one.
+/// exactly as it always did. A session-recap page follows every 25th story,
+/// suppressed at the list end and next to the divider. Invariants callers
+/// rely on: index 0 is always a story when [shown] is non-empty;
+/// divider/recap/end are always preceded by a story.
+const recapEvery = 25;
+
 List<FeedEntry> feedEntries(
     List<Story> shown, DateTime? lastSeen, bool exhausted) {
   bool fresh(Story s) =>
@@ -361,6 +454,8 @@ List<FeedEntry> feedEntries(
     for (var i = 0; i < shown.length; i++) ...[
       if (i == at) FeedEntry.caughtUp(newCount),
       FeedEntry.story(shown[i]),
+      if ((i + 1) % recapEvery == 0 && i + 1 != at && i + 1 < shown.length)
+        const FeedEntry.recap(),
     ],
     if (exhausted) const FeedEntry.end(),
   ];
@@ -531,11 +626,16 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     liveMode.addListener(_onLiveToggle);
     // The stamp read is async and may land after the first data build.
     lastSeenAtLaunch.addListener(_rebuild);
+    // _rebuild, not _onFilterChanged: muting mid-feed must not teleport to
+    // page 0 — the card vanishes and the next one slides into its index.
+    mutedSources.addListener(_rebuild);
+    mutedSymbols.addListener(_rebuild);
     loadEnabledCategories();
     loadMinImpact();
     loadHorizonFilter();
     loadLastSeenStamp();
     loadFollowedCompanies();
+    loadMutes();
     WidgetsBinding.instance.addObserver(this);
     _startFreshTimer();
   }
@@ -564,6 +664,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     horizonFilter.removeListener(_onFilterChanged);
     liveMode.removeListener(_onLiveToggle);
     lastSeenAtLaunch.removeListener(_rebuild);
+    mutedSources.removeListener(_rebuild);
+    mutedSymbols.removeListener(_rebuild);
     _pc.dispose();
     super.dispose();
   }
@@ -649,7 +751,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   /// pagination cursor and exhaustion logic never miss ground that display
   /// collapsed away.
   List<Story> _shownStories() => visibleStories(collapseClusters(_feed),
-      enabledCategories.value, minImpact.value, horizonFilter.value);
+      enabledCategories.value, minImpact.value, horizonFilter.value,
+      mutedSrc: mutedSources.value, mutedSym: mutedSymbols.value);
 
   Future<void> _loadMore() async {
     if (_loadingMore || _exhausted) return;
@@ -860,7 +963,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                               itemCount: entries.length,
                               onPageChanged: (i) {
                                 final s = entries[i].story;
-                                if (s != null) _logView(s.id);
+                                if (s != null) {
+                                  _logView(s.id);
+                                  recordSessionView(s);
+                                }
                                 // A few cards from the bottom: fetch the
                                 // next page before the reader gets there.
                                 if (i >= entries.length - 4) {
@@ -873,8 +979,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                                     ? StoryPager(story: e.story!)
                                     : e.isEnd
                                         ? const _EndOfFeed()
-                                        : _CaughtUpPage(
-                                            newCount: e.newCount!);
+                                        : e.isRecap
+                                            ? const _RecapPage()
+                                            : _CaughtUpPage(
+                                                newCount: e.newCount!);
                               },
                             ),
                           ),
@@ -963,6 +1071,52 @@ class _CaughtUpPage extends StatelessWidget {
                 : '$newCount new stories since your last visit — '
                     'older news below.',
             style: mono.copyWith(fontSize: 11.5)),
+      ]),
+    );
+  }
+}
+
+/// Session recap interstitial: every 25th card, a one-page breather with the
+/// session's reading stats. Dumb rendering of tested pure functions; the
+/// mover line self-omits when no viewed ticker has a live tick.
+class _RecapPage extends StatelessWidget {
+  const _RecapPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final n = sessionViewedIds.length;
+    final cat = topCategory(sessionCategoryCounts);
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.receipt_long_rounded, size: 30, color: inkDim),
+        const SizedBox(height: 12),
+        Text('Your session so far',
+            style: serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        Text(
+            '${n == 1 ? '1 story' : '$n stories'} read'
+            '${cat == null ? '' : ' — mostly $cat'}.',
+            style: mono.copyWith(fontSize: 11.5)),
+        ValueListenableBuilder<Map<String, Tick>>(
+          valueListenable: ticks,
+          builder: (_, m, __) {
+            final mover = biggestMover(sessionSymbols, m);
+            if (mover == null) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('${mover.symbol} ',
+                    style: mono.copyWith(fontSize: 11.5)),
+                Text(fmtPct(mover.pct, decimals: 1),
+                    style: mono.copyWith(
+                        fontSize: 11.5,
+                        color: mover.pct >= 0 ? green : red)),
+                Text(' — the biggest mover you read.',
+                    style: mono.copyWith(fontSize: 11.5)),
+              ]),
+            );
+          },
+        ),
       ]),
     );
   }
@@ -1134,6 +1288,42 @@ void showFeedFilterSheet(BuildContext context) {
                     filterPill(
                         c, enabled.contains(c), green, () => toggleCategory(c)),
                 ]),
+                // ponytail: the sheet isn't scrollable — dozens of mutes
+                // would overflow; wrap in SingleChildScrollView when a real
+                // user gets there.
+                ValueListenableBuilder<Set<String>>(
+                  valueListenable: mutedSources,
+                  builder: (context, srcs, _) =>
+                      ValueListenableBuilder<Set<String>>(
+                    valueListenable: mutedSymbols,
+                    builder: (context, syms, _) =>
+                        srcs.isEmpty && syms.isEmpty
+                            ? const SizedBox.shrink()
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                    const SizedBox(height: 18),
+                                    Text('MUTED — TAP TO UNMUTE',
+                                        style: mono.copyWith(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700)),
+                                    const SizedBox(height: 10),
+                                    Wrap(
+                                        spacing: 8,
+                                        runSpacing: 8,
+                                        children: [
+                                          for (final p in srcs.toList()
+                                            ..sort())
+                                            filterPill(p.toUpperCase(), true,
+                                                red, () => toggleMuteSource(p)),
+                                          for (final s in syms.toList()
+                                            ..sort())
+                                            filterPill(s, true, red,
+                                                () => toggleMuteSymbol(s)),
+                                        ]),
+                                  ]),
+                  ),
+                ),
               ]),
         ),
       ),
@@ -1843,7 +2033,36 @@ class _StoryCardState extends ConsumerState<StoryCard>
         tint: inkDim,
         onTap: () => _fire('card'),
       ),
+      const SizedBox(height: 4),
+      _railButton(
+        icon: Icons.volume_off_outlined,
+        tint: inkDim,
+        onTap: _showMuteSheet,
+      ),
     ]);
+  }
+
+  /// Mute this card's publisher or any of its tickers. Undo lives in the
+  /// filter dial's MUTED row — no SnackBar (filterPill already haptics).
+  void _showMuteSheet() {
+    final pub = publisher(widget.story.sourceName);
+    _showPillSheet(
+      context,
+      'MUTE',
+      (sheet) => Wrap(spacing: 8, runSpacing: 8, children: [
+        if (pub.isNotEmpty)
+          filterPill('MUTE ${pub.toUpperCase()}', false, red, () {
+            toggleMuteSource(pub);
+            Navigator.pop(sheet);
+          }),
+        for (final c in widget.story.companies
+            .where((c) => c.nseSymbol.isNotEmpty))
+          filterPill('MUTE ${c.nseSymbol}', false, red, () {
+            toggleMuteSymbol(c.nseSymbol);
+            Navigator.pop(sheet);
+          }),
+      ]),
+    );
   }
 
   Widget _railButton({
