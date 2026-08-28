@@ -18,7 +18,8 @@ class Outlet {
 /// again in jsonDecode, the offline-cache encode, and the prefs blob.
 const storyCols = 'id,hook,headline,summary,impact_direction,impact_strength,'
     'impact_horizon,impact_score,severity_level,confidence,source_name,'
-    'source_url,category,sectors,image_url,video_url,published_at,cluster_id';
+    'source_url,category,sectors,image_url,video_url,published_at,cluster_id,'
+    'why_it_matters,winners_losers,whats_next,claim_status';
 
 class Story {
   final int id;
@@ -54,6 +55,13 @@ class Story {
   /// (one batched query per page, like outlets) and cached with the card.
   final List<Company> companies;
 
+  /// Glance lines (migration 014). NULL on stories scored before they shipped
+  /// and whenever a weak AI lane omitted them — the card renders nothing then.
+  final String? whyItMatters;
+  final String? winnersLosers;
+  final String? whatsNext;
+  final String? claimStatus; // confirmed | reported | rumour
+
   Story.fromJson(Map<String, dynamic> j)
       : id = j['id'],
         hook = j['hook'],
@@ -84,7 +92,11 @@ class Story {
         companies = [
           for (final c in (j['companies'] as List? ?? const []))
             Company.fromJson(Map<String, dynamic>.from(c))
-        ];
+        ],
+        whyItMatters = j['why_it_matters'],
+        winnersLosers = j['winners_losers'],
+        whatsNext = j['whats_next'],
+        claimStatus = j['claim_status'];
 }
 
 class QaSource {

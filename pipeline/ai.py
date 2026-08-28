@@ -43,6 +43,8 @@ DIRECTIONS = {"positive", "negative", "mixed", "neutral"}
 HORIZONS = {"short_term", "long_term", "both"}
 CATEGORIES = {"Markets", "Economy", "IPO", "Global", "Commodities", "Corporate", "Policy", "Geopolitics"}
 CONFIDENCES = {"high", "medium", "low"}
+CLAIM_STATUSES = {"confirmed", "reported", "rumour"}
+CARD_LINES = ("why_it_matters", "winners_losers", "whats_next")  # optional glance lines (014)
 
 
 class AIError(Exception):
@@ -206,6 +208,14 @@ def validate(card):
         raise ValueError("companies/sectors must be lists")
     if not isinstance(card["is_india_relevant"], bool):
         raise ValueError("is_india_relevant must be boolean")
+    # Glance lines (014) are OPTIONAL — five lanes with different models answer
+    # this prompt, and a weak lane omitting or garbling them must cost the
+    # field, never the story: coerce to None, don't raise.
+    for key in CARD_LINES:
+        if not isinstance(card.get(key), str) or not card.get(key, "").strip():
+            card[key] = None
+    if card.get("claim_status") not in CLAIM_STATUSES:
+        card["claim_status"] = None
     return card
 
 

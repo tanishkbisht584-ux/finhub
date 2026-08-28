@@ -114,6 +114,25 @@ def test_validate_rejects_bad_cards(patch):
         validate({**CARD, **patch})
 
 
+def test_validate_glance_lines_optional_and_coerced():
+    """014 glance lines: five lanes answer this prompt, so a lane that omits
+    or garbles them must cost the FIELD, never the story."""
+    # all absent -> passes, coerced to explicit None
+    card = validate(dict(CARD))
+    assert card["why_it_matters"] is None and card["claim_status"] is None
+    # bad enum / non-string / empty -> None, no raise
+    card = validate({**CARD, "claim_status": "unverified", "why_it_matters": 7,
+                     "winners_losers": "  ", "whats_next": "RBI meet Oct 1"})
+    assert card["claim_status"] is None and card["why_it_matters"] is None
+    assert card["winners_losers"] is None
+    assert card["whats_next"] == "RBI meet Oct 1"
+    # good values pass through
+    card = validate({**CARD, "claim_status": "rumour",
+                     "why_it_matters": "Cheaper loans likely by Diwali"})
+    assert card["claim_status"] == "rumour"
+    assert card["why_it_matters"] == "Cheaper loans likely by Diwali"
+
+
 def test_prioritized_interleaves_sources_by_authority():
     from run import prioritized
     et = {"name": "ET", "authority": 8}

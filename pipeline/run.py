@@ -1132,6 +1132,8 @@ def retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key):
             "impact_horizon": imp["horizon"], "impact_score": imp["score"],
             "confidence": card["confidence"], "category": card["category"],
             "sectors": card["sectors"], "raw_ai_error": None,
+            "why_it_matters": card.get("why_it_matters"), "winners_losers": card.get("winners_losers"),
+            "whats_next": card.get("whats_next"), "claim_status": card.get("claim_status"),
             "status": "pending" if keep else "rejected",
         })
         healed += 1  # ai.py throttles; no extra sleep needed
@@ -1460,6 +1462,8 @@ def main(cfg=None):
                     "impact_horizon": imp["horizon"], "impact_score": imp["score"],
                     "confidence": card["confidence"], "category": card["category"],
                     "sectors": card["sectors"],
+                    "why_it_matters": card.get("why_it_matters"), "winners_losers": card.get("winners_losers"),
+                    "whats_next": card.get("whats_next"), "claim_status": card.get("claim_status"),
                     "status": "duplicate" if twin else (
                         ("approved" if live_now else "pending") if keep else "rejected"),
                 }, companies_by_key, card)

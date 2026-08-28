@@ -12,7 +12,8 @@ import ops  # noqa: E402  (pipeline/ on sys.path after pipeline_mod)
 MARKERS = {"001": "stories?select=id", "003": "profiles?select=id", "004": "stories?select=fts",
            "007": "stories?select=video_url", "008": "stories?select=deep_read",
            "010": "app_config?select=key", "011": "quotes?select=symbol",
-           "012": "stories?select=updated_at", "013": "analysis_requests?select=symbol"}
+           "012": "stories?select=updated_at", "013": "analysis_requests?select=symbol",
+           "014": "stories?select=claim_status"}
 MIG_DIR = REPO / "pipeline" / "migrations"
 
 

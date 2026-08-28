@@ -1703,6 +1703,62 @@ class _StoryCardState extends ConsumerState<StoryCard>
     );
   }
 
+  bool get _hasGlanceLines =>
+      (story.whyItMatters ?? '').isNotEmpty ||
+      (story.winnersLosers ?? '').isNotEmpty ||
+      story.claimStatus != null;
+
+  static const _claimColor = {
+    'confirmed': green,
+    'reported': amber,
+    'rumour': red,
+  };
+
+  Widget _glanceChip(String text, {Color? dot}) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(border: Border.all(color: border)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (dot != null) ...[
+            Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+            const SizedBox(width: 5),
+          ],
+          Text(text, style: mono.copyWith(fontSize: 12)),
+        ]),
+      );
+
+  /// One merged row: winners/losers · claim status · watchlist flag.
+  /// Merged deliberately — three separate lines would tip small phones into
+  /// _FitScroll's inner-scroll mode and kill the vertical feed swipe.
+  List<Widget> _glanceRow() => [
+        ValueListenableBuilder<Set<int>>(
+            valueListenable: followedCompanyIds,
+            builder: (_, followed, __) {
+              final watched = story.companies
+                  .where((c) => followed.contains(c.id))
+                  .map((c) => c.nseSymbol)
+                  .where((s) => s.isNotEmpty)
+                  .toList();
+              final chips = <Widget>[
+                if ((story.winnersLosers ?? '').isNotEmpty)
+                  _glanceChip(story.winnersLosers!),
+                if (story.claimStatus != null)
+                  _glanceChip(story.claimStatus!,
+                      dot: _claimColor[story.claimStatus]),
+                if (watched.isNotEmpty)
+                  _glanceChip('★ ${watched.join(', ')} on your watchlist',
+                      dot: null),
+              ];
+              if (chips.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Wrap(spacing: 8, runSpacing: 8, children: chips),
+              );
+            }),
+      ];
+
   Widget _card(Color dir, bool isSaved) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1741,11 +1797,31 @@ class _StoryCardState extends ConsumerState<StoryCard>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Glance lines (014): why-it-matters above the summary,
+                        // then one merged chip row. NULL fields (old stories,
+                        // weak lanes) render nothing. When present, the summary
+                        // is clamped so the card can't tip into _FitScroll's
+                        // inner-scroll mode and eat the vertical feed swipe.
+                        if ((story.whyItMatters ?? '').isNotEmpty) ...[
+                          Text(story.whyItMatters!,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  height: 1.4,
+                                  fontWeight: FontWeight.w700,
+                                  color: ink)),
+                          const SizedBox(height: 8),
+                        ],
                         Text(story.summary ?? '',
+                            maxLines: _hasGlanceLines ? 5 : null,
+                            overflow:
+                                _hasGlanceLines ? TextOverflow.ellipsis : null,
                             style: TextStyle(
                                 fontSize: 15,
                                 height: 1.55,
                                 color: ink.withValues(alpha: 0.8))),
+                        ..._glanceRow(),
                         if (story.companies.isNotEmpty) ...[
                           const SizedBox(height: 14),
                           Wrap(

@@ -15,7 +15,11 @@ Read the article below and return ONLY a JSON object with exactly these fields:
   "sectors": ["..."],
   "category": "Markets|Economy|IPO|Global|Commodities|Corporate|Policy|Geopolitics",
   "is_india_relevant": true|false,
-  "confidence": "high|medium|low"
+  "confidence": "high|medium|low",
+  "why_it_matters": "one line, <=12 words: the concrete consequence for an Indian retail investor",
+  "winners_losers": "<=8 words, 'X gains / Y hurt' form, \"\" if no clear winners or losers",
+  "whats_next": "one line: the next known date, event or decision to watch, \"\" if none",
+  "claim_status": "confirmed|reported|rumour"
 }}
 
 Rules:
@@ -62,6 +66,14 @@ Rules:
 - Routine SME/micro-cap items (grey market premium updates, small IPO day counts,
   tiny-cap 52-week highs): score 1-3. Reserve 4+ for stories a typical retail
   investor would genuinely want explained.
+- why_it_matters: the SO WHAT in consequence form ("Cheaper loans likely by
+  Diwali", "Your SIP in IT funds takes a hit"), never the event restated and
+  never the hook repeated. Empty string over padding.
+- winners_losers: who gains and who is hurt, named plainly ("IT exporters gain /
+  importers hurt"). Only when the article supports it; "" otherwise.
+- claim_status: confirmed = official filing, order or on-record statement;
+  reported = credible outlet reporting, principals have not confirmed;
+  rumour = speculation, "people familiar with the matter", market chatter.
 
 Source: {source_name}
 Headline: {headline}
