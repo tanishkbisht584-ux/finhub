@@ -17,6 +17,7 @@ import '../publishers.dart';
 import '../remote_config.dart';
 import '../share_palette.dart';
 import '../ticks.dart';
+import '../tts.dart';
 import 'saved.dart';
 import 'stock.dart';
 import 'story_detail.dart';
@@ -663,6 +664,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
 
   @override
   void dispose() {
+    stopSpeaking(); // leaving the feed silences the brief
     WidgetsBinding.instance.removeObserver(this);
     _freshTimer?.cancel();
     pendingStory.removeListener(_rebuild);
@@ -969,6 +971,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                               scrollDirection: Axis.vertical,
                               itemCount: entries.length,
                               onPageChanged: (i) {
+                                stopSpeaking(); // brief never talks over a swipe
                                 final s = entries[i].story;
                                 if (s != null) {
                                   _logView(s.id);
@@ -1007,7 +1010,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                     Positioned(
                         top: cachedAt != null ? 8 : inset + 8,
                         left: 16,
-                        child: const LiveButton()),
+                        child: Row(children: [
+                          const LiveButton(),
+                          // Morning brief ▶ (owner: play button, never
+                          // auto-play): digest mornings only, reads the top
+                          // digest stories aloud; any swipe stops it.
+                          if (isDigestMorning(
+                                  lastSeenAtLaunch.value, DateTime.now()) &&
+                              _feed.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            _BriefButton(stories: _feed),
+                          ],
+                        ])),
                     Positioned(
                         top: cachedAt != null ? 8 : inset + 8,
                         right: 16,
@@ -1161,6 +1175,57 @@ class LiveButton extends StatelessWidget {
                 style: mono.copyWith(
                     fontSize: 10.5,
                     color: on ? red : inkDim,
+                    fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Morning brief: LIVE's quieter sibling, digest mornings only. Tap reads
+/// the top digest stories (hook + why-it-matters) aloud; tap again — or any
+/// swipe — stops it. Play button by owner's choice, never auto-play.
+class _BriefButton extends StatelessWidget {
+  const _BriefButton({required this.stories});
+  final List<Story> stories;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: speaking,
+      builder: (context, on, _) => GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          if (on) {
+            stopSpeaking();
+          } else {
+            speakBrief(briefText([
+              for (final s in stories)
+                (hook: s.hook ?? s.headline, why: s.whyItMatters)
+            ]));
+          }
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: on
+                ? green.withValues(alpha: 0.18)
+                : surface.withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(22),
+            border:
+                Border.all(color: on ? green : border, width: on ? 1.5 : 1),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(on ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                size: 16, color: on ? green : inkDim),
+            const SizedBox(width: 5),
+            Text('BRIEF',
+                style: mono.copyWith(
+                    fontSize: 10.5,
+                    color: on ? green : inkDim,
                     fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
           ]),
         ),
@@ -2222,6 +2287,23 @@ class _StoryCardState extends ConsumerState<StoryCard>
         tint: inkDim,
         onTap: _showMuteSheet,
       ),
+      // Follow this STORY (015): bell pings only when the cluster develops.
+      // 4 tiles is the rail's hard cap — a 5th would climb into the hero.
+      if (story.clusterId != null) ...[
+        const SizedBox(height: 4),
+        ValueListenableBuilder<Set<String>>(
+            valueListenable: followedClusterIds,
+            builder: (_, followed, __) {
+              final on = followed.contains(story.clusterId);
+              return _railButton(
+                icon: on
+                    ? Icons.notifications_active_rounded
+                    : Icons.notifications_none_rounded,
+                tint: on ? green : inkDim,
+                onTap: () => toggleFollowCluster(story.clusterId!),
+              );
+            }),
+      ],
     ]);
   }
 

@@ -3,7 +3,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_tts/flutter_tts.dart';
+import 'tts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'analytics.dart';
@@ -47,10 +47,9 @@ void _openStory(RemoteMessage m) {
   pendingStory.value = id;
 }
 
-final _tts = FlutterTts();
-
 /// L1 voice (spec §7): a foreground push with impact >= 9 speaks the hook —
 /// ~3 s of on-device TTS, gated on the profile toggle, on by default.
+/// Engine shared with the digest brief (tts.dart).
 Future<void> _maybeSpeak(RemoteMessage m) async {
   final score = int.tryParse(m.data['impact_score'] ?? '') ?? 0;
   final hook = m.data['hook'] ?? '';
@@ -66,7 +65,7 @@ Future<void> _maybeSpeak(RemoteMessage m) async {
       if (row?['alert_settings']?['voice_l1'] == false) return;
     } catch (_) {} // can't read the toggle -> default on (it's L1-rare)
   }
-  await _tts.speak(hook);
+  await tts.speak(hook);
 }
 
 // Set once the token's been pushed so AuthGate's per-rebuild call is a no-op

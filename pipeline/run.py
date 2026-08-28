@@ -893,6 +893,8 @@ def personal_matches(story, follows_by_user, companies_of):
                 hit.add(uid); break
             if ttype == "sector" and tid in secs:
                 hit.add(uid); break
+            if ttype == "cluster" and tid == story.get("cluster_id"):
+                hit.add(uid); break
             if ttype == "company":
                 if comps is None:
                     comps = companies_of(story["id"])
@@ -929,10 +931,24 @@ def personal_alert_engine(now=None):
 
     today = now.astimezone(IST).strftime("%Y-%m-%d")
     cutoff = iso(now - timedelta(hours=6))
-    stories = sb("GET", "stories?select=id,hook,headline,impact_score,category,sectors"
+    sel = "id,hook,headline,impact_score,category,sectors,cluster_id"
+    stories = sb("GET", f"stories?select={sel}"
                         f"&created_at=gte.{cutoff}&impact_score=gte.{PERSONAL_MIN_SCORE}"
                         "&alerted_at=is.null&status=eq.approved"
                         "&order=id.asc")
+    # A development in a FOLLOWED cluster is usually a duplicate row with a
+    # NULL impact_score — invisible to the select above, so followed clusters
+    # get their own query: any status, no score floor. The id cursor and the
+    # 5/day cap treat the union exactly like any other story.
+    followed_clusters = {tid for fl in follows_by_user.values()
+                         for (tt, tid) in fl if tt == "cluster"}
+    if followed_clusters:
+        quoted = ",".join(f'"{c}"' for c in followed_clusters)
+        extra = sb("GET", f"stories?select={sel}&created_at=gte.{cutoff}"
+                          f"&cluster_id=in.({quoted})&alerted_at=is.null")
+        have = {s["id"] for s in stories}
+        stories = sorted(stories + [s for s in extra if s["id"] not in have],
+                         key=lambda s: s["id"])
     if not stories:
         return 0
 

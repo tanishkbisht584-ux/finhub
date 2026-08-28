@@ -390,6 +390,57 @@ def test_personal_matches_company_sector_category():
     assert hits == {"u-company", "u-sector", "u-category"}
 
 
+def test_personal_matches_cluster_branch():
+    """015: following a cluster matches its developments — which are usually
+    duplicate rows with NULL impact_score/category, so nothing else may be
+    required of the story shape."""
+    from run import personal_matches
+    dup = {"id": 11, "impact_score": None, "category": None, "sectors": None,
+           "cluster_id": "abc-123"}
+    follows = {"u-cluster": [("cluster", "abc-123")],
+               "u-other": [("cluster", "zzz-999")]}
+    assert personal_matches(dup, follows, companies_of=lambda sid: set()) == {"u-cluster"}
+    # a story with no cluster_id matches no cluster follow
+    assert personal_matches({"id": 12}, follows, companies_of=lambda sid: set()) == set()
+
+
+def test_personal_alert_engine_unions_followed_cluster_dupes(monkeypatch):
+    """The main select filters approved+score>=6; a followed cluster's new
+    duplicate row (NULL score) must still reach the loop via the second query,
+    deduped by id and sorted for the cursor."""
+    import run
+    paths = []
+
+    def fake_sb(method, path, **kw):
+        paths.append(path)
+        if path.startswith("profiles?select"):
+            return [{"id": "u1", "fcm_token": "tok",
+                     "alert_settings": {"personalized": True}}]
+        if path.startswith("follows"):
+            return [{"user_id": "u1", "target_type": "cluster", "target_id": "abc-123"}]
+        if "impact_score=gte" in path:
+            return [{"id": 20, "hook": "H", "headline": "Big story", "impact_score": 7,
+                     "category": "Markets", "sectors": [], "cluster_id": "other"}]
+        if "cluster_id=in." in path:
+            assert '"abc-123"' in path
+            return [{"id": 21, "hook": None, "headline": "Development lands",
+                     "impact_score": None, "category": None, "sectors": None,
+                     "cluster_id": "abc-123"},
+                    {"id": 20, "hook": "H", "headline": "Big story", "impact_score": 7,
+                     "category": "Markets", "sectors": [], "cluster_id": "other"}]
+        return []
+
+    pushed = []
+    monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "in_quiet_hours", lambda now: False)
+    monkeypatch.setattr(run, "send_fcm_token",
+                        lambda tok, title, body, sid, score: pushed.append((title, sid)) or "sent")
+    sent = run.personal_alert_engine()
+    assert sent == 1
+    assert pushed == [("Development lands", 21)]  # dup row, hook None -> headline
+    assert any("cluster_id=in." in p for p in paths)
+
+
 def test_personal_matches_empty_follows():
     from run import personal_matches
     assert personal_matches({"id": 1, "category": None, "sectors": None},
