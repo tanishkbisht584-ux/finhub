@@ -63,6 +63,22 @@ def page_link(slug, label=None, icon=None):
         (s, t) for items in NAV.values() for s, t, _ in items)[slug], icon=icon)
 
 
+def auto_refresh(seconds=120):
+    """Reload the page every `seconds` while it stays open, so status pages
+    show current state without a manual refresh (the 10-20 s data caches
+    refetch on the rerun). Any interaction resets the timer; a closed tab
+    runs nothing. Status pages only — never on pages with editing forms,
+    where a timed reload could interrupt work in progress."""
+    @st.fragment(run_every=seconds)
+    def _tick():
+        now = time.monotonic()
+        last = st.session_state.get("_auto_refresh_at")
+        st.session_state["_auto_refresh_at"] = now
+        if last is not None and now - last >= seconds - 10:
+            st.rerun(scope="app")
+    _tick()
+
+
 # ops.evaluate fix lever -> where the fix lives (shared by Doctor + Health)
 FIX_HELP = {
     "repo": ("Repo settings", f"https://github.com/{GITHUB_REPO}/settings"),

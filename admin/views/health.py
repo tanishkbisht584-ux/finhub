@@ -17,7 +17,7 @@ probs = v["problems"]
 
 header("Health", "Every connected system, checked now: what is wrong, whose fault it is, and how to fix it.",
        [pill("ALL CLEAR" if not probs else f"{len(probs)} problem(s)", not probs),
-        pill(f"checked {ago(st.session_state['health_at'])} ago", True, DIM)])
+        pill(f"checked {ago(st.session_state['health_at'])} ago · auto every 2 min", True, DIM)])
 if st.button("Refresh", type="primary", icon=":material/refresh:"):
     st.session_state["health_facts"] = None
     st.rerun()
@@ -167,6 +167,19 @@ for n in notes_for("app"):
 page_link("app_config", "→ App Config · version gate + maintenance + flags")
 
 # ---------- probe failures + raw ----------
+@st.fragment(run_every=120)
+def _auto_refresh():
+    """Re-gather every 2 min while the page is open, so a recovering incident
+    clears itself. Closed tab = nothing runs."""
+    age = (datetime.now(timezone.utc)
+           - datetime.fromisoformat(st.session_state["health_at"])).total_seconds()
+    if age > 110:  # skip if a manual Refresh just ran
+        st.session_state["health_facts"] = None
+        st.rerun(scope="app")
+
+
+_auto_refresh()
+
 bad = {a: e for a, e in f["errors"].items() if a != "supabase"}  # supabase already a problem card
 if bad:
     section("Probes that failed", "these areas show grey above — the check could not run")

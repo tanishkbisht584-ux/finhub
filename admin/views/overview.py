@@ -158,3 +158,5 @@ with rd2:
         page_link("alerts", "Send an alert", icon=":material/notifications_active:")
         page_link("app_config", "Force update / maintenance", icon=":material/tune:")
         page_link("ai", "Keys & lanes", icon=":material/psychology:")
+
+auto_refresh()  # status page: stale data heals itself while the tab is open

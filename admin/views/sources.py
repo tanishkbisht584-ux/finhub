@@ -96,3 +96,5 @@ with tab_t:
     if t3.button("Delete source", disabled=not sure, icon=":material/delete:"):
         sb("DELETE", f"sources?id=eq.{s['id']}")  # stories keep source_name text, nothing cascades
         refresh()
+
+auto_refresh()  # status page: stale data heals itself while the tab is open

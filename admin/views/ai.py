@@ -92,3 +92,5 @@ with tab_e:
     shown = [r for r in edge if (not only_bad or not r["ok"]) and (fn_pick == "both" or r["fn"] == fn_pick)
              and (not needle or needle.lower() in f"{r['lane']} {r['error'] or ''}".lower())][:300]
     edge_table(shown, height=420)
+
+auto_refresh()  # status page: stale data heals itself while the tab is open

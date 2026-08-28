@@ -112,3 +112,5 @@ with tab_k:
     st.markdown("<div class='fs-muted'>Override any pipeline constant; blank = code default. Applied at the start "
                 "of the next iteration. Model lists are comma-separated.</div>", unsafe_allow_html=True)
     knob_editor(run.KNOBS + run.MODEL_ENVS + ("AI_RPM_PER_LANE",), "knobs_all")
+
+auto_refresh()  # status page: stale data heals itself while the tab is open
