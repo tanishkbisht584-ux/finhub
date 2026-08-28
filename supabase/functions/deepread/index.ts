@@ -161,14 +161,25 @@ function prompt(
   return `You are FinSwipe's staff writer. Using ONLY the material below, write the
 whole story for a reader who knows nothing about it, in plain easy English.
 Facts only, never advice, never numbers that are not in the material.
-Structure it as 4-8 newspaper pages, each 80-160 words:
-"What happened", "Background", "Who is affected", "Why it matters",
-and "What's next" only if the material supports it. Go deeper rather than
-wider: unpack terms a beginner would not know, spell out the chain of cause
-and effect, and use every relevant fact the material offers — but never pad;
-a thin story honestly told in 4 pages beats a padded 8.
+Write it as a fixed newspaper edition — these pages, in this order, each
+80-160 words, skipping any page the material genuinely cannot support:
+"What happened", "Background", "Who is affected", "What it means",
+"What's next", and ALWAYS close with "In simple words" — the whole story
+retold in 60-100 words a 12-year-old would follow, short sentences, zero
+jargon. Go deeper rather than wider: unpack terms a beginner would not know,
+spell out the chain of cause and effect, and use every relevant fact the
+material offers — but never pad; a thin story honestly told in 3 pages plus
+the simple close beats a padded 6.
+Also return, when the material supports them (omit otherwise):
+- "glossary": up to 6 financial terms USED IN YOUR PAGES that a beginner
+  would not know, each with a one-sentence plain-English definition.
+- "key_stat": the single most telling number in the story, with a short
+  label giving it meaning (e.g. {"value": "Rs 5,000 cr", "label": "about 2%
+  of the company's market value"}).
 If the material is too thin to write honestly, return {"pages": []}.
-Return ONLY JSON: {"pages": [{"heading": "...", "body": "..."}]}
+Return ONLY JSON: {"pages": [{"heading": "...", "body": "..."}],
+"glossary": [{"term": "...", "definition": "..."}],
+"key_stat": {"value": "...", "label": "..."}}
 
 HEADLINE: ${row.headline} / HOOK: ${row.hook ?? ""} / SUMMARY: ${row.summary ?? ""}
 CATEGORY: ${row.category ?? ""} IMPACT: ${row.impact_score ?? ""}/10
@@ -273,7 +284,32 @@ Deno.serve(async (req) => {
 
   if (validated.length === 0) return refusal(); // refusal is never cached
 
-  const deepRead = { pages: validated };
+  // Structured extras (2026-08-28) — strictly optional: old cached rows and
+  // weak lanes stay {pages} only, and the app renders nothing for absent.
+  const g = (out as { glossary?: unknown }).glossary;
+  const glossary = (Array.isArray(g) ? g : [])
+    .filter((e): e is { term: string; definition: string } =>
+      !!e && typeof e === "object" &&
+      typeof (e as { term?: unknown }).term === "string" &&
+      typeof (e as { definition?: unknown }).definition === "string" &&
+      (e as { term: string }).term.trim().length > 0 &&
+      (e as { definition: string }).definition.trim().length > 0
+    )
+    .slice(0, 10)
+    .map((e) => ({ term: e.term, definition: e.definition }));
+  const ks = (out as { key_stat?: unknown }).key_stat as
+    { value?: unknown; label?: unknown } | undefined;
+  const keyStat = ks && typeof ks === "object" &&
+      typeof ks.value === "string" && ks.value.trim() &&
+      typeof ks.label === "string" && ks.label.trim()
+    ? { value: ks.value, label: ks.label }
+    : null;
+
+  const deepRead = {
+    pages: validated,
+    ...(glossary.length ? { glossary } : {}),
+    ...(keyStat ? { key_stat: keyStat } : {}),
+  };
   await sb.from("stories").update({ deep_read: deepRead }).eq("id", storyId);
   return Response.json(deepRead);
 });

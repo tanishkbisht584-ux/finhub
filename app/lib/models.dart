@@ -6,10 +6,66 @@ class Outlet {
   final String url;
   final DateTime? publishedAt;
 
+  /// The outlet's own wording — carried since the story-so-far timeline
+  /// (2026-08-28); null on rows cached before it shipped.
+  final String? headline;
+
   Outlet.fromJson(Map<String, dynamic> j)
       : name = j['source_name'] ?? '',
         url = j['source_url'] ?? '',
-        publishedAt = DateTime.tryParse(j['published_at'] ?? '');
+        publishedAt = DateTime.tryParse(j['published_at'] ?? ''),
+        headline = j['headline'];
+}
+
+/// "The story so far": the cluster's episodes, oldest first, deduped by
+/// HEADLINE (not newsroom — the same paper legitimately files successive
+/// developments; identical wording via two feeds is one episode). Entries
+/// without a headline (pre-2026-08-28 cache) can't tell a story — dropped.
+List<Outlet> storyTimeline(List<Outlet> group) {
+  final sorted = [...group]..sort((a, b) =>
+      (a.publishedAt ?? DateTime(0)).compareTo(b.publishedAt ?? DateTime(0)));
+  final seen = <String>{};
+  return [
+    for (final o in sorted)
+      if ((o.headline ?? '').isNotEmpty &&
+          seen.add(o.headline!.toLowerCase().trim()))
+        o
+  ];
+}
+
+/// Glossary terms the app highlights on card summaries. A COPY — the qa edge
+/// function's DEFINE_TERMS set is canonical; a term missing there just 400s
+/// and the sheet shows nothing. Longest-first so "reverse repo" wins over
+/// "repo rate"'s prefix.
+const glossaryTerms = [
+  'reverse repo', 'repo rate', 'basis points', 'rights issue', 'bonus issue',
+  'stock split', 'open offer', 'anchor investor', 'green shoe', 'listing gains',
+  'promoter holding', 'stake sale', 'upper circuit', 'lower circuit',
+  'margin call', 'market cap', 'pe ratio', 'book value', 'face value',
+  'dividend yield', 'delisting', 'buyback', 'pledge', 'arbitrage', 'lock-in',
+  'crr', 'slr', 'mclr', 'qip', 'ofs', 'fpo', 'gmp', 'fii', 'dii', 'nbfc',
+  'npa', 'casa', 'ebitda', 'pat', 'yoy', 'qoq', 'capex', 'f&o', 'derivatives',
+  'sip', 'elss', 'reit', 'invit', 'esop',
+];
+
+/// Split [text] into segments, marking case-insensitive whole-word hits of
+/// [terms]. Pure so it's directly testable; the card maps segments to
+/// TextSpans and owns the recognizers.
+List<({String text, bool isTerm})> glossarySegments(String text,
+    [List<String> terms = glossaryTerms]) {
+  if (text.isEmpty) return const [];
+  final pattern = RegExp(
+      '(?<![A-Za-z0-9])(${terms.map(RegExp.escape).join('|')})(?![A-Za-z0-9])',
+      caseSensitive: false);
+  final out = <({String text, bool isTerm})>[];
+  var at = 0;
+  for (final m in pattern.allMatches(text)) {
+    if (m.start > at) out.add((text: text.substring(at, m.start), isTerm: false));
+    out.add((text: text.substring(m.start, m.end), isTerm: true));
+    at = m.end;
+  }
+  if (at < text.length) out.add((text: text.substring(at), isTerm: false));
+  return out;
 }
 
 /// Exactly the columns Story.fromJson reads. `select()` was shipping the
@@ -51,6 +107,11 @@ class Story {
   /// process. Empty when no other outlet carried it.
   final List<Outlet> outlets;
 
+  /// The cluster's raw episode rows (pre-newsroom-dedupe, with headlines) —
+  /// the story-so-far page derives from it via [storyTimeline]. Attached and
+  /// cached beside outlets; empty on rows cached before 2026-08-28.
+  final List<Outlet> timeline;
+
   /// Companies the pipeline tagged on this story — attached by the feed query
   /// (one batched query per page, like outlets) and cached with the card.
   final List<Company> companies;
@@ -87,6 +148,10 @@ class Story {
         // cached card keeps its outlet list too.
         outlets = [
           for (final o in (j['outlets'] as List? ?? const []))
+            Outlet.fromJson(Map<String, dynamic>.from(o))
+        ],
+        timeline = [
+          for (final o in (j['timeline'] as List? ?? const []))
             Outlet.fromJson(Map<String, dynamic>.from(o))
         ],
         companies = [
@@ -208,23 +273,42 @@ class DeepPage {
   DeepPage(this.heading, this.body);
 }
 
-/// The AI-written whole story. Every field defaults so a refusal or a
-/// truncated payload degrades to "no pages" instead of throwing.
+/// The AI-written whole story. Every field defaults so a refusal, a truncated
+/// payload, or a pre-2026-08-28 cached row (pages only) degrades gracefully.
 class DeepRead {
   final List<DeepPage> pages;
-  DeepRead(this.pages);
+
+  /// Structured extras (2026-08-28) — optional forever: old cached rows and
+  /// weak lanes omit them and the reader renders nothing.
+  final List<({String term, String definition})> glossary;
+  final ({String value, String label})? keyStat;
+
+  DeepRead(this.pages, {this.glossary = const [], this.keyStat});
   bool get hasContent => pages.isNotEmpty;
 
   factory DeepRead.fromJson(Map<String, dynamic>? j) {
     final raw = j?['pages'];
     if (raw is! List) return DeepRead(const []);
-    return DeepRead([
-      for (final p in raw)
-        if (p is Map &&
-            (p['body'] is String) &&
-            (p['body'] as String).trim().isNotEmpty)
-          DeepPage(p['heading'] as String?, p['body'] as String)
-    ]);
+    final g = j?['glossary'];
+    final ks = j?['key_stat'];
+    return DeepRead(
+      [
+        for (final p in raw)
+          if (p is Map &&
+              (p['body'] is String) &&
+              (p['body'] as String).trim().isNotEmpty)
+            DeepPage(p['heading'] as String?, p['body'] as String)
+      ],
+      glossary: [
+        if (g is List)
+          for (final e in g)
+            if (e is Map && e['term'] is String && e['definition'] is String)
+              (term: e['term'] as String, definition: e['definition'] as String)
+      ],
+      keyStat: ks is Map && ks['value'] is String && ks['label'] is String
+          ? (value: ks['value'] as String, label: ks['label'] as String)
+          : null,
+    );
   }
 }
 

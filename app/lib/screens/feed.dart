@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
@@ -534,9 +535,11 @@ Future<List<Map<String, dynamic>>> _attachOutlets(
       rows.map((r) => r['cluster_id']).whereType<String>().toSet().toList();
   if (clusterIds.isEmpty) return rows;
   try {
+    // headline rides along since 2026-08-28: the story-so-far timeline needs
+    // each episode's own wording. Same single query, wider projection.
     final members = await Supabase.instance.client
         .from('stories')
-        .select('cluster_id,source_name,source_url,published_at')
+        .select('cluster_id,source_name,source_url,published_at,headline')
         .inFilter('cluster_id', clusterIds);
     final byCluster = <String, List<Map<String, dynamic>>>{};
     for (final m in members.cast<Map<String, dynamic>>()) {
@@ -550,13 +553,17 @@ Future<List<Map<String, dynamic>>> _attachOutlets(
       // what this list is for. Sorted first so the survivor of each newsroom is
       // its earliest telling, which is also the one the byline credits.
       final seen = <String>{};
+      final sorted = [...group]..sort((a, b) =>
+          ((a['published_at'] ?? '') as String)
+              .compareTo((b['published_at'] ?? '') as String));
       final outlets = [
-        for (final m in ([...group]..sort((a, b) =>
-            ((a['published_at'] ?? '') as String)
-                .compareTo((b['published_at'] ?? '') as String))))
+        for (final m in sorted)
           if (seen.add(publisher((m['source_name'] ?? '') as String))) m
       ];
       row['outlets'] = outlets;
+      // The raw sorted group (headlines kept, newsrooms NOT deduped) feeds
+      // the story-so-far page; storyTimeline() dedupes by headline instead.
+      row['timeline'] = sorted;
     }
   } catch (_) {
     // Attribution is a bonus, never a reason to lose the feed.
@@ -1419,11 +1426,98 @@ class _StoryCardState extends ConsumerState<StoryCard>
   late final AnimationController _palette = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 200));
 
+  /// Recognizers behind the summary's tappable glossary terms — rebuilt per
+  /// build, disposed here (the State owns them; DeepReadPages stays static).
+  final _termTaps = <TapGestureRecognizer>[];
+
+  /// term -> definition, once per session across all cards. The qa function's
+  /// qa_cache makes the fetch itself a once-ever cost globally.
+  static final _termDefs = <String, String>{};
+
   @override
   void dispose() {
     _burst.dispose();
     _palette.dispose();
+    for (final r in _termTaps) {
+      r.dispose();
+    }
     super.dispose();
+  }
+
+  Future<String?> _define(String term) async {
+    final key = term.toLowerCase();
+    if (_termDefs.containsKey(key)) return _termDefs[key];
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('qa', body: {'question': term, 'mode': 'define'});
+      final a = QaAnswer.fromJson(Map<String, dynamic>.from(res.data));
+      final def =
+          a.sections.isNotEmpty ? a.sections.first.body : a.whatsHappening;
+      if (def.trim().isEmpty) return null;
+      return _termDefs[key] = def;
+    } catch (_) {
+      return null; // a failed lookup shows the honest fallback, never an error
+    }
+  }
+
+  void _showDefinition(String term) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: bg,
+      shape: const RoundedRectangleBorder(),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(term.toUpperCase(),
+                  style: mono.copyWith(fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 10),
+              FutureBuilder<String?>(
+                future: _define(term),
+                builder: (_, snap) => Text(
+                    snap.connectionState != ConnectionState.done
+                        ? 'Looking it up…'
+                        : snap.data ??
+                            'No definition right now — try asking in Ask.',
+                    style: const TextStyle(fontSize: 15, height: 1.5)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Summary as spans with tappable glossary terms (dotted underline). Old
+  /// recognizers are disposed on every rebuild; share capture renders the
+  /// plain text instead so underlines never bake into the PNG.
+  List<InlineSpan> _summarySpans(TextStyle base) {
+    for (final r in _termTaps) {
+      r.dispose();
+    }
+    _termTaps.clear();
+    return [
+      for (final seg in glossarySegments(story.summary ?? ''))
+        if (seg.isTerm)
+          TextSpan(
+            text: seg.text,
+            style: base.copyWith(
+                decoration: TextDecoration.underline,
+                decorationStyle: TextDecorationStyle.dotted,
+                decorationColor: inkDim),
+            recognizer: () {
+              final r = TapGestureRecognizer()
+                ..onTap = () => _showDefinition(seg.text);
+              _termTaps.add(r);
+              return r;
+            }(),
+          )
+        else
+          TextSpan(text: seg.text, style: base),
+    ];
   }
 
   bool _isSavedNow() {
@@ -1813,14 +1907,27 @@ class _StoryCardState extends ConsumerState<StoryCard>
                                   color: ink)),
                           const SizedBox(height: 8),
                         ],
-                        Text(story.summary ?? '',
-                            maxLines: _hasGlanceLines ? 5 : null,
-                            overflow:
-                                _hasGlanceLines ? TextOverflow.ellipsis : null,
-                            style: TextStyle(
-                                fontSize: 15,
-                                height: 1.55,
-                                color: ink.withValues(alpha: 0.8))),
+                        ValueListenableBuilder<bool>(
+                            valueListenable: shareCapture,
+                            builder: (_, capturing, __) {
+                              final base = TextStyle(
+                                  fontSize: 15,
+                                  height: 1.55,
+                                  color: ink.withValues(alpha: 0.8));
+                              return capturing
+                                  ? Text(story.summary ?? '',
+                                      maxLines: _hasGlanceLines ? 5 : null,
+                                      overflow: _hasGlanceLines
+                                          ? TextOverflow.ellipsis
+                                          : null,
+                                      style: base)
+                                  : Text.rich(
+                                      TextSpan(children: _summarySpans(base)),
+                                      maxLines: _hasGlanceLines ? 5 : null,
+                                      overflow: _hasGlanceLines
+                                          ? TextOverflow.ellipsis
+                                          : null);
+                            }),
                         ..._glanceRow(),
                         if (story.companies.isNotEmpty) ...[
                           const SizedBox(height: 14),
@@ -2632,7 +2739,14 @@ class _StoryPagerState extends State<StoryPager> {
   @override
   Widget build(BuildContext context) {
     final read = _read;
-    final deepCount = (read?.hasContent ?? false) ? read!.pages.length : 1;
+    // "The story so far" is a client-composed page from cluster data — zero
+    // AI — slotted between the card and the AI pages when the cluster has a
+    // real history. The glossary rides the cached deep_read as a closing page.
+    final episodes = storyTimeline(widget.story.timeline);
+    final tOff = episodes.length >= 2 ? 1 : 0;
+    final deepCount = (read?.hasContent ?? false)
+        ? read!.pages.length + (read.glossary.isNotEmpty ? 1 : 0)
+        : 1;
     // Android back inside a deep read returns to the card; it was popping
     // the root route, i.e. exiting the app two pages into a story.
     return PopScope(
@@ -2646,8 +2760,14 @@ class _StoryPagerState extends State<StoryPager> {
       },
       child: PageView.builder(
         controller: _hpc,
-        itemCount: 1 + deepCount,
+        itemCount: 1 + tOff + deepCount,
         itemBuilder: (context, i) {
+          if (tOff == 1 && i == 1) {
+            return _StorySoFarPage(
+                episodes: episodes,
+                outlets: widget.story.outlets,
+                story: widget.story);
+          }
           if (i == 0) {
             // The strip is the left swipe with a visible front door: same
             // controller, same page, so _ensureRead/analytics/back-handling
@@ -2667,7 +2787,7 @@ class _StoryPagerState extends State<StoryPager> {
           if (read == null) return const _WritingPage();
           return DeepReadPages(
             read: read.hasContent ? read : DeepRead(const []),
-            pageIndex: i - 1,
+            pageIndex: i - 1 - tOff,
             impactScore: widget.story.impactScore,
             category: widget.story.category,
             direction: widget.story.impactDirection,
@@ -2740,6 +2860,83 @@ class _FailedPage extends StatelessWidget {
 /// One newspaper page of a deep read: serif heading, serif body, mono
 /// metadata and page dots — the card's clay-black language in print dress.
 /// An empty [read] renders the honest fallback instead of a blank page.
+/// "The story so far": the cluster's episodes as a dated timeline, composed
+/// entirely from rows the feed already fetched — zero AI, works offline from
+/// the cache, present only when the cluster has a real history (>=2 distinct
+/// headlines). Sits between the card and the AI pages in print dress.
+class _StorySoFarPage extends StatelessWidget {
+  const _StorySoFarPage(
+      {required this.episodes, required this.outlets, required this.story});
+  final List<Outlet> episodes;
+  final List<Outlet> outlets;
+  final Story story;
+
+  String _when(DateTime? t) {
+    if (t == null) return '';
+    final d = DateTime.now().toUtc().difference(t.toUtc());
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final first = outlets.isNotEmpty ? outlets.first : null;
+    return SafeArea(
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        decoration: BoxDecoration(
+          color: surface,
+          border: Border(
+              left: BorderSide(
+                  color: directionColor(story.impactDirection), width: 3)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const SizedBox(height: 28),
+          Center(
+              child: Text('THE STORY SO FAR',
+                  style: mono.copyWith(fontWeight: FontWeight.w700))),
+          const SizedBox(height: 6),
+          // Coverage lens: who carried it, who was first — from data already
+          // in memory.
+          if (outlets.length > 1)
+            Center(
+              child: Text(
+                  '${outlets.length} newsrooms · first: ${first?.name ?? ''}',
+                  style: mono.copyWith(fontSize: 11, color: inkDim)),
+            ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: _FitScroll(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final e in episodes) ...[
+                    Text(
+                        '${_when(e.publishedAt)}'
+                        '${e.name.isNotEmpty ? ' · ${e.name}' : ''}',
+                        style: mono.copyWith(fontSize: 11, color: inkDim)),
+                    const SizedBox(height: 3),
+                    Text(e.headline ?? '',
+                        style: serif.copyWith(fontSize: 16.5, height: 1.35)),
+                    const SizedBox(height: 14),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Center(
+              child: Text('swipe for the full story →',
+                  style: mono.copyWith(fontSize: 10.5, color: inkDim))),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
+}
+
 class DeepReadPages extends StatelessWidget {
   const DeepReadPages(
       {super.key,
@@ -2796,7 +2993,13 @@ class DeepReadPages extends StatelessWidget {
         ),
       );
     }
-    final page = read.pages[pageIndex.clamp(0, read.pages.length - 1)];
+    // Past the last AI page sits the glossary, when the read carries one —
+    // print-dress "In plain words" box, static text from the cached payload.
+    final onGlossary = read.glossary.isNotEmpty && pageIndex >= read.pages.length;
+    final page = onGlossary
+        ? null
+        : read.pages[pageIndex.clamp(0, read.pages.length - 1)];
+    final dotCount = read.pages.length + (read.glossary.isNotEmpty ? 1 : 0);
 
     return SafeArea(
       child: Container(
@@ -2827,16 +3030,62 @@ class DeepReadPages extends StatelessWidget {
             ])),
           ),
           const SizedBox(height: 18),
-          if (page.heading != null) ...[
-            Text(page.heading!,
+          if ((onGlossary ? 'In plain words' : page?.heading) != null) ...[
+            Text(onGlossary ? 'In plain words' : page!.heading!,
                 style:
                     serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
             const SizedBox(height: 10),
           ],
           Expanded(
             child: _FitScroll(
-              child: Text(page.body,
-                  style: serif.copyWith(fontSize: 16.5, height: 1.65)),
+              child: onGlossary
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final e in read.glossary) ...[
+                          Text(e.term,
+                              style: serif.copyWith(
+                                  fontSize: 16.5,
+                                  fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 2),
+                          Text(e.definition,
+                              style: serif.copyWith(
+                                  fontSize: 15.5, height: 1.5)),
+                          const SizedBox(height: 14),
+                        ],
+                      ],
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // The story's one telling number, pulled big — classic
+                        // print callout, only on the opening page.
+                        if (pageIndex == 0 && read.keyStat != null) ...[
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            margin: const EdgeInsets.only(bottom: 14),
+                            decoration: BoxDecoration(
+                                border: Border.all(color: border)),
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(read.keyStat!.value,
+                                      style: mono.copyWith(
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w700)),
+                                  const SizedBox(height: 3),
+                                  Text(read.keyStat!.label,
+                                      style: mono.copyWith(
+                                          fontSize: 11.5, color: inkDim)),
+                                ]),
+                          ),
+                        ],
+                        Text(page!.body,
+                            style:
+                                serif.copyWith(fontSize: 16.5, height: 1.65)),
+                      ],
+                    ),
             ),
           ),
           const SizedBox(height: 8),
@@ -2844,7 +3093,7 @@ class DeepReadPages extends StatelessWidget {
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               // The one place the reader's position is shown — give the page
               // turn actual motion instead of a reflowed character string.
-              for (var i = 0; i < read.pages.length; i++)
+              for (var i = 0; i < dotCount; i++)
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   margin: const EdgeInsets.symmetric(horizontal: 3),

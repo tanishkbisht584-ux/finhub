@@ -497,6 +497,26 @@ async function answer(question: string) {
   return refusal();
 }
 
+// Jargon glossary (2026-08-28): the CANONICAL term whitelist — the app ships a
+// copy for highlighting, but this set is what the server accepts. Bounded on
+// purpose: with ~40 terms cached forever in qa_cache, the glossary costs at
+// most ~40 AI calls EVER, globally, so defines can skip the per-user cap.
+const DEFINE_TERMS = new Set([
+  "crr", "slr", "repo rate", "reverse repo", "mclr", "basis points",
+  "qip", "ofs", "fpo", "buyback", "rights issue", "bonus issue",
+  "stock split", "open offer", "delisting", "anchor investor", "green shoe",
+  "lock-in", "gmp", "listing gains", "fii", "dii", "promoter holding",
+  "pledge", "stake sale", "nbfc", "npa", "casa", "ebitda", "pat", "yoy",
+  "qoq", "capex", "upper circuit", "lower circuit", "f&o", "derivatives",
+  "margin call", "market cap", "pe ratio", "book value", "face value",
+  "dividend yield", "sip", "elss", "reit", "invit", "esop", "arbitrage",
+]);
+
+async function questionHash(norm: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(norm));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 Deno.serve(async (req) => {
   const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
   const { data: userData } = await sb.auth.getUser(jwt);
@@ -506,9 +526,30 @@ Deno.serve(async (req) => {
   edgeCfg = await loadCfg();
   if (edgeCfg.qa_enabled === false) return new Response("paused by admin", { status: 503 });
 
-  const question = String((await req.json().catch(() => ({}))).question ?? "")
-    .trim().slice(0, 300);
+  const reqBody = await req.json().catch(() => ({}));
+  const question = String(reqBody?.question ?? "").trim().slice(0, 300);
   if (!question) return new Response("question required", { status: 400 });
+
+  // mode:"define" — a tapped glossary term. No daily-cap count (a term tap
+  // must not burn one of the reader's 50 questions), no qa_ask event, and no
+  // 15-min TTL: the first define of a term is the ONLY AI call it ever costs,
+  // then qa_cache serves it forever, to every user.
+  if (reqBody?.mode === "define") {
+    const term = question.toLowerCase().replace(/\s+/g, " ");
+    if (!DEFINE_TERMS.has(term)) return new Response("unknown term", { status: 400 });
+    const hash = await questionHash(`define::${term}`);
+    const { data: hit } = await sb.from("qa_cache").select("answer_json")
+      .eq("question_hash", hash).maybeSingle();
+    if (hit) return Response.json(hit.answer_json);
+    const out = await conceptAnswer(
+      `What is ${term} in Indian markets? Explain briefly for a beginner.`, [term]);
+    if (!out) return new Response("all providers busy", { status: 503 });
+    if ("error" in out) return new Response("all providers busy", { status: 503 });
+    await sb.from("qa_cache").upsert({
+      question_hash: hash, answer_json: out, created_at: new Date().toISOString(),
+    });
+    return Response.json(out);
+  }
 
   // Abuse guard: 50/user/day, silent (spec §5.5).
   const midnight = new Date();
@@ -521,8 +562,7 @@ Deno.serve(async (req) => {
 
   // Cache: identical question inside 15 min costs zero AI (market panic guard).
   const norm = question.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ");
-  const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(norm));
-  const hash = [...new Uint8Array(hashBuf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const hash = await questionHash(norm);
   const fresh = new Date(Date.now() - 15 * 60e3).toISOString();
   const { data: hit } = await sb.from("qa_cache").select("answer_json, created_at")
     .eq("question_hash", hash).gte("created_at", fresh).maybeSingle();
