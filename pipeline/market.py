@@ -159,9 +159,15 @@ def gold_inr_row(gc, usdinr, now):
 
 
 def upsert(sb, rows, table="quotes", key="symbol"):
-    for i in range(0, len(rows), 100):
-        sb("POST", f"{table}?on_conflict={key}", json=rows[i:i + 100],
-           headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+    # PostgREST bulk insert demands identical keys on every row (PGRST102) —
+    # a batch mixing rows with and without meta (gold_inr_row) must be split.
+    buckets = {}
+    for r in rows:
+        buckets.setdefault(tuple(sorted(r)), []).append(r)
+    for batch in buckets.values():
+        for i in range(0, len(batch), 100):
+            sb("POST", f"{table}?on_conflict={key}", json=batch[i:i + 100],
+               headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
     return len(rows)
 
 
@@ -219,8 +225,9 @@ def refresh_equities(sb, now):
             for s, n in universe if (p := parse_spark(data.get(f"{s}.NS", {})))]
     n = upsert(sb, rows)
     # Rows nobody refreshes any more (untagged, unfollowed) age out after a week.
-    if now.astimezone(IST).hour == 3 and now.minute < 15:
-        sb("DELETE", f"quotes?kind=eq.equity&updated_at=lt.{(now - timedelta(days=7)).isoformat()}")
+    if now.astimezone(IST).hour == 3 and now.minute < 15:  # Z, not +00:00: "+" is a space in a URL
+        sb("DELETE", "quotes?kind=eq.equity&updated_at=lt."
+           + (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return n
 
 
@@ -612,8 +619,8 @@ def refresh_analysis_new(sb, now):
     outside the universe (analysis_requests, app-inserted). Served rows are
     KEPT until the 48 h prune — their presence holds the symbol in
     equity_universe while it's hot; needs_refresh makes re-serving free."""
-    sb("DELETE", "analysis_requests?requested_at=lt."
-       + (now - timedelta(hours=48)).isoformat())
+    sb("DELETE", "analysis_requests?requested_at=lt."  # Z, not +00:00: "+" is a space in a URL
+       + (now - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ"))
     reqs = sb("GET", "analysis_requests?select=symbol&order=requested_at")
     if not reqs:
         return 0

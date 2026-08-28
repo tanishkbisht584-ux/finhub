@@ -362,7 +362,7 @@ WINDOW_REFRESH_SECONDS = 6 * 3600   # window reload once 012 deltas carry edits 
 IMAGE_REFRESH_SECONDS = 6 * 3600    # 7 d image counts: history only — this process counts its own inserts live
 RECENT_HOURS = 48
 
-_recent_cache = {"at": 0.0, "since": None, "start": None, "rows": {}, "col": "updated_at"}
+_recent_cache = {"at": None, "since": None, "start": None, "rows": {}, "col": "updated_at"}
 
 
 def recent_stories():
@@ -383,7 +383,9 @@ def recent_stories():
     c = _recent_cache
     now = time.monotonic()
     start = datetime.now(timezone.utc) - timedelta(hours=RECENT_HOURS)
-    if now - c["at"] > (WINDOW_REFRESH_SECONDS if c["col"] == "updated_at" else REFRESH_SECONDS):
+    if c["at"] is None:  # first call IS the reset state; monotonic counts from boot (see _companies_cache)
+        c["at"] = now
+    elif now - c["at"] > (WINDOW_REFRESH_SECONDS if c["col"] == "updated_at" else REFRESH_SECONDS):
         c.update(at=now, rows={}, since=None)
     c["start"] = start
     full = c["since"] is None
@@ -428,13 +430,16 @@ def existing_hashes(hashes):
     return {h for h in hashes if h in _known_hashes}
 
 
-_companies_cache = {"at": 0.0, "by_key": {}}
+# "at" None = never fetched. 0.0 was wrong: monotonic() counts from BOOT, so on
+# a freshly booted host (every CI runner) monotonic-0 sat inside the refresh
+# window and the empty cache was served as if fresh.
+_companies_cache = {"at": None, "by_key": {}}
 
 
 def companies_index():
     """nse_symbol / name / alias -> company id, reloaded hourly. Nothing in
     this pipeline inserts companies, so an hour-old copy tags exactly as well."""
-    if time.monotonic() - _companies_cache["at"] > REFRESH_SECONDS:
+    if _companies_cache["at"] is None or time.monotonic() - _companies_cache["at"] > REFRESH_SECONDS:
         by_key = {}
         for c in sb("GET", "companies?select=id,name,nse_symbol,aliases"):
             if c.get("nse_symbol"):
@@ -446,7 +451,7 @@ def companies_index():
     return _companies_cache["by_key"]
 
 
-_seen_images_cache = {"at": 0.0, "counts": {}}
+_seen_images_cache = {"at": None, "counts": {}}  # at None = never fetched (see _companies_cache)
 
 
 def image_seen_counts():
@@ -465,7 +470,8 @@ def image_seen_counts():
     object lets those increments carry forward into the next iteration too,
     tightening house-image detection within the cache window instead of
     resetting every 45s."""
-    if time.monotonic() - _seen_images_cache["at"] <= IMAGE_REFRESH_SECONDS:
+    if _seen_images_cache["at"] is not None and \
+            time.monotonic() - _seen_images_cache["at"] <= IMAGE_REFRESH_SECONDS:
         return _seen_images_cache["counts"]
     since = iso(datetime.now(timezone.utc) - timedelta(days=7))
     counts = {}

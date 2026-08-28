@@ -7,19 +7,12 @@ from common import *  # noqa: F401,F403
 run = pipeline_mod()
 import ops  # noqa: E402  (pipeline/ on sys.path after pipeline_mod)
 
-FIX_HELP = {
-    "repo": ("Repo settings", f"https://github.com/{GITHUB_REPO}/settings"),
-    "supabase": ("Supabase dashboard", f"https://supabase.com/dashboard/project/{PROJECT_REF}"),
-}
-PAGE_FOR = {"logs": ("pipeline", "Pipeline · last run + stdout"),
-            "keys": ("ai", "AI · keys + lanes"),
-            "review": ("review", "Review · pending + flagged"),
-            "switch": ("pipeline", "Pipeline · switches")}
+# FIX_HELP / PAGE_FOR come from common (shared with the Health page)
 # migration file prefix -> PostgREST probe that 404/400s until it is applied
 MARKERS = {"001": "stories?select=id", "003": "profiles?select=id", "004": "stories?select=fts",
            "007": "stories?select=video_url", "008": "stories?select=deep_read",
            "010": "app_config?select=key", "011": "quotes?select=symbol",
-           "012": "stories?select=updated_at"}
+           "012": "stories?select=updated_at", "013": "analysis_requests?select=symbol"}
 MIG_DIR = REPO / "pipeline" / "migrations"
 
 

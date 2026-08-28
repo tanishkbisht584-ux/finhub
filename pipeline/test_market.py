@@ -160,6 +160,30 @@ def test_upsert_chunks_and_sets_updated_at(monkeypatch):
     assert rows[0]["closes"] is None  # equities carry no sparkline
 
 
+def test_upsert_splits_mixed_key_rows_into_matching_batches():
+    """PGRST102: PostgREST rejects a bulk insert whose rows have different keys.
+    gold_inr_row carries meta while its fxcom batch-mates don't — that broke
+    the whole fxcom lane for 5 days (caught by the Health page, 28 Aug)."""
+    seen = []
+    now = datetime(2026, 8, 28, tzinfo=UTC)
+    plain = market.row("USDINR", "fx", "USD/INR", market.parse_spark(SPARK["TCS.NS"]), now)
+    gold = market.gold_inr_row(market.parse_spark(SPARK["TCS.NS"]),
+                               market.parse_spark(SPARK["TCS.NS"]), now)
+    market.upsert(lambda m, p, **kw: seen.append(kw["json"]), [plain, gold, plain])
+    assert len(seen) == 2  # one batch per key-set
+    for batch in seen:
+        assert len({tuple(sorted(r)) for r in batch}) == 1
+
+
+def test_time_filters_in_urls_use_z_not_offset():
+    """'+00:00' in a URL decodes the + as a space -> Postgres 22007 -> the whole
+    group fails. Broke analysis_requests serving and the equity prune."""
+    src = pathlib.Path(market.__file__).read_text(encoding="utf-8")
+    for ln in src.splitlines():
+        if any(op in ln for op in ("=lt.", "=gte.", "=lte.", "=gt.")):
+            assert ".isoformat()" not in ln, f"offset timestamp in URL filter: {ln.strip()}"
+
+
 def test_kinds_match_the_migration_check():
     sql = pathlib.Path(__file__).with_name("migrations").joinpath("011_market_upgrade.sql").read_text(encoding="utf-8")
     allowed = set(re.findall(r"'(\w+)'", re.search(r"kind in\s*\(([^)]*)\)", sql).group(1)))

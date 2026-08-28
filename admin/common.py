@@ -37,7 +37,8 @@ NAV = {
     "Content": [("review", "Review", ":material/rate_review:"),
                 ("stories", "Stories", ":material/article:"),
                 ("sources", "Sources", ":material/rss_feed:")],
-    "Operations": [("pipeline", "Pipeline", ":material/conveyor_belt:"),
+    "Operations": [("health", "Health", ":material/monitor_heart:"),
+                   ("pipeline", "Pipeline", ":material/conveyor_belt:"),
                    ("alerts", "Alerts", ":material/notifications_active:"),
                    ("ai", "AI", ":material/psychology:"),
                    ("doctor", "Doctor", ":material/stethoscope:")],
@@ -60,6 +61,20 @@ def pages():
 def page_link(slug, label=None, icon=None):
     st.page_link(pages()[slug], label=label or dict(
         (s, t) for items in NAV.values() for s, t, _ in items)[slug], icon=icon)
+
+
+# ops.evaluate fix lever -> where the fix lives (shared by Doctor + Health)
+FIX_HELP = {
+    "repo": ("Repo settings", f"https://github.com/{GITHUB_REPO}/settings"),
+    "supabase": ("Supabase dashboard", f"https://supabase.com/dashboard/project/{PROJECT_REF}"),
+    "platform": ("Supabase status page", "https://status.supabase.com"),
+    "edge": ("Edge functions dashboard", f"https://supabase.com/dashboard/project/{PROJECT_REF}/functions"),
+}
+PAGE_FOR = {"logs": ("pipeline", "Pipeline · last run + stdout"),
+            "keys": ("ai", "AI · keys + lanes"),
+            "review": ("review", "Review · pending + flagged"),
+            "switch": ("pipeline", "Pipeline · switches"),
+            "sources": ("sources", "Sources · stale + silent")}
 
 
 # ---------- Supabase (PostgREST, service_role) ----------

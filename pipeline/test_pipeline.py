@@ -583,6 +583,7 @@ def test_image_seen_counts_filters_status_and_memoizes(monkeypatch):
         return [{"image_url": "https://x.com/a.jpg"}, {"image_url": "https://x.com/a.jpg"}]
 
     monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "_seen_images_cache", {"at": None, "counts": {}})
     first = run.image_seen_counts()
     assert first == {"https://x.com/a.jpg": 2}
     assert len(calls) == 1
@@ -606,7 +607,9 @@ def test_recent_stories_full_load_then_updated_at_delta(monkeypatch):
     than the window is ignored even when it was edited."""
     import run
     calls = []
-    t0 = datetime(2026, 8, 23, 10, 0, tzinfo=timezone.utc)
+    # relative to the real clock: recent_stories trims against now-48h, so a
+    # fixed date rots out of the window (these froze at 2026-08-23 and died)
+    t0 = (datetime.now(timezone.utc) - timedelta(minutes=30)).replace(microsecond=0)
     ts = lambda m: (t0 + timedelta(minutes=m)).isoformat()
 
     def fake_sb(method, path, **kw):
@@ -616,7 +619,7 @@ def test_recent_stories_full_load_then_updated_at_delta(monkeypatch):
                      "created_at": ts(0), "updated_at": ts(0)},
                     {"id": 2, "cluster_id": "b", "headline": "B", "status": "approved",
                      "created_at": ts(1), "updated_at": ts(1)}]
-        assert "updated_at=gte.2026-08-23T10:01:00Z" in path, path
+        assert f"updated_at=gte.{run.iso(t0 + timedelta(minutes=1))}" in path, path
         return [{"id": 2, "cluster_id": "b", "headline": "B", "status": "rejected",
                  "created_at": ts(1), "updated_at": ts(5)},             # edited in admin
                 {"id": 3, "cluster_id": "c", "headline": "C", "status": "pending",
@@ -626,31 +629,37 @@ def test_recent_stories_full_load_then_updated_at_delta(monkeypatch):
                  "updated_at": ts(7)}]
 
     monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "_recent_cache",
+                        {"at": None, "since": None, "start": None, "rows": {}, "col": "updated_at"})
     first = run.recent_stories()
     assert [r["id"] for r in first] == [1, 2]
     second = run.recent_stories()
     assert [r["id"] for r in second] == [1, 2, 3]          # order kept, no duplicate, no row 0
     assert second[1]["status"] == "rejected"                # the edit landed next lap
     assert len(calls) == 2 and "select=id,cluster_id,headline,status,source_name,created_at,updated_at" in calls[0]
-    assert run._recent_cache["since"] == "2026-08-23T10:07:00Z"
+    assert run._recent_cache["since"] == run.iso(t0 + timedelta(minutes=7))
 
 
 def test_recent_stories_falls_back_to_created_at_before_012(monkeypatch, capsys):
     import run, requests
     calls = []
 
+    t0 = (datetime.now(timezone.utc) - timedelta(minutes=30)).replace(microsecond=0)
+
     def fake_sb(method, path, **kw):
         calls.append(path)
         if "updated_at" in path:
             raise requests.HTTPError('400 stories: column stories.updated_at does not exist')
         return [{"id": 1, "cluster_id": "a", "headline": "A", "status": "pending",
-                 "created_at": "2026-08-23T10:00:00+00:00"}]
+                 "created_at": t0.isoformat()}]
 
     monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "_recent_cache",
+                        {"at": None, "since": None, "start": None, "rows": {}, "col": "updated_at"})
     assert [r["id"] for r in run.recent_stories()] == [1]
     run.recent_stories()
     assert "012 not applied" in capsys.readouterr().out
-    assert calls[-1].count("updated_at") == 0 and "created_at=gte.2026-08-23T10:00:00Z" in calls[-1]
+    assert calls[-1].count("updated_at") == 0 and f"created_at=gte.{run.iso(t0)}" in calls[-1]
     assert len(calls) == 3  # failed probe, full load, delta — and never the column again
 
 
@@ -1073,3 +1082,39 @@ def test_ops_evaluate_maps_facts_to_fixes():
     # supabase down is its own lever; github down is only a note
     v = ops.evaluate({"errors": {"supabase": "timeout", "github": "403"}})
     assert [p["fix"] for p in v["problems"]] == ["supabase"] and v["notes"]
+
+
+def test_ops_evaluate_platform_and_deep_checks():
+    import ops
+    healthy = {"errors": {}, "private": False, "crash_loop": False, "gh_active": False,
+               "approved_age": 0.5, "ingested_age": 0.2, "top_age": 1.0, "flagged_hour": 0,
+               "switches": {}, "last_run_ok": True, "edge_calls": 10, "edge_failed": 1}
+    # watchdog spam guard: the healthy baseline WITHOUT any deep keys stays clear
+    assert ops.evaluate(healthy)["problems"] == []
+    # incident + our probe failing -> ONE platform problem, not the generic supabase one
+    v = ops.evaluate({**healthy, "errors": {"supabase": "timeout"},
+                      "sb_status": {"indicator": "minor", "incidents": ["API gateway latency"]}})
+    assert [p["fix"] for p in v["problems"]] == ["platform"]
+    assert "NOT your project" in v["problems"][0]["msg"]
+    # incident but our project answered fine -> note only, no problem
+    v = ops.evaluate({**healthy, "sb_status": {"indicator": "minor", "incidents": ["latency"]}})
+    assert v["problems"] == [] and any("responded normally" in n for n in v["notes"])
+    # slow gateway with no incident listed -> its own platform problem; fast -> nothing
+    assert [p["name"] for p in ops.evaluate({**healthy, "sb_latency_ms": 5000})["problems"]] == ["gateway slow"]
+    assert ops.evaluate({**healthy, "sb_latency_ms": 400})["problems"] == []
+    # stale fx quotes -> market problem pointing at run logs; fresh equity -> nothing
+    v = ops.evaluate({**healthy, "quote_age_h": {"fx": 6.0, "equity": 1.0}})
+    assert [(p["fix"], p["area"]) for p in v["problems"]] == [("logs", "market")] and "fx" in v["problems"][0]["msg"]
+    assert ops.evaluate({**healthy, "quote_age_h": {"mf": 20.0}})["problems"] == []
+    # majority of sources stale -> stalled; minority -> fine
+    assert [p["area"] for p in ops.evaluate({**healthy, "src_active": 10, "src_stale": 6})["problems"]] == ["sources"]
+    assert ops.evaluate({**healthy, "src_active": 10, "src_stale": 2})["problems"] == []
+    # edge function gone -> edge problem; unknown (None) stays silent
+    assert [p["fix"] for p in ops.evaluate({**healthy, "edge_deploy": {"qa": False, "deepread": True}})["problems"]] == ["edge"]
+    assert ops.evaluate({**healthy, "edge_deploy": {"qa": None}})["problems"] == []
+    # maintenance banner is a note, never a problem
+    v = ops.evaluate({**healthy, "maintenance_on": True})
+    assert v["problems"] == [] and any("maintenance" in n for n in v["notes"])
+    # every problem now carries an area for the Health page's grouping
+    v = ops.evaluate({**healthy, "flagged_hour": 20, "quote_age_h": {"crypto": 9.0}})
+    assert all(p["area"] for p in v["problems"]) and {p["area"] for p in v["problems"]} == {"ai", "market"}

@@ -20,7 +20,9 @@ Healthy passes auto-close the issue so the next incident can alert again."""
 import io
 import json
 import os
+import re
 import sys
+import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -34,6 +36,12 @@ FEED_TOP_MAX_H = 12  # nothing fresh in the feed's visible top => frozen
 FLAG_SPIKE = 15      # flagged/hour; normal is ~0-2, 15+ means lanes are dying
 RUN_STUCK_MIN = 30   # a pipeline_runs row open this long was killed mid-run
 EDGE_MIN_CALLS = 5   # below this an error rate is noise
+SLOW_MS = 3000       # median empty-read above this => gateway degraded
+# quote freshness ceiling per kind. Interval kinds advance updated_at even
+# off-hours, so 4 h just absorbs GitHub's cron lag between resident runs.
+# ponytail: flat hours, no market calendar; add trading-day logic only if this false-alarms
+MAX_QUOTE_AGE_H = {"fx": 4, "commodity": 4, "crypto": 4, "equity": 4, "index": 4,
+                   "mf": 30, "macro": 30}
 
 
 def ops_push(title, body):
@@ -61,11 +69,27 @@ def _age_h(ts, now):
     return (now - dt).total_seconds() / 3600
 
 
-def gather(repo, gh_token):
+def gather(repo, gh_token, deep=False):
     """-> facts dict. A failed probe records its error under facts['errors'][area]
-    and leaves that area's keys absent; evaluate() treats absent as unknown."""
+    and leaves that area's keys absent; evaluate() treats absent as unknown.
+    deep=True (Health page only) adds probes the hourly watchdog must not pay
+    for or alert on — absent deep facts keep those checks silent."""
     now = datetime.now(timezone.utc)
     f = {"errors": {}, "now": now.isoformat()}
+
+    # platform status (Atlassian Statuspage JSON, unauthenticated); failure = unknown
+    try:
+        s = requests.get("https://status.supabase.com/api/v2/status.json", timeout=5).json()
+        inc = requests.get("https://status.supabase.com/api/v2/incidents/unresolved.json", timeout=5).json()
+        f["sb_status"] = {"indicator": s["status"]["indicator"],
+                          "incidents": [i["name"] for i in inc.get("incidents", [])]}
+    except Exception as e:  # noqa: BLE001
+        f["errors"]["platform"] = str(e)
+    try:
+        f["gh_status"] = requests.get("https://www.githubstatus.com/api/v2/status.json",
+                                      timeout=5).json()["status"]["indicator"]
+    except Exception:  # noqa: BLE001
+        pass  # GitHub's own status being unreachable is not worth a line
     gh = f"https://api.github.com/repos/{repo}"
     hdrs = {"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github+json"}
 
@@ -135,19 +159,78 @@ def gather(repo, gh_token):
             f["starved"] = bool(cycles) and n_starved >= len(cycles) / 2
         except Exception as e:  # noqa: BLE001
             f["errors"]["starvation"] = str(e)
+
+    if deep:
+        url = os.environ["SUPABASE_URL"].rstrip("/")
+        hd = {"apikey": os.environ["SUPABASE_SERVICE_KEY"],
+              "Authorization": f"Bearer {os.environ['SUPABASE_SERVICE_KEY']}"}
+        try:  # gateway latency: median of 3 timed empty reads; a hang counts as 9999
+            times = []
+            for _ in range(3):
+                t0 = time.monotonic()
+                try:
+                    requests.get(f"{url}/rest/v1/stories?select=id&limit=0", headers=hd, timeout=8)
+                    times.append((time.monotonic() - t0) * 1000)
+                except requests.exceptions.RequestException:
+                    times.append(9999)
+            f["sb_latency_ms"] = int(sorted(times)[1])
+        except Exception as e:  # noqa: BLE001
+            f["errors"]["latency"] = str(e)
+        try:  # market data freshness: newest row per quote kind + list blobs
+            ages = {}
+            for kind in MAX_QUOTE_AGE_H:
+                rows = sb("GET", f"quotes?select=updated_at&kind=eq.{kind}&order=updated_at.desc&limit=1")
+                if rows:  # a kind with no rows yet (e.g. macro without a FRED key) stays unknown
+                    ages[kind] = _age_h(rows[0]["updated_at"], now)
+            f["quote_age_h"] = ages
+            f["blob_age_h"] = {r["key"]: _age_h(r["updated_at"], now)
+                               for r in sb("GET", "market_blobs?select=key,updated_at")}
+        except Exception as e:  # noqa: BLE001
+            f["errors"]["market"] = str(e)
+        try:  # sources: bulk-stale means fetching itself stalled, not one bad feed
+            act = [s for s in sb("GET", "sources?select=is_active,last_fetched_at&is_active=eq.true")]
+            f["src_active"] = len(act)
+            f["src_stale"] = sum(1 for s in act
+                                 if not s["last_fetched_at"] or _age_h(s["last_fetched_at"], now) > 3)
+        except Exception as e:  # noqa: BLE001
+            f["errors"]["sources"] = str(e)
+        try:  # edge functions deployed? 404 from the gateway = gone; any other HTTP answer
+            # (401 is the expected one) = deployed; no answer at all = unreachable
+            f["edge_deploy"] = {}
+            for fn in ("qa", "deepread"):
+                try:
+                    r = requests.get(f"{url}/functions/v1/{fn}", timeout=8)
+                    f["edge_deploy"][fn] = r.status_code != 404
+                except requests.exceptions.RequestException:
+                    f["edge_deploy"][fn] = False
+        except Exception as e:  # noqa: BLE001
+            f["errors"]["edge"] = str(e)
+        try:  # app config + install base
+            rows = sb("GET", "app_config?select=value&key=eq.app")
+            app = (rows[0].get("value") if rows else {}) or {}
+            f["maintenance_on"] = bool(app.get("maintenance"))
+            minv = app.get("min_version") or ""
+            if minv:
+                vt = lambda s: tuple(int(x) for x in re.findall(r"\d+", s or "")[:3])  # noqa: E731
+                users = sb("GET", "profiles?select=app_version&app_version=not.is.null")
+                f["app_below_min"] = sum(1 for u in users if vt(u["app_version"]) < vt(minv))
+            f["analysis_backlog"] = len(sb("GET", "analysis_requests?select=symbol"))
+        except Exception as e:  # noqa: BLE001
+            f["errors"]["app"] = str(e)
     return f
 
 
 # ---------- evaluate: pure ----------
 
 def evaluate(f):
-    """facts -> {"problems": [{name, msg, fix}], "notes": [...], "dispatch": bool}.
-    fix names the lever: repo | logs | keys | review | supabase | switch | None.
+    """facts -> {"problems": [{name, msg, fix, area}], "notes": [...], "dispatch": bool}.
+    fix names the lever: repo | logs | keys | review | supabase | switch | platform |
+    sources | edge | None. area groups problems on the Health page.
     dispatch = restarting the pipeline can actually help right now."""
     p, notes = [], []
 
-    def prob(name, msg, fix=None):
-        p.append({"name": name, "msg": msg, "fix": fix})
+    def prob(name, msg, fix=None, area="pipeline"):
+        p.append({"name": name, "msg": msg, "fix": fix, "area": area})
 
     if f.get("private"):
         prob("repo private", "Repo is PRIVATE — Actions free minutes will run out within a day; "
@@ -158,11 +241,28 @@ def evaluate(f):
     if f.get("starved"):
         prob("ai starved", f"AI STARVED: {f.get('starved_cycles')} recent cycles deferred stories for lack of "
              "quota — keys exhausted or the secrets hold a single key (GEMINI_API_KEY / GROQ_API_KEY are "
-             "comma lists). Feed is a trickle.", "keys")
-    if "supabase" in f["errors"]:
+             "comma lists). Feed is a trickle.", "keys", "ai")
+
+    # Supabase: separate a platform incident (their side, wait it out) from a
+    # project problem (our side, fixable) — today's confusion made this page exist.
+    incidents = (f.get("sb_status") or {}).get("incidents") or []
+    sb_broken = "supabase" in f["errors"] or f.get("sb_latency_ms", 0) > SLOW_MS
+    if incidents and sb_broken:
+        prob("supabase incident", f"Supabase platform incident: {'; '.join(incidents[:2])} — this is "
+             "Supabase's infrastructure, NOT your project. Nothing to fix; wait it out. "
+             "The app serves its offline cache meanwhile.", "platform", "platform")
+    elif "supabase" in f["errors"]:
         prob("supabase", f"Supabase unreachable: {f['errors']['supabase']}. If Supabase itself is down, wait "
              "it out — the app serves its offline cache; if the project was paused or the key rotated, fix that.",
-             "supabase")
+             "supabase", "platform")
+    elif f.get("sb_latency_ms", 0) > SLOW_MS:
+        prob("gateway slow", f"Supabase gateway is slow or hanging ({f['sb_latency_ms']} ms for an empty "
+             "read; normal is under 1000) — often a platform incident before the status page admits it. "
+             "Not your code; recheck in a while.", "platform", "platform")
+    if incidents and not sb_broken:
+        notes.append(f"Supabase reports an incident ({incidents[0]}) but your project responded normally")
+    if f.get("gh_status") not in (None, "none"):
+        notes.append(f"GitHub itself reports degraded status ({f['gh_status']}) — Actions may lag")
     if "github" in f["errors"]:
         notes.append(f"GitHub checks skipped: {f['errors']['github']}")
 
@@ -186,7 +286,7 @@ def evaluate(f):
         if f.get("flagged_hour", 0) >= FLAG_SPIKE:
             prob("ai lanes failing", f"AI lanes are FAILING: {FLAG_SPIKE}+ stories flagged in the last hour "
                  "(AI errors, not editorial rejections). Check raw_ai_error on recent flagged rows — "
-                 "likely a dead model or exhausted keys.", "keys")
+                 "likely a dead model or exhausted keys.", "keys", "ai")
 
     if f.get("last_run_ok") is False:
         errs = "; ".join(f.get("last_run_errors") or [])[:300]
@@ -197,7 +297,26 @@ def evaluate(f):
              "mid-run (job timeout or crash before the log PATCH).", "logs")
     if f.get("edge_calls", 0) >= EDGE_MIN_CALLS and f["edge_failed"] * 2 > f["edge_calls"]:
         prob("edge failing", f"Edge functions: {f['edge_failed']}/{f['edge_calls']} AI lane attempts failed "
-             "in the last hour (qa/deepread). See the AI page's call log.", "keys")
+             "in the last hour (qa/deepread). See the AI page's call log.", "keys", "edge")
+
+    # deep-only facts (Health page); absent in the hourly watchdog, so silent there
+    stale_kinds = [(k, a) for k, a in (f.get("quote_age_h") or {}).items()
+                   if a > MAX_QUOTE_AGE_H.get(k, 999)]
+    if stale_kinds:
+        lst = ", ".join(f"{k} {a:.0f}h" for k, a in stale_kinds)
+        prob("market stale", f"Stale market data: {lst} — the market refresh lane is stalled while the "
+             "rest of the pipeline runs; search the last run's stdout for 'MARKET FAIL'.", "logs", "market")
+    if f.get("src_active") and f.get("src_stale", 0) * 2 > f["src_active"]:
+        prob("sources stalled", f"{f['src_stale']}/{f['src_active']} active sources not fetched in 3 h — "
+             "fetching itself is stalled, not individual feeds; check whether pipeline runs are alive.",
+             "sources", "sources")
+    for fn, up in (f.get("edge_deploy") or {}).items():
+        if up is False:
+            prob("edge down", f"Edge function '{fn}' is unreachable (no HTTP answer or gone from the "
+                 "gateway — not an auth error). Deleted, undeployed, or the project is paused. "
+                 f"Redeploy: supabase functions deploy {fn}", "edge", "edge")
+    if f.get("maintenance_on"):
+        notes.append("maintenance banner is ON — every user sees it at boot. Deliberate?")
 
     dispatch = False
     if starved_ingest:

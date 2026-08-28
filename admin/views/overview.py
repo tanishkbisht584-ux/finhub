@@ -76,7 +76,8 @@ if off:
     issues.append(("switched off", "Stages paused by a switch: " + ", ".join(off) + ".", "pipeline"))
 if n_pending >= 50:
     issues.append(("review backlog", f"{n_pending} stories waiting — auto-approve may be off or stalled.", "review"))
-section("Needs attention", "the watchdog's cheap checks; Doctor runs the full set")
+section("Needs attention", "the watchdog's cheap checks; Health runs the full diagnosis")
+page_link("health", "→ Health · every system checked, diagnosis + fix")
 if not issues:
     st.markdown(pill("All clear — nothing needs you right now"), unsafe_allow_html=True)
 for name, msg, slug in issues:
