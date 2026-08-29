@@ -808,7 +808,8 @@ def shape_insider(j, known, prev=None, fetch=None, cap=200, fetch_cap=40):
     return (fresh + list(prev or []))[:cap]
 
 
-def shape_indices(j, keep=("BROAD MARKET INDICES", "SECTORAL INDICES")):
+def shape_indices(j, keep=("BROAD MARKET INDICES", "SECTORAL INDICES",
+                           "THEMATIC INDICES", "STRATEGY INDICES")):
     return [{"index": r.get("index"), "group": r.get("key"), "last": r.get("last"),
              "pct": r.get("percentChange"), "pe": r.get("pe"), "advances": r.get("advances"),
              "declines": r.get("declines"), "year_high": r.get("yearHigh"),

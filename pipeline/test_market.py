@@ -359,9 +359,11 @@ def test_shape_insider_and_indices():
     assert ins[0] == {"appId": "1", "symbol": "TCS", "company": "TCS", "person": "A",
                       "category": "Promoter", "qty": "100", "side": "Buy", "date": "20-08-2026"}
     idx = {"data": [{"key": "SECTORAL INDICES", "index": "NIFTY IT", "last": 30532, "percentChange": -0.46, "pe": "28", "advances": "3", "declines": "7"},
-                    {"key": "STRATEGY INDICES", "index": "NIFTY ALPHA 50", "last": 1}]}
-    out = market.shape_indices(idx)
-    assert [o["index"] for o in out] == ["NIFTY IT"] and out[0]["pct"] == -0.46
+                    {"key": "STRATEGY INDICES", "index": "NIFTY ALPHA 50", "last": 1},
+                    {"key": "FIXED INCOME INDICES", "index": "NIFTY GS 10YR", "last": 1}]}
+    out = market.shape_indices(idx)  # thematic/strategy kept, fixed income not
+    assert [o["index"] for o in out] == ["NIFTY IT", "NIFTY ALPHA 50"]
+    assert out[0]["pct"] == -0.46
 
 
 def test_refresh_nse_blobs_isolates_one_dead_endpoint(monkeypatch):

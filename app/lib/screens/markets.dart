@@ -302,10 +302,10 @@ class _MarketsBodyState extends State<MarketsBody> {
     final results = data.list('results_calendar');
     final deals = data.deals;
     final insider = data.list('insider_trades');
-    final sectors = [
-      for (final s in data.list('nse_indices'))
-        if (s['group'] == 'SECTORAL INDICES') s
-    ];
+    final idxGroups = <String, List<Map<String, dynamic>>>{};
+    for (final s in data.list('nse_indices')) {
+      idxGroups.putIfAbsent('${s['group']}', () => []).add(s);
+    }
     final flows =
         (data.blobs['flows'] as Map?)?.cast<String, dynamic>() ?? const {};
     final fno = (data.blobs['fno'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -314,23 +314,20 @@ class _MarketsBodyState extends State<MarketsBody> {
         (data.blobs['ipos'] as Map?)?.cast<String, dynamic>() ?? const {};
     final ipos = [..._l(ipoBlob['current']), ..._l(ipoBlob['upcoming'])];
     return [
-      if (sectors.isNotEmpty)
+      if (idxGroups.isNotEmpty)
         (
           id: 'sectors',
           label: 'SECTORS',
           child: _Section('Sectors', [
-            Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: GridView.count(
-                crossAxisCount: 3,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-                childAspectRatio: 1.55,
-                children: [for (final s in sectors) _HeatTile(s)],
-              ),
-            ),
+            for (final (key, label) in const [
+              ('SECTORAL INDICES', 'SECTORAL'),
+              ('BROAD MARKET INDICES', 'BROAD MARKET'),
+              ('THEMATIC INDICES', 'THEMATIC'),
+              ('STRATEGY INDICES', 'STRATEGY'),
+            ])
+              if (idxGroups[key] != null)
+                _HeatGroup(label, idxGroups[key]!,
+                    expanded: key == 'SECTORAL INDICES'),
           ], stamp: data.blobUpdated['nse_indices']),
         ),
       (
@@ -1051,6 +1048,46 @@ String _sectorName(Map<String, dynamic> s) {
       .replaceFirst(RegExp(r'^NIFTY\s*'), '')
       .replaceFirst(' INDEX', '');
   return _shortSector[n] ?? n;
+}
+
+/// One NSE index group inside SECTORS: dim label + heat grid. Sectoral opens
+/// in full; the other groups start at 6 tiles with a "show all N" expander.
+class _HeatGroup extends StatefulWidget {
+  const _HeatGroup(this.label, this.rows, {this.expanded = false});
+  final String label;
+  final List<Map<String, dynamic>> rows;
+  final bool expanded;
+
+  @override
+  State<_HeatGroup> createState() => _HeatGroupState();
+}
+
+class _HeatGroupState extends State<_HeatGroup> {
+  late bool _all = widget.expanded;
+
+  @override
+  Widget build(BuildContext context) {
+    final tiles = _all ? widget.rows : widget.rows.take(6).toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const SizedBox(height: 10),
+      Text(widget.label, style: mono.copyWith(fontSize: 10, color: inkDim)),
+      const SizedBox(height: 6),
+      GridView.count(
+        crossAxisCount: 3,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
+        childAspectRatio: 1.55,
+        children: [for (final s in tiles) _HeatTile(s)],
+      ),
+      if (!_all && widget.rows.length > 6)
+        TextButton(
+            onPressed: () => setState(() => _all = true),
+            child: Text('show all ${widget.rows.length}',
+                style: mono.copyWith(fontSize: 12, color: green))),
+    ]);
+  }
 }
 
 /// Sector heatmap tile: tinted by today's %, tap for the full NSE row.

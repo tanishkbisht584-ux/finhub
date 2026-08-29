@@ -70,6 +70,8 @@ final _blobs = <String, dynamic>{
      'last': 30532, 'pe': '28', 'advances': '3', 'declines': '7',
      'pct_30d': 1.8, 'pct_1y': -4.2, 'year_high': 37200, 'year_low': 28100},
     {'index': 'NIFTY 100', 'group': 'BROAD MARKET INDICES', 'pct': 0.02},
+    for (var i = 1; i <= 7; i++)
+      {'index': 'NIFTY THEME $i', 'group': 'THEMATIC INDICES', 'pct': 0.5},
   ],
 };
 
@@ -141,8 +143,8 @@ void main() {
     // Sectors open the tab: heatmap first, watchlist right below. (Two
     // matches per heading: ribbon chip first in the tree, header second.)
     expect(find.text('SECTORS'), findsNWidgets(2));
-    expect(find.text('IT'), findsOneWidget); // only SECTORAL group, prefix dropped
-    expect(find.text('100'), findsNothing);
+    expect(find.text('IT'), findsOneWidget); // NIFTY prefix dropped
+    expect(find.text('100'), findsOneWidget); // broad market renders too now
     expect(
         tester.getTopLeft(find.text('SECTORS').last).dy <
             tester.getTopLeft(find.text('WATCHLIST').last).dy,
@@ -194,6 +196,21 @@ void main() {
     final header = tester.getTopLeft(find.text('FLOWS').last);
     expect(header.dy, greaterThanOrEqualTo(0));
     expect(header.dy, lessThan(600)); // inside the test viewport
+  });
+
+  testWidgets('index board groups collapse past 6 tiles and expand in place',
+      (tester) async {
+    await tester.pumpWidget(_app(_phase3));
+    expect(find.text('SECTORAL'), findsOneWidget);
+    expect(find.text('BROAD MARKET'), findsOneWidget);
+    expect(find.text('THEMATIC'), findsOneWidget);
+    expect(find.text('THEME 6'), findsOneWidget);
+    expect(find.text('THEME 7'), findsNothing); // behind the expander
+    await tester.ensureVisible(find.text('show all 7'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('show all 7'));
+    await tester.pump();
+    expect(find.text('THEME 7'), findsOneWidget);
   });
 
   testWidgets('trader coverage: F&O, bonds and IPO sections render',
