@@ -49,7 +49,6 @@ void _openStory(RemoteMessage m) {
 
 /// L1 voice (spec §7): a foreground push with impact >= 9 speaks the hook —
 /// ~3 s of on-device TTS, gated on the profile toggle, on by default.
-/// Engine shared with the digest brief (tts.dart).
 Future<void> _maybeSpeak(RemoteMessage m) async {
   final score = int.tryParse(m.data['impact_score'] ?? '') ?? 0;
   final hook = m.data['hook'] ?? '';

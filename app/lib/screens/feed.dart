@@ -17,7 +17,6 @@ import '../publishers.dart';
 import '../remote_config.dart';
 import '../share_palette.dart';
 import '../ticks.dart';
-import '../tts.dart';
 import 'saved.dart';
 import 'stock.dart';
 import 'story_detail.dart';
@@ -356,49 +355,24 @@ List<Story> rankStories(List<Story> list, Set<int> watchlist) {
     });
 }
 
-/// First open of a new IST day (fixed UTC+5:30, no DST)? The launch stamp is
-/// frozen per session, so this stays true across a mid-session refresh —
-/// consistent, not a bug.
-bool isDigestMorning(DateTime? lastSeen, DateTime now) {
-  if (lastSeen == null) return false;
-  DateTime ist(DateTime t) =>
-      t.toUtc().add(const Duration(hours: 5, minutes: 30));
-  final a = ist(lastSeen), b = ist(now);
-  return a.year != b.year || a.month != b.month || a.day != b.day;
-}
-
-/// Ordering for a page-1 seed. Index 0 stays pinned (the featured card, or
-/// simply the newest). The rest splits at the last-visit boundary and each
-/// side orders independently — a float can never drag an old story above a
-/// new one, which would corrupt feedEntries' divider detection. The new
-/// segment gets the morning digest (impact desc, ties keep recency) on the
-/// first open of an IST day, watchlist rank otherwise; the old segment
-/// always gets watchlist rank.
+/// Ordering for a page-1 seed: today's latest first. The page arrives newest
+/// first from SQL; it splits at the last-visit boundary and each side ranks
+/// independently — a float can never drag an old story above a new one, which
+/// would corrupt feedEntries' divider detection.
 List<Story> orderSeed(List<Story> page,
-    {DateTime? lastSeen, Set<int> watchlist = const {}, bool digest = false}) {
+    {DateTime? lastSeen, Set<int> watchlist = const {}}) {
   if (page.length < 2) return [...page];
   bool fresh(Story s) =>
       lastSeen != null && (s.publishedAt?.isAfter(lastSeen) ?? false);
-  final rest = page.sublist(1);
   final newer = [
-    for (final s in rest)
+    for (final s in page)
       if (fresh(s)) s
   ];
   final older = [
-    for (final s in rest)
+    for (final s in page)
       if (!fresh(s)) s
   ];
-  List<Story> newSeg;
-  if (digest && newer.length > 1) {
-    final idx = {for (var i = 0; i < newer.length; i++) newer[i].id: i};
-    newSeg = [...newer]..sort((a, b) {
-        final d = (b.impactScore ?? 0).compareTo(a.impactScore ?? 0);
-        return d != 0 ? d : idx[a.id]!.compareTo(idx[b.id]!);
-      });
-  } else {
-    newSeg = rankStories(newer, watchlist);
-  }
-  return [page.first, ...newSeg, ...rankStories(older, watchlist)];
+  return [...rankStories(newer, watchlist), ...rankStories(older, watchlist)];
 }
 
 /// One page of the feed's vertical PageView: a story, the caught-up divider
@@ -431,8 +405,7 @@ class FeedEntry {
 
 /// The exact page list the PageView consumes — index math lives here, nowhere
 /// else. The divider sits before the first OLD story that follows a NEW one,
-/// so the pinned featured card (old, index 0) can't suppress it and LIVE
-/// splices below the boundary can't move it. No new→old transition (first
+/// so LIVE splices below the boundary can't move it. No new→old transition (first
 /// install, nothing new, everything new) means no divider — the feed looks
 /// exactly as it always did. A session-recap page follows every 25th story,
 /// suppressed at the list end and next to the divider. Invariants callers
@@ -464,9 +437,10 @@ List<FeedEntry> feedEntries(
 }
 
 final storiesProvider = FutureProvider<List<Story>>((ref) async {
-  // Feed ranking: the single current featured story pinned, then newest
-  // first. Severity-first ordering froze the feed — 41 stale L1/L2 cards
-  // outranked every fresh L3/L4 story; impact is on the card instead.
+  // Feed ranking: newest first, full stop. Severity-first ordering froze the
+  // feed — 41 stale L1/L2 cards outranked every fresh L3/L4 story; impact is
+  // on the card instead. The featured pin went the same way: a day-old
+  // "featured" card must never sit above today's news.
   final since = DateTime.now()
       .toUtc()
       .subtract(const Duration(hours: 48))
@@ -477,7 +451,6 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
         .select(storyCols)
         .eq('status', 'approved')
         .gte('published_at', since)
-        .order('is_featured', ascending: false)
         .order('published_at', ascending: false)
         .limit(50);
     final withOutlets = await _attachOutlets(rows.cast<Map<String, dynamic>>());
@@ -664,7 +637,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
 
   @override
   void dispose() {
-    stopSpeaking(); // leaving the feed silences the brief
     WidgetsBinding.instance.removeObserver(this);
     _freshTimer?.cancel();
     pendingStory.removeListener(_rebuild);
@@ -740,11 +712,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     if (!identical(page1, _page1Ref)) {
       _page1Ref = page1;
       // ponytail: the prefs stamp read could in theory land after this
-      // network fetch — accepted; segmenting and digest just no-op once.
+      // network fetch — accepted; segmenting just no-ops once.
       _feed = orderSeed(page1,
           lastSeen: lastSeenAtLaunch.value,
-          watchlist: followedCompanyIds.value,
-          digest: isDigestMorning(lastSeenAtLaunch.value, DateTime.now()));
+          watchlist: followedCompanyIds.value);
       _exhausted = false;
     }
     return _feed;
@@ -971,7 +942,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                               scrollDirection: Axis.vertical,
                               itemCount: entries.length,
                               onPageChanged: (i) {
-                                stopSpeaking(); // brief never talks over a swipe
                                 final s = entries[i].story;
                                 if (s != null) {
                                   _logView(s.id);
@@ -1010,18 +980,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                     Positioned(
                         top: cachedAt != null ? 8 : inset + 8,
                         left: 16,
-                        child: Row(children: [
-                          const LiveButton(),
-                          // Morning brief ▶ (owner: play button, never
-                          // auto-play): digest mornings only, reads the top
-                          // digest stories aloud; any swipe stops it.
-                          if (isDigestMorning(
-                                  lastSeenAtLaunch.value, DateTime.now()) &&
-                              _feed.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            _BriefButton(stories: _feed),
-                          ],
-                        ])),
+                        child: const LiveButton()),
                     Positioned(
                         top: cachedAt != null ? 8 : inset + 8,
                         right: 16,
@@ -1175,57 +1134,6 @@ class LiveButton extends StatelessWidget {
                 style: mono.copyWith(
                     fontSize: 10.5,
                     color: on ? red : inkDim,
-                    fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-/// Morning brief: LIVE's quieter sibling, digest mornings only. Tap reads
-/// the top digest stories (hook + why-it-matters) aloud; tap again — or any
-/// swipe — stops it. Play button by owner's choice, never auto-play.
-class _BriefButton extends StatelessWidget {
-  const _BriefButton({required this.stories});
-  final List<Story> stories;
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: speaking,
-      builder: (context, on, _) => GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          if (on) {
-            stopSpeaking();
-          } else {
-            speakBrief(briefText([
-              for (final s in stories)
-                (hook: s.hook ?? s.headline, why: s.whyItMatters)
-            ]));
-          }
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          height: 44,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: on
-                ? green.withValues(alpha: 0.18)
-                : surface.withValues(alpha: 0.96),
-            borderRadius: BorderRadius.circular(22),
-            border:
-                Border.all(color: on ? green : border, width: on ? 1.5 : 1),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(on ? Icons.stop_rounded : Icons.play_arrow_rounded,
-                size: 16, color: on ? green : inkDim),
-            const SizedBox(width: 5),
-            Text('BRIEF',
-                style: mono.copyWith(
-                    fontSize: 10.5,
-                    color: on ? green : inkDim,
                     fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
           ]),
         ),

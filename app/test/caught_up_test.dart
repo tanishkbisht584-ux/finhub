@@ -52,12 +52,12 @@ void main() {
       expect(es[2].isEnd, isFalse);
     });
 
-    test('old featured pin at the top does not suppress the divider', () {
-      // is_featured desc ordering can put an OLD story at index 0 above the
-      // new ones; the divider keys on the first new→old transition, not on
+    test('old story at the top does not suppress the divider', () {
+      // Out-of-order input (the retired featured pin put an OLD story at
+      // index 0): the divider keys on the first new→old transition, not on
       // "first old story".
       final list = [
-        _s(9, _t(2)), // pinned featured, old
+        _s(9, _t(2)), // old, out of order
         _s(1, _t(12)),
         _s(2, _t(11)),
         _s(3, _t(8)),
