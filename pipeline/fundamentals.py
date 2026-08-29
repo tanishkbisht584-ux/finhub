@@ -191,10 +191,24 @@ def _avg3(annuals, field):
     return sum(vals) / len(vals) if vals else None
 
 
-def pros_cons(annuals):
+def pros_cons(annuals, shareholding=None):
     """Screener-style rule bullets. Deliberately few and blunt — every rule is
     a plain threshold a reader can verify from the tables below it."""
     pros, cons = [], []
+    sh = [v for _, v in sorted((shareholding or {}).items())]  # oldest first
+    fii = [v["fiis"] for v in sh if v.get("fiis") is not None][-4:]
+    if len(fii) >= 4 and all(b > a for a, b in zip(fii, fii[1:])):
+        pros.append("FIIs have been increasing their stake "
+                    f"({fii[0]}% → {fii[-1]}% over recent quarters)")
+    prom = [v["promoters"] for v in sh if v.get("promoters") is not None][-4:]
+    if len(prom) >= 4 and prom[-1] < prom[0] - 2:
+        cons.append(f"Promoter holding has decreased: {prom[0]}% → {prom[-1]}%")
+    # dps back-derived from payout × eps; a >20% y/y drop reads as a cut
+    dps = [(k, a["div_payout"] * a["eps"] / 100) for k, a in sorted(annuals.items())
+           if a.get("div_payout") is not None and a.get("eps")]
+    if len(dps) >= 2 and dps[-1][1] < dps[-2][1] * 0.8:
+        cons.append(f"Dividend was cut in {dps[-1][0]} "
+                    f"(₹{round(dps[-2][1], 1)} → ₹{round(dps[-1][1], 1)}/share)")
     borrowings, equity = _latest(annuals, "borrowings"), \
         (_latest(annuals, "reserves") or 0) + (_latest(annuals, "equity_cap") or 0)
     if borrowings is not None and equity > 0 and borrowings / equity < 0.05:
@@ -225,7 +239,7 @@ def pros_cons(annuals):
     return pros, cons
 
 
-def compute_summary(annuals, quarters, monthly_closes):
+def compute_summary(annuals, quarters, monthly_closes, shareholding=None):
     """The one-read header row: CAGR blocks + pros/cons + latest headline ratios."""
     cagr = {"sales": _cagr_block(annuals, "sales"), "profit": _cagr_block(annuals, "net_profit")}
     ttm = _ttm_growth(quarters, "sales")
@@ -256,7 +270,7 @@ def compute_summary(annuals, quarters, monthly_closes):
         roe["last"] = last_roe
     if roe:
         cagr["roe"] = roe
-    pros, cons = pros_cons(annuals)
+    pros, cons = pros_cons(annuals, shareholding)
     s = {"cagr": cagr, "pros": pros, "cons": cons}
     for k in ("roce", "book_value"):
         v = _latest(annuals, k)
@@ -648,7 +662,11 @@ def deep_fetch(sb, symbols, now):
             except Exception as e:
                 print(f"FUND closes {sym}: {e}")
             shareholding, docs = fetch_nse_deep(sym, nse, ratings_feed)
-            summary = compute_summary({**prior, **annuals}, quarters, closes)
+            prior_sh = {r["period"]: r["data"] for r in
+                        sb("GET", "fundamentals?select=period,data"
+                                  f"&kind=eq.shareholding&symbol=eq.{sym}")}
+            summary = compute_summary({**prior, **annuals}, quarters, closes,
+                                      shareholding={**prior_sh, **shareholding})
             n += upsert(sb, fundamentals_rows(sym, annuals, quarters, summary, now,
                                               shareholding=shareholding, docs=docs),
                         table="fundamentals", key="symbol,kind,period")
@@ -747,6 +765,43 @@ def refresh_screener(sb, now):
         rows.append(screener_metrics_row(s, name, sector, annuals[s],
                                          quarters.get(s, {}), sh.get(s), price, now))
     return upsert(sb, rows, table="screener_metrics", key="symbol")
+
+
+def scale_px_rows(rows, prices, ts):
+    """Intraday refresh without re-reading fundamentals: scale the price-linked
+    columns by new/old price. Rows without both prices are left alone."""
+    out = []
+    for r in rows:
+        new = prices.get(r["symbol"])
+        old = r.get("price")
+        if not new or not old:
+            continue
+        k = new / old
+        out.append({"symbol": r["symbol"], "price": round(new, 2),
+                    "pe": round(r["pe"] * k, 2) if r.get("pe") is not None else None,
+                    "pb": round(r["pb"] * k, 2) if r.get("pb") is not None else None,
+                    "mcap_cr": round(r["mcap_cr"] * k, 1) if r.get("mcap_cr") is not None else None,
+                    "updated_at": ts})
+    return out
+
+
+def refresh_screener_px(sb, now):
+    """Hourly during market hours: fresher screen prices between the daily
+    18:00 rebuilds. ~1MB egress a pass (small row read + spark batches)."""
+    from market import market_hours
+    if not market_hours(now):
+        return 0
+    rows = sb("GET", "screener_metrics?select=symbol,price,pe,pb,mcap_cr")
+    if not rows:
+        return 0
+    data = fetch_spark([f"{r['symbol']}.NS" for r in rows if r.get("price")])
+    prices = {}
+    for r in rows:
+        p = parse_spark(data.get(f"{r['symbol']}.NS", {}) or {})
+        if p:
+            prices[r["symbol"]] = p.price
+    out = scale_px_rows(rows, prices, now.isoformat())
+    return upsert(sb, out, table="screener_metrics", key="symbol") if out else 0
 
 
 def refresh_deep_new(sb, now):

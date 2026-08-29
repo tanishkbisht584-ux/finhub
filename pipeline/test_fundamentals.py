@@ -190,6 +190,30 @@ def test_pros_cons_good_company():
     assert s["cons"] == []
 
 
+def test_pros_cons_shareholding_trend_rules():
+    sh = {"2025-09": {"fiis": 10.0, "promoters": 55.0},
+          "2025-12": {"fiis": 11.0, "promoters": 55.0},
+          "2026-03": {"fiis": 12.0, "promoters": 51.0},
+          "2026-06": {"fiis": 13.0, "promoters": 51.0}}
+    s = fu.compute_summary(series([100, 120, 150, 180, 220, 270]), {}, [],
+                           shareholding=sh)
+    assert any("FII" in p for p in s["pros"])          # 3 straight rises
+    assert any("Promoter holding" in c for c in s["cons"])  # 55 -> 51 = -4pp
+    flat = {p: {"fiis": 10.0, "promoters": 55.0} for p in sh}
+    s2 = fu.compute_summary(series([100, 120, 150, 180, 220, 270]), {}, [],
+                            shareholding=flat)
+    assert not any("FII" in p for p in s2["pros"])
+    assert not any("Promoter holding" in c for c in s2["cons"])
+
+
+def test_pros_cons_dividend_cut():
+    annuals = series([100, 110, 120, 130, 140, 150],
+                     eps=10.0, div_payout=40.0)
+    annuals[max(annuals)]["div_payout"] = 10.0  # dps 4 -> 1: a cut
+    s = fu.compute_summary(annuals, {}, [])
+    assert any("Dividend" in c and "cut" in c.lower() for c in s["cons"])
+
+
 def test_pros_cons_weak_company():
     annuals = series([100, 101, 102, 103, 104, 105], roe=4.0, roce=5.0,
                      borrowings=500, reserves=100, equity_cap=10, div_payout=0.0,
@@ -463,6 +487,17 @@ def test_pick_results_filings_prefers_consolidated_skips_banks_and_known():
     picked = fu.pick_results_filings(rows, have={"2023-12"}, cap=5)
     assert [(f["xbrl"], fu.quarter_of_nse(f["toDate"])) for f in picked] == \
         [("u-con", "2024-12"), ("u-q2", "2024-09")]
+
+
+def test_scale_px_rows_scales_price_linked_columns_only():
+    rows = [{"symbol": "TCS", "price": 100.0, "pe": 20.0, "pb": 4.0, "mcap_cr": 1000.0},
+            {"symbol": "INFY", "price": 200.0, "pe": None, "pb": 5.0, "mcap_cr": 2000.0},
+            {"symbol": "NOPX", "price": None, "pe": 9.0, "pb": 1.0, "mcap_cr": 10.0}]
+    out = fu.scale_px_rows(rows, {"TCS": 110.0, "NOPX": 50.0}, "T")
+    assert len(out) == 1  # INFY has no new price; NOPX has no base to scale
+    r = out[0]
+    assert r["price"] == 110.0 and r["pe"] == 22.0 and r["pb"] == 4.4
+    assert r["mcap_cr"] == 1100.0 and r["updated_at"] == "T"
 
 
 # ---------- table rows ----------

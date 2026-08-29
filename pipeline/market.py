@@ -63,7 +63,7 @@ _last_run = {}  # group -> utc datetime of the last attempt (success or not)
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
-            "mf_new": 5, "analysis_new": 5, "deep_new": 5}
+            "mf_new": 5, "analysis_new": 5, "deep_new": 5, "screener_px": 60}
 
 
 def market_hours(now):
@@ -1054,6 +1054,11 @@ def refresh_screener(sb, now):
     return fundamentals.refresh_screener(sb, now)
 
 
+def refresh_screener_px(sb, now):
+    import fundamentals
+    return fundamentals.refresh_screener_px(sb, now)
+
+
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
@@ -1062,7 +1067,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds),
           ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm),
-          ("screener", refresh_screener))
+          ("screener", refresh_screener), ("screener_px", refresh_screener_px))
 
 
 def refresh(sb, now=None):
