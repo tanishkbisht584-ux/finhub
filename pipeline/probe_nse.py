@@ -58,9 +58,19 @@ def xbrl_elements(row):
 def shp():
     rows = rows_of(get("corporate-share-holdings-master", index="equities", symbol=SYM))
     print("rows:", len(rows), "| first row keys:", sorted(rows[0]) if rows else None)
-    if rows:
-        print("first row:", json.dumps(rows[0])[:600])
-        xbrl_elements(rows[0])
+    if not rows:
+        return
+    url = rows[0].get("xbrl")
+    print("xbrl url:", url)
+    xml = s.get(url, timeout=25).text
+    # every (context, value) for the two elements the split needs — the SHP
+    # taxonomy repeats one element per category context
+    import re
+    for el in ("ShareholdingAsAPercentageOfTotalNumberOfShares", "NumberOfShareholders"):
+        print(f"\nall contexts of {el}:")
+        for m in re.finditer(
+                rf"<[\w.-]+:{el}[^>]*contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
+            print(f"  {m.group(1)} = {m.group(2).strip()}")
 
 
 def results():
