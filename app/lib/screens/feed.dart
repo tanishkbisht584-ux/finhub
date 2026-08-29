@@ -1707,9 +1707,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
 
           // Reels-style action rail on the right edge, over the card and
           // outside the RepaintBoundary — share PNGs stay free of UI icons.
-          // 172 clears the divider + attribution zone on every card (the
-          // share icon was sitting on the hairline on short no-image cards).
-          Positioned(right: 10, bottom: 172, child: _rail(isSaved)),
+          // 90 ends the stack just above the read-more strip; the attribution
+          // row is left-anchored, so the icons overlap only empty space.
+          Positioned(right: 10, bottom: 90, child: _rail(isSaved)),
 
           // Dim the card while the palette is up, so the targets read as a
           // layer above rather than more card furniture.
@@ -1721,11 +1721,12 @@ class _StoryCardState extends ConsumerState<StoryCard>
           ),
 
           // Centred above the rail: the hold starts anywhere, so the row
-          // cannot be anchored to the thumb.
+          // cannot be anchored to the thumb. 46 keeps the ribbon 44 below
+          // the rail anchor, same delta as before the rail dropped.
           Positioned(
             left: 0,
             right: 0,
-            bottom: 128,
+            bottom: 46,
             child: IgnorePointer(
               child: _holdIsRibbon
                   ? Align(
@@ -1980,7 +1981,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
                     ),
                   ),
                 ),
-                const Divider(height: 20),
+                const SizedBox(height: 10),
                 // Attribution owns the full width now — the action rail
                 // floats on the card's right edge (see build).
                 _attribution(dir),
@@ -2005,7 +2006,6 @@ class _StoryCardState extends ConsumerState<StoryCard>
       child: Container(
         width: double.infinity,
         decoration: BoxDecoration(
-          border: const Border(top: BorderSide(color: border)),
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
@@ -2092,7 +2092,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
         InkWell(
           onTap: _showOutlets,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
             child: Text('+$others more',
                 style: mono.copyWith(
                     fontSize: 10.5, color: dir, fontWeight: FontWeight.w600)),
@@ -2183,13 +2183,13 @@ class _StoryCardState extends ConsumerState<StoryCard>
         tint: isSaved ? green : inkDim,
         onTap: _toggleSave,
       ),
-      const SizedBox(height: 4),
+      const SizedBox(height: 12),
       _railButton(
         icon: Icons.ios_share_rounded,
         tint: inkDim,
         onTap: () => _fire('card'),
       ),
-      const SizedBox(height: 4),
+      const SizedBox(height: 12),
       _railButton(
         icon: Icons.volume_off_outlined,
         tint: inkDim,
@@ -2198,7 +2198,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
       // Follow this STORY (015): bell pings only when the cluster develops.
       // 4 tiles is the rail's hard cap — a 5th would climb into the hero.
       if (story.clusterId != null) ...[
-        const SizedBox(height: 4),
+        const SizedBox(height: 12),
         ValueListenableBuilder<Set<String>>(
             valueListenable: followedClusterIds,
             builder: (_, followed, __) {
