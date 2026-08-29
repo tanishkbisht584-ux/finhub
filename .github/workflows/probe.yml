@@ -1,0 +1,22 @@
+name: probe
+# One-shot NSE endpoint probe (manual only): prints the response shapes that
+# can't be verified from the dev machine (NSE Akamai-blocks it). No secrets,
+# no writes — read pipeline/probe_nse.py.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - run: python probe_nse.py
+        working-directory: pipeline
