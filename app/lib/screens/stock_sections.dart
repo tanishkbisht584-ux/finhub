@@ -232,19 +232,20 @@ class DocsSection extends StatelessWidget {
   }
 }
 
-/// Same-sector companies from the hot quote universe, biggest first. Ranking
-/// and the self-exclusion live here so a test can feed raw ticks.
+/// Same-sector companies from screener_metrics (the full ~1.8k covered
+/// market), biggest first. Ranking + self-exclusion live here so a test can
+/// feed raw rows.
 class PeersTable extends StatelessWidget {
   const PeersTable(this.peers, {super.key, required this.self});
-  final List<Tick> peers;
+  final List<Map<String, dynamic>> peers;
   final String self;
 
   @override
   Widget build(BuildContext context) {
-    num mcap(Tick t) => ((t.meta['f'] as Map?)?['mcap'] as num?) ?? 0;
+    num mcap(Map r) => (r['mcap_cr'] as num?) ?? 0;
     final rows = [
-      for (final t in peers)
-        if (t.symbol != self) t
+      for (final r in peers)
+        if (r['symbol'] != self) r
     ]..sort((a, b) => mcap(b).compareTo(mcap(a)));
     if (rows.isEmpty) return const SizedBox.shrink();
     Widget cell(String s, {int flex = 1, bool head = false, bool right = true}) =>
@@ -265,15 +266,15 @@ class PeersTable extends StatelessWidget {
         cell('ROE', head: true),
       ]),
       const SizedBox(height: 4),
-      for (final t in rows.take(10))
+      for (final r in rows.take(10))
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 3),
           child: Row(children: [
-            cell(t.name, flex: 3, right: false),
-            cell(t.price == 0 ? '—' : fmtNum(t.price)),
-            cell(fmtCell(((t.meta['f'] as Map?)?['pe'] as num?), CellFmt.num2)),
-            cell(fmtCell(mcap(t) == 0 ? null : mcap(t) / 1e7, CellFmt.cr), flex: 2),
-            cell(fmtCell(((t.meta['f'] as Map?)?['roe'] as num?), CellFmt.pct)),
+            cell('${r['name'] ?? r['symbol']}', flex: 3, right: false),
+            cell(r['price'] == null ? '—' : fmtNum((r['price'] as num).toDouble())),
+            cell(fmtCell(r['pe'] as num?, CellFmt.num2)),
+            cell(fmtCell(mcap(r) == 0 ? null : mcap(r), CellFmt.cr), flex: 2),
+            cell(fmtCell(r['roe'] as num?, CellFmt.pct)),
           ]),
         ),
     ]);

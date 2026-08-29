@@ -1,5 +1,4 @@
 import 'package:finswipe/fundamentals.dart';
-import 'package:finswipe/models.dart';
 import 'package:finswipe/screens/stock_sections.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -168,21 +167,22 @@ void main() {
   });
 
   group('PeersTable', () {
-    Tick tick(String sym, double price, num mcap, num? pe) => Tick.fromJson({
-          'symbol': sym, 'kind': 'equity', 'name': '$sym Ltd', 'price': price,
-          'meta': {'f': {'mcap': mcap, if (pe != null) 'pe': pe, 'roe': 12.0}},
-        });
+    Map<String, dynamic> row(String sym, double price, num mcap, num? pe) => {
+          'symbol': sym, 'name': '$sym Ltd', 'price': price,
+          'mcap_cr': mcap, 'pe': pe, 'roe': 12.0,
+        };
 
     testWidgets('sorts by market cap, excludes self, caps at 10', (t) async {
       final peers = [
-        for (var i = 0; i < 12; i++) tick('P$i', 100.0 + i, 1000 - i, 20),
-        tick('SELF', 50, 99999, 5),
+        for (var i = 0; i < 12; i++) row('P$i', 100.0 + i, 1000 - i, 20),
+        row('SELF', 50, 99999, 5),
       ];
       await t.pumpWidget(MaterialApp(
           home: Scaffold(body: PeersTable(peers, self: 'SELF'))));
       expect(find.text('SELF Ltd'), findsNothing);
       expect(find.text('P0 Ltd'), findsOneWidget); // biggest mcap first
       expect(find.text('P11 Ltd'), findsNothing); // 11th largest cut
+      expect(find.text('1,000'), findsOneWidget); // mcap already in Cr
     });
   });
 

@@ -77,6 +77,22 @@ def test_validate_overlap_flags_divergence():
     assert len(bad) == 1 and bad[0][0] == ("TCS", "annual", "FY2025")
 
 
+def test_resolve_symbol_nse_then_bse_then_name():
+    known = {"TCS", "RELIANCE"}
+    by_bse = {"533022": "20MICRONS", "532540": "TCS"}
+    by_name = {"tata consultancy services": "TCS", "20 microns": "20MICRONS"}
+    r = bk.resolve_symbol
+    assert r({"NSE": "TCS"}, known, by_bse, by_name) == "TCS"
+    # renamed on NSE since the snapshot -> BSE code still matches
+    assert r({"NSE": "OLDNAME", "BSE": "533022"}, known, by_bse, by_name) == "20MICRONS"
+    assert r({"NSE": "", "BSE": "533022.0"}, known, by_bse, by_name) == "20MICRONS"
+    # no NSE listing, no BSE match -> casefolded name
+    assert r({"NSE": "", "BSE": "1", "Company_name": "20 Microns"},
+             known, by_bse, by_name) == "20MICRONS"
+    assert r({"NSE": "", "BSE": "", "Company_name": "Unknown Co"},
+             known, by_bse, by_name) is None
+
+
 def test_rows_to_write_skips_existing_keys():
     items = {("TCS", "annual", "FY2016"): {"sales": 1},
              ("TCS", "annual", "FY2025"): {"sales": 2},

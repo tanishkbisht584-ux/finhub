@@ -37,6 +37,31 @@ void main() {
     expect(metricText('pe', null), '');
   });
 
+  group('saved screens', () {
+    test('encode/decode round trip', () {
+      final s = (
+        name: 'MY VALUE',
+        filters: [
+          (metric: 'pe', gte: false, value: 17.3),
+          (metric: 'roe', gte: true, value: 15.0),
+        ],
+        sortCol: 'pe',
+        asc: true,
+      );
+      final back = decodeScreen(encodeScreen(s));
+      expect(back, isNotNull);
+      expect(back!.name, 'MY VALUE');
+      expect(back.filters, s.filters);
+      expect(back.sortCol, 'pe');
+      expect(back.asc, isTrue);
+    });
+
+    test('decode rejects garbage', () {
+      expect(decodeScreen('not json'), isNull);
+      expect(decodeScreen('{"name":1}'), isNull);
+    });
+  });
+
   group('ScreensBody', () {
     final rows = [
       {'symbol': 'TCS', 'name': 'TCS Ltd', 'price': 2302.0, 'pe': 14.2, 'roe': 22.0},
@@ -74,6 +99,21 @@ void main() {
               body: ScreensBody(const [],
                   filters: filters, sortCol: 'pe', onRemoveFilter: (_) {}))));
       expect(find.textContaining('No matches'), findsOneWidget);
+    });
+
+    testWidgets('saved screen chips render and load on tap', (t) async {
+      int? loaded;
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: ScreensBody(rows,
+                  filters: filters,
+                  sortCol: 'pe',
+                  onRemoveFilter: (_) {},
+                  savedNames: const ['MY VALUE', 'BANKS'],
+                  onLoadSaved: (i) => loaded = i))));
+      expect(find.text('MY VALUE'), findsOneWidget);
+      await t.tap(find.text('BANKS'));
+      expect(loaded, 1);
     });
   });
 }

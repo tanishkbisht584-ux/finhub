@@ -40,7 +40,7 @@ class _StockScreenState extends State<StockScreen> {
   FundamentalsData _fund = FundamentalsData.fromRows(const []);
   Timer? _fundPoll;
   int _fundPolls = 0;
-  List<Tick> _peers = const [];
+  List<Map<String, dynamic>> _peers = const [];
   String _range = '1M';
   List<double> _chartCloses = const [];
   List<DateTime> _chartTimes = const [];
@@ -48,8 +48,10 @@ class _StockScreenState extends State<StockScreen> {
   final _tracker = SectionTracker();
 
   // Yahoo chart range/interval per pill; the 1M fetch doubles as the quote.
+  // 3Y has no Yahoo range value — it fetches 5y and trims client-side.
   static const _ranges = {'1M': ('1mo', '1d'), '6M': ('6mo', '1d'),
-                          '1Y': ('1y', '1d'), '5Y': ('5y', '1wk'),
+                          '1Y': ('1y', '1d'), '3Y': ('5y', '1wk'),
+                          '5Y': ('5y', '1wk'), '10Y': ('10y', '1mo'),
                           'MAX': ('max', '1mo')};
 
   @override
@@ -94,24 +96,30 @@ class _StockScreenState extends State<StockScreen> {
     });
   }
 
-  /// Same-Yahoo-sector rows from the hot quote universe — the PEERS table.
-  /// No sector in meta yet (analysis pending) just means no section.
+  /// Same-sector rows from screener_metrics — the full covered market, not
+  /// just the hot quote universe. No metrics row yet just means no section.
   void _loadPeers() {
     if (!remoteConfig.screenerPageEnabled || _peers.isNotEmpty) return;
-    final meta = ticks.value[widget.company.nseSymbol]?.meta;
-    final sector = ((meta?['f'] as Map?)?['sector'] as String?) ?? '';
-    if (sector.isEmpty) return;
-    Supabase.instance.client
-        .from('quotes')
-        .select(tickCols)
-        .eq('kind', 'equity')
-        .filter('meta->f->>sector', 'eq', sector)
-        .limit(30)
-        .then((rows) {
-      if (!mounted) return;
-      setState(() => _peers = [
-            for (final r in rows) Tick.fromJson(Map<String, dynamic>.from(r))
-          ]);
+    final sb = Supabase.instance.client;
+    sb
+        .from('screener_metrics')
+        .select('sector')
+        .eq('symbol', widget.company.nseSymbol)
+        .maybeSingle()
+        .then((self) {
+      final sector = self?['sector'] as String?;
+      if (sector == null || sector.isEmpty || !mounted) return;
+      sb
+          .from('screener_metrics')
+          .select('symbol,name,price,pe,mcap_cr,roe')
+          .eq('sector', sector)
+          .order('mcap_cr', ascending: false)
+          .limit(11)
+          .then((rows) {
+        if (!mounted) return;
+        setState(() =>
+            _peers = [for (final r in rows) Map<String, dynamic>.from(r)]);
+      });
     }).catchError((_) {});
   }
 
@@ -130,10 +138,19 @@ class _StockScreenState extends State<StockScreen> {
           .timeout(const Duration(seconds: 10));
       if (!mounted || r.statusCode != 200) return;
       final q = Quote.fromChartJson(jsonDecode(r.body));
-      if (mounted && _range == label && q.closes.isNotEmpty) {
+      var closes = q.closes, times = q.times;
+      if (label == '3Y' && times.isNotEmpty) {
+        final cutoff = DateTime.now().subtract(const Duration(days: 3 * 365));
+        final from = times.indexWhere((t) => t.isAfter(cutoff));
+        if (from > 0) {
+          closes = closes.sublist(from);
+          times = times.sublist(from);
+        }
+      }
+      if (mounted && _range == label && closes.isNotEmpty) {
         setState(() {
-          _chartCloses = q.closes;
-          _chartTimes = q.times;
+          _chartCloses = closes;
+          _chartTimes = times;
         });
       }
     } catch (_) {} // pill just keeps the old line; retap retries
@@ -506,7 +523,7 @@ class _StockScreenState extends State<StockScreen> {
             Text('PEERS', style: monoLabel),
             const SizedBox(height: 8),
             PeersTable(_peers, self: widget.company.nseSymbol),
-            Text('same Yahoo sector · tracked stocks only',
+            Text('same sector · top 10 by market cap',
                 style: mono.copyWith(fontSize: 10)),
           ])
         ),

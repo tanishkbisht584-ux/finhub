@@ -119,6 +119,9 @@ def main():
     todo = [s for s, rows in sorted(per_sym.items())
             if any(r["kind"] == "annual" and r["data"].get("src") == "kaggle" for r in rows)
             and not any(r["kind"] == "summary" and r["data"].get("fixup") for r in rows)]
+    only = [a.split("=", 1)[1] for a in sys.argv if a.startswith("--only=")]
+    if only:
+        todo = [s for s in todo if s in only[0].split(",")]
     print(f"{len(per_sym)} symbols, {len(todo)} to fix up")
 
     writes, done = [], 0

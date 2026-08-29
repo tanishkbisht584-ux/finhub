@@ -124,18 +124,28 @@ def parse_transposed(text, annual):
     return out
 
 
+def resolve_symbol(info, known_nse, by_bse, by_name):
+    """NSE column first; else BSE code (renames since the snapshot); else
+    casefolded company name against companies.name/aliases."""
+    sym = (info.get("NSE") or "").strip().upper()
+    if sym in known_nse:
+        return sym
+    bse = str(info.get("BSE") or "").strip()
+    if bse.endswith(".0"):
+        bse = bse[:-2]
+    if bse and bse in by_bse:
+        return by_bse[bse]
+    return by_name.get((info.get("Company_name") or "").strip().casefold())
+
+
 def load_company(dirpath):
-    """(nse_symbol, {(kind, period): data}) for one company folder; symbol is
-    None for BSE-only companies (skipped by the caller)."""
+    """(basic-info row, {(kind, period): data}) for one company folder."""
     d = pathlib.Path(dirpath)
     info = next(iter(d.glob("*_Basic_Info.csv")), None)
     if not info:
-        return None, {}
+        return {}, {}
     with open(info, newline="", encoding="utf-8-sig") as f:
         row = next(iter(csv.DictReader(f)), {})
-    sym = (row.get("NSE") or "").strip().upper()
-    if not sym:
-        return None, {}
     items = {}
     for name in ANNUAL_FILES:
         p = d / name
@@ -155,7 +165,7 @@ def load_company(dirpath):
             for period, data in parse_transposed(
                     p.read_text(encoding="utf-8-sig"), annual=False).items():
                 items.setdefault(("shareholding", period), {}).update(data)
-    return sym, items
+    return row, items
 
 
 def validate_overlap(kaggle, yahoo):
@@ -198,23 +208,30 @@ def main():
 
     from run import load_env, sb
     load_env()
-    known = {c["nse_symbol"] for c in sb("GET", "companies?select=nse_symbol")
-             if c.get("nse_symbol")}
+    companies = sb("GET", "companies?select=nse_symbol,bse_code,name,aliases")
+    known = {c["nse_symbol"] for c in companies if c.get("nse_symbol")}
+    by_bse = {str(c["bse_code"]).strip(): c["nse_symbol"] for c in companies
+              if c.get("bse_code") and c.get("nse_symbol")}
+    by_name = {}
+    for c in companies:
+        if not c.get("nse_symbol"):
+            continue
+        for n in [c.get("name")] + (c.get("aliases") or []):
+            if n:
+                by_name[n.strip().casefold()] = c["nse_symbol"]
 
     company_dirs = sorted({p.parent for p in root.rglob("*_Basic_Info.csv")})
     print(f"{len(company_dirs)} company folders found")
-    items, no_nse, unknown = {}, 0, 0
+    items, unmatched = {}, 0
     for i, d in enumerate(company_dirs):
         try:
-            sym, ci = load_company(d)
+            info, ci = load_company(d)
         except Exception as e:
             print(f"SKIP {d.name}: {e}")
             continue
+        sym = resolve_symbol(info, known, by_bse, by_name)
         if not sym:
-            no_nse += 1
-            continue
-        if sym not in known:
-            unknown += 1
+            unmatched += 1
             continue
         for (kind, period), data in ci.items():
             items[(sym, kind, period)] = data
@@ -222,7 +239,7 @@ def main():
             print(f"  parsed {i + 1}/{len(company_dirs)}…")
     n_syms = len({s for s, _, _ in items})
     print(f"parsed {len(items)} rows across {n_syms} NSE symbols "
-          f"({no_nse} BSE-only, {unknown} not in companies table)")
+          f"({unmatched} unmatched/BSE-only)")
 
     existing = sb("GET", "fundamentals?select=symbol,kind,period,data"
                          "&kind=in.(annual,quarter,shareholding)&order=symbol,period")

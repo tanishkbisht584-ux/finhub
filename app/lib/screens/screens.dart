@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
@@ -78,6 +81,55 @@ const List<ScreenPreset> screenPresets = [
     (metric: 'pe', gte: false, value: 25.0)]),
 ];
 
+// ---------- saved screens (SharedPreferences, same pattern as feed filters) ----------
+
+typedef SavedScreen = ({String name, List<ScreenFilter> filters, String sortCol, bool asc});
+
+String encodeScreen(SavedScreen s) => jsonEncode({
+      'name': s.name,
+      'filters': [
+        for (final f in s.filters)
+          {'metric': f.metric, 'gte': f.gte, 'value': f.value}
+      ],
+      'sortCol': s.sortCol,
+      'asc': s.asc,
+    });
+
+SavedScreen? decodeScreen(String raw) {
+  try {
+    final j = jsonDecode(raw) as Map;
+    return (
+      name: j['name'] as String,
+      filters: [
+        for (final f in j['filters'] as List)
+          (
+            metric: f['metric'] as String,
+            gte: f['gte'] as bool,
+            value: (f['value'] as num).toDouble()
+          )
+      ],
+      sortCol: j['sortCol'] as String,
+      asc: j['asc'] as bool,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<List<SavedScreen>> loadSavedScreens() async {
+  final prefs = await SharedPreferences.getInstance();
+  return [
+    for (final raw in prefs.getStringList('saved_screens') ?? const [])
+      if (decodeScreen(raw) != null) decodeScreen(raw)!
+  ];
+}
+
+Future<void> persistSavedScreens(List<SavedScreen> screens) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setStringList(
+      'saved_screens', [for (final s in screens) encodeScreen(s)]);
+}
+
 MetricDef _def(String col) => metricDefs.firstWhere((m) => m.col == col);
 
 String _trim(double v) =>
@@ -110,7 +162,10 @@ class ScreensBody extends StatelessWidget {
       required this.onRemoveFilter,
       this.onAddFilter,
       this.onSort,
+      this.onSave,
       this.onTapRow,
+      this.savedNames = const [],
+      this.onLoadSaved,
       this.updatedAt});
   final List<Map<String, dynamic>> rows;
   final List<ScreenFilter> filters;
@@ -118,12 +173,25 @@ class ScreensBody extends StatelessWidget {
   final void Function(ScreenFilter) onRemoveFilter;
   final VoidCallback? onAddFilter;
   final VoidCallback? onSort;
+  final VoidCallback? onSave;
   final void Function(String symbol)? onTapRow;
+  final List<String> savedNames;
+  final void Function(int index)? onLoadSaved;
   final DateTime? updatedAt;
 
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(20), children: [
+      if (savedNames.isNotEmpty && onLoadSaved != null) ...[
+        Text('SAVED', style: mono.copyWith(fontSize: 10, color: inkDim)),
+        const SizedBox(height: 6),
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          for (var i = 0; i < savedNames.length; i++)
+            filterPill(savedNames[i], false, inkDim, () => onLoadSaved!(i),
+                fontSize: 10),
+        ]),
+        const SizedBox(height: 10),
+      ],
       Wrap(spacing: 6, runSpacing: 6, children: [
         for (final f in filters)
           filterPill(filterLabel(f), true, green, () => onRemoveFilter(f), fontSize: 10),
@@ -131,6 +199,8 @@ class ScreensBody extends StatelessWidget {
           filterPill('+ FILTER', false, green, onAddFilter!, fontSize: 10),
         if (onSort != null)
           filterPill('SORT · ${_def(sortCol).label}', false, amber, onSort!, fontSize: 10),
+        if (onSave != null && filters.isNotEmpty)
+          filterPill('SAVE', false, inkDim, onSave!, fontSize: 10),
       ]),
       const SizedBox(height: 14),
       if (rows.isEmpty)
@@ -214,10 +284,60 @@ class _ScreensScreenState extends State<ScreensScreen> {
   List<Map<String, dynamic>> _rows = const [];
   bool _loading = true;
   bool _failed = false;
+  List<SavedScreen> _saved = const [];
 
   @override
   void initState() {
     super.initState();
+    _run();
+    if (widget.preset == null) {
+      loadSavedScreens().then((s) {
+        if (mounted) setState(() => _saved = s);
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    final ctl = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: surface,
+        shape: const RoundedRectangleBorder(),
+        title: Text('SAVE SCREEN', style: mono.copyWith(fontSize: 12)),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          style: mono.copyWith(fontSize: 13),
+          decoration: InputDecoration(
+              hintText: 'name…',
+              hintStyle: mono.copyWith(fontSize: 12, color: inkDim)),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(ctl.text),
+              child: Text('SAVE', style: mono.copyWith(color: green))),
+        ],
+      ),
+    );
+    final trimmed = (name ?? '').trim().toUpperCase();
+    if (trimmed.isEmpty) return;
+    final next = [
+      ..._saved.where((s) => s.name != trimmed),
+      (name: trimmed, filters: List.of(_filters), sortCol: _sortCol, asc: _asc),
+    ];
+    await persistSavedScreens(next);
+    if (mounted) setState(() => _saved = next);
+  }
+
+  void _loadSaved(int i) {
+    final s = _saved[i];
+    setState(() {
+      _filters = List.of(s.filters);
+      _sortCol = s.sortCol;
+      _asc = s.asc;
+    });
     _run();
   }
 
@@ -261,18 +381,55 @@ class _ScreensScreenState extends State<ScreensScreen> {
             showPillSheet(
               context,
               m.label,
-              (ctx2) => Wrap(spacing: 8, runSpacing: 8, children: [
-                for (final (label, gte, value) in m.choices)
-                  filterPill(label, false, green, () {
-                    Navigator.of(ctx2).pop();
-                    setState(() => _filters = [
-                          ..._filters.where(
-                              (f) => f.metric != m.col || f.gte != gte),
-                          (metric: m.col, gte: gte, value: value.toDouble()),
-                        ]);
-                    _run();
-                  }),
-              ]),
+              (ctx2) {
+                void apply(bool gte, double value) {
+                  Navigator.of(ctx2).pop();
+                  setState(() => _filters = [
+                        ..._filters
+                            .where((f) => f.metric != m.col || f.gte != gte),
+                        (metric: m.col, gte: gte, value: value),
+                      ]);
+                  _run();
+                }
+
+                final ctl = TextEditingController();
+                return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(spacing: 8, runSpacing: 8, children: [
+                        for (final (label, gte, value) in m.choices)
+                          filterPill(label, false, green,
+                              () => apply(gte, value.toDouble())),
+                      ]),
+                      const SizedBox(height: 12),
+                      Row(children: [
+                        SizedBox(
+                          width: 90,
+                          child: TextField(
+                            controller: ctl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true, signed: true),
+                            style: mono.copyWith(fontSize: 13),
+                            decoration: InputDecoration(
+                                isDense: true,
+                                hintText: 'custom…',
+                                hintStyle: mono.copyWith(
+                                    fontSize: 12, color: inkDim)),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        for (final (label, gte) in const [('≥', true), ('≤', false)])
+                          Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: filterPill(label, false, amber, () {
+                              final v = double.tryParse(ctl.text.trim());
+                              if (v != null) apply(gte, v);
+                            }),
+                          ),
+                      ]),
+                    ]);
+              },
             );
           }),
       ]),
@@ -338,6 +495,8 @@ class _ScreensScreenState extends State<ScreensScreen> {
                   filters: _filters,
                   sortCol: _sortCol,
                   updatedAt: stamp,
+                  savedNames: [for (final s in _saved) s.name],
+                  onLoadSaved: _saved.isEmpty ? null : _loadSaved,
                   onRemoveFilter: (f) {
                     setState(() => _filters =
                         [..._filters.where((x) => x != f)]);
@@ -345,6 +504,7 @@ class _ScreensScreenState extends State<ScreensScreen> {
                   },
                   onAddFilter: _addFilter,
                   onSort: _pickSort,
+                  onSave: widget.preset == null ? _save : null,
                   onTapRow: _openStock),
     );
   }
