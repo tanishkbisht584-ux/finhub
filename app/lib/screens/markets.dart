@@ -308,6 +308,11 @@ class _MarketsBodyState extends State<MarketsBody> {
     ];
     final flows =
         (data.blobs['flows'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final fno = (data.blobs['fno'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final bonds = _l((data.blobs['bonds'] as Map?)?['yields']);
+    final ipoBlob =
+        (data.blobs['ipos'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final ipos = [..._l(ipoBlob['current']), ..._l(ipoBlob['upcoming'])];
     return [
       if (sectors.isNotEmpty)
         (
@@ -366,15 +371,6 @@ class _MarketsBodyState extends State<MarketsBody> {
                 _flowRow(side.toUpperCase(),
                     (flows[side] as Map).cast<String, dynamic>(),
                     flows['date']?.toString()),
-            if (flows['pcr'] != null)
-              _LineRow(
-                  lead: 'NIFTY',
-                  main: 'options · exp ${flows['expiry'] ?? ''}',
-                  trail: 'PCR ${flows['pcr']}',
-                  trailColor:
-                      (flows['pcr'] as num) >= 1 ? green : red,
-                  sub:
-                      'max OI at ${fmtNum(((flows['max_oi_strike'] ?? 0) as num).toDouble(), decimals: 0)} · spot ${fmtNum(((flows['underlying'] ?? 0) as num).toDouble(), decimals: 0)}'),
             if (flows['breadth'] is Map)
               for (final e in (flows['breadth'] as Map).entries)
                 _LineRow(
@@ -386,6 +382,56 @@ class _MarketsBodyState extends State<MarketsBody> {
                         ? green
                         : red),
           ], stamp: data.blobUpdated['flows']),
+        ),
+      if (fno.isNotEmpty || flows['pcr'] != null)
+        (
+          id: 'fno',
+          label: 'F&O',
+          child: _Section('F&O', [
+            if (flows['pcr'] != null)
+              _LineRow(
+                  lead: 'NIFTY',
+                  main: 'options · exp ${flows['expiry'] ?? ''}',
+                  trail: 'PCR ${flows['pcr']}',
+                  trailColor: (flows['pcr'] as num) >= 1 ? green : red,
+                  sub:
+                      'max OI at ${fmtNum(((flows['max_oi_strike'] ?? 0) as num).toDouble(), decimals: 0)} · spot ${fmtNum(((flows['underlying'] ?? 0) as num).toDouble(), decimals: 0)}'),
+            if (fno['hi52'] != null || fno['lo52'] != null)
+              _LineRow(
+                  lead: '52W',
+                  main: 'new highs / lows',
+                  trail: '${fno['hi52'] ?? '—'}↑ ${fno['lo52'] ?? '—'}↓'),
+            _Collapsible([
+              for (final r in _l(fno['oi_gainers']))
+                _LineRow(
+                    lead: '${r['symbol']}',
+                    main: 'OI build-up',
+                    trail: _oiTrail(r['oi_pct'] as num?),
+                    trailColor: green,
+                    sub: _fnoSub(r)),
+              for (final r in _l(fno['oi_losers']))
+                _LineRow(
+                    lead: '${r['symbol']}',
+                    main: 'OI unwinding',
+                    trail: _oiTrail(r['oi_pct'] as num?),
+                    trailColor: red,
+                    sub: _fnoSub(r)),
+              for (final r in _l(fno['gainers']))
+                _LineRow(
+                    lead: '${r['symbol']}',
+                    main: 'top gainer',
+                    trail: fmtPct((r['pct'] as num?)?.toDouble()),
+                    trailColor: green,
+                    sub: _fnoSub(r)),
+              for (final r in _l(fno['losers']))
+                _LineRow(
+                    lead: '${r['symbol']}',
+                    main: 'top loser',
+                    trail: fmtPct((r['pct'] as num?)?.toDouble()),
+                    trailColor: red,
+                    sub: _fnoSub(r)),
+            ]),
+          ], stamp: data.blobUpdated['fno']),
         ),
       if (data.kind('fx').isNotEmpty)
         (
@@ -426,6 +472,50 @@ class _MarketsBodyState extends State<MarketsBody> {
                   onPressed: onAddMf,
                   child: Text('+ Add fund',
                       style: mono.copyWith(fontSize: 12, color: green)))),
+        ),
+      if (bonds.isNotEmpty)
+        (
+          id: 'bonds',
+          label: 'BONDS',
+          child: _Section('Bonds', [
+            for (final b in bonds)
+              _LineRow(
+                  lead: '${b['tenor'] ?? ''}',
+                  main: 'G-Sec yield',
+                  trail: '${fmtNum(((b['yield'] ?? 0) as num).toDouble())}%',
+                  // Falling yield = rising bond prices, so down is green here.
+                  trailColor: b['chg_bp'] == null
+                      ? null
+                      : ((b['chg_bp'] as num) <= 0 ? green : red),
+                  sub: [
+                    if (b['chg_bp'] != null)
+                      '${(b['chg_bp'] as num) >= 0 ? '+' : '−'}${(b['chg_bp'] as num).abs()} bp',
+                    if (b['date'] != null) '${b['date']}',
+                  ].join(' · ')),
+          ], stamp: data.blobUpdated['bonds']),
+        ),
+      if (ipos.isNotEmpty)
+        (
+          id: 'ipos',
+          label: 'IPO',
+          child: _Section('IPO', [
+            _Collapsible([
+              for (final i in ipos)
+                _LineRow(
+                    lead: '${i['symbol'] ?? ''}',
+                    main: '${i['company'] ?? ''}',
+                    trail: '${i['status'] ?? ''}',
+                    trailColor: '${i['status']}'.toLowerCase() == 'open'
+                        ? green
+                        : null,
+                    sub: [
+                      if (i['band'] != null) '₹${i['band']}',
+                      if (i['size'] != null) '${i['size']}',
+                      if (i['open'] != null || i['close'] != null)
+                        '${i['open'] ?? ''}–${i['close'] ?? ''}',
+                    ].join(' · ')),
+            ]),
+          ], stamp: data.blobUpdated['ipos']),
         ),
       if (macro.isNotEmpty)
         (
@@ -648,6 +738,22 @@ class _RibbonState extends State<_Ribbon> {
     );
   }
 }
+
+/// A blob's raw List into typed maps (MarketsData.list, but for nested lists).
+List<Map<String, dynamic>> _l(Object? v) => [
+      for (final r in (v as List? ?? const []))
+        Map<String, dynamic>.from(r as Map)
+    ];
+
+String _oiTrail(num? v) {
+  final d = (v ?? 0).toDouble();
+  return '${d >= 0 ? '+' : '−'}${d.abs().toStringAsFixed(1)}% OI';
+}
+
+String _fnoSub(Map<String, dynamic> r) => [
+      if (r['ltp'] != null) '₹${fmtNum((r['ltp'] as num).toDouble())}',
+      if (r['pct'] != null) fmtPct((r['pct'] as num).toDouble()),
+    ].join(' · ');
 
 /// Two hours is 2x the slowest Phase-1 cadence (equities off-hours); older
 /// than that the numbers are shown but called out, never passed off as live.

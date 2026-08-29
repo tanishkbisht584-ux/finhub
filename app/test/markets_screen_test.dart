@@ -46,6 +46,25 @@ final _blobs = <String, dynamic>{
     'underlying': 24252, 'max_oi_strike': 24200,
     'breadth': {'NIFTY 50': {'adv': 25, 'dec': 24}, 'NIFTY 500': {'adv': 217, 'dec': 276}},
   },
+  'fno': {
+    'oi_gainers': [{'symbol': 'RELIANCE', 'ltp': 3010.5, 'pct': 1.2, 'oi_pct': 38.2}],
+    'oi_losers': [{'symbol': 'INFY', 'ltp': 1890.0, 'pct': -0.8, 'oi_pct': -12.0}],
+    'gainers': [{'symbol': 'ADANIENT', 'ltp': 3300.0, 'pct': 4.5}],
+    'losers': [{'symbol': 'WIPRO', 'ltp': 240.0, 'pct': -3.2}],
+    'hi52': 34, 'lo52': 12,
+  },
+  'bonds': {
+    'yields': [
+      {'tenor': '10Y', 'yield': 6.82, 'prev': 6.85, 'chg_bp': -3.0, 'date': '2026-08-28'},
+    ],
+  },
+  'ipos': {
+    'current': [
+      {'symbol': 'ABCIPO', 'company': 'ABC Ltd', 'open': '01-Sep-2026', 'close': '03-Sep-2026',
+       'band': '95-100', 'size': '1,200.00', 'series': 'EQ', 'status': 'Open'},
+    ],
+    'upcoming': [],
+  },
   'nse_indices': [
     {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46,
      'last': 30532, 'pe': '28', 'advances': '3', 'declines': '7',
@@ -175,6 +194,29 @@ void main() {
     final header = tester.getTopLeft(find.text('FLOWS').last);
     expect(header.dy, greaterThanOrEqualTo(0));
     expect(header.dy, lessThan(600)); // inside the test viewport
+  });
+
+  testWidgets('trader coverage: F&O, bonds and IPO sections render',
+      (tester) async {
+    await tester.pumpWidget(_app(_phase3));
+    for (final h in ['F&O', 'BONDS', 'IPO']) {
+      expect(find.text(h), findsNWidgets(2), reason: h); // chip + header
+    }
+    // PCR moved out of FLOWS into F&O, above the OI movers.
+    expect(
+        tester.getTopLeft(find.text('F&O').last).dy <
+            tester.getTopLeft(find.text('PCR 1.08')).dy,
+        isTrue);
+    expect(find.text('+38.2% OI'), findsOneWidget);
+    expect(find.text('−12.0% OI'), findsOneWidget);
+    expect(find.text('34↑ 12↓'), findsOneWidget);
+    expect(find.text('top gainer'), findsOneWidget);
+    expect(find.text('6.82%'), findsOneWidget);
+    expect(find.text('−3.0 bp · 2026-08-28'), findsOneWidget);
+    expect(find.text('ABC Ltd'), findsOneWidget);
+    expect(find.text('Open'), findsOneWidget);
+    expect(find.text('₹95-100 · 1,200.00 · 01-Sep-2026–03-Sep-2026'),
+        findsOneWidget);
   });
 
   testWidgets('ribbon search filters headings and jumps on tap',
