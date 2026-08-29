@@ -89,7 +89,7 @@ def nav_slot(now):
 
 
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
-              "deep_warm": (17, 30)}
+              "deep_warm": (17, 30), "screener": (18, 0)}
 
 
 def due(group, now):
@@ -1049,6 +1049,11 @@ def refresh_deep_warm(sb, now):
     return fundamentals.refresh_deep_warm(sb, now)
 
 
+def refresh_screener(sb, now):
+    import fundamentals
+    return fundamentals.refresh_screener(sb, now)
+
+
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
@@ -1056,7 +1061,8 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds),
-          ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm))
+          ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm),
+          ("screener", refresh_screener))
 
 
 def refresh(sb, now=None):

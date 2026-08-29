@@ -18,8 +18,9 @@ from datetime import datetime, timedelta
 
 import requests
 
-from market import (BROWSER_UA, IST, NSE_API, QS_URL, TIMEOUT, nse_session,
-                    parse_nse_date, upsert, yahoo_session)
+from market import (BROWSER_UA, IST, NSE_API, QS_URL, TIMEOUT, fetch_spark,
+                    nse_session, parse_nse_date, parse_spark, upsert,
+                    yahoo_session)
 
 CR = 1e7  # raw INR per crore
 
@@ -149,7 +150,9 @@ def parse_statements(j):
 # ---------- summary: CAGRs + rule-based pros/cons ----------
 
 def _cagr(first, last, years):
-    if not first or not last or first <= 0 or years <= 0:
+    # both ends must be positive: a negative base under a fractional exponent
+    # is a complex number, and a loss year has no meaningful CAGR anyway
+    if not first or not last or first <= 0 or last <= 0 or years <= 0:
         return None
     return round(((last / first) ** (1 / years) - 1) * 100, 1)
 
@@ -520,6 +523,93 @@ def deep_fetch(sb, symbols, now):
             print(f"FUND {sym}: {e}")
         time.sleep(0.5)
     return n
+
+
+# ---------- screening engine: fundamentals -> screener_metrics, daily ----------
+
+SCREENER_COLS = ("symbol", "name", "sector", "price", "mcap_cr", "pe", "pb",
+                 "div_yield", "roe", "roce", "de", "opm",
+                 "sales_cagr_3y", "profit_cagr_3y", "sales_cagr_5y",
+                 "profit_cagr_5y", "promoter_pct", "updated_at")
+
+
+def ttm_eps(quarters):
+    """Sum of the newest 4 quarterly eps; None unless all 4 are present."""
+    vals = [quarters[k].get("eps") for k in sorted(quarters, reverse=True)[:4]]
+    vals = [v for v in vals if v is not None]
+    return round(sum(vals), 2) if len(vals) == 4 else None
+
+
+def screener_metrics_row(sym, name, sector, annuals, quarters, promoter_pct, price, now):
+    """One screener_metrics row; every SCREENER_COLS key always present (None
+    where uncomputable) so upsert() lands in one PGRST102 bucket."""
+    eps_used = ttm_eps(quarters) or _latest(annuals, "eps")
+    np_, eps_a = _latest(annuals, "net_profit"), _latest(annuals, "eps")
+    # ponytail: shares inferred as np/eps (eps rounded to 2dp upstream) — mcap
+    # off a few % for low-eps stocks; good enough to screen, not to display.
+    shares = np_ / eps_a if np_ is not None and eps_a else None
+    equity = (_latest(annuals, "reserves") or 0) + (_latest(annuals, "equity_cap") or 0) \
+        if _latest(annuals, "reserves") is not None or _latest(annuals, "equity_cap") is not None \
+        else None
+    borrowings = _latest(annuals, "borrowings")
+    bv = _latest(annuals, "book_value")
+    if bv is None and equity is not None and equity > 0 and shares:
+        bv = equity / shares  # Cr / Cr-shares = ₹/share
+    payout = _latest(annuals, "div_payout")
+    r = {"symbol": sym, "name": name, "sector": sector, "price": price,
+         "mcap_cr": round(price * shares, 1) if price and shares and shares > 0 else None,
+         "pe": round(price / eps_used, 2) if price and eps_used and eps_used > 0 else None,
+         "pb": round(price / bv, 2) if price and bv and bv > 0 else None,
+         "div_yield": round(payout * eps_a / 100 / price * 100, 2)
+             if price and payout is not None and eps_a and eps_a > 0 else None,
+         "roe": _latest(annuals, "roe"), "roce": _latest(annuals, "roce"),
+         "de": (round((borrowings or 0) / equity, 2)
+                if equity is not None and equity > 0 else None),
+         "opm": _latest(annuals, "opm"),
+         "promoter_pct": promoter_pct, "updated_at": now.isoformat()}
+    for field, col in (("sales", "sales_cagr"), ("net_profit", "profit_cagr")):
+        block = _cagr_block(annuals, field)
+        r[f"{col}_3y"] = block.get("y3")
+        r[f"{col}_5y"] = block.get("y5")
+    return r
+
+
+def refresh_screener(sb, now):
+    """Daily 18:00 IST: every symbol with >=1 annual row gets a metrics row.
+    Projected jsonb selects (never select=data) keep egress small; a spark
+    miss falls back to the previous stored price instead of nulling it."""
+    fields = ("sales", "net_profit", "eps", "opm", "roe", "roce", "borrowings",
+              "reserves", "equity_cap", "div_payout", "book_value")
+    sel = ",".join(f"{f}:data->{f}" for f in fields)
+    annuals, quarters, sh = {}, {}, {}
+    for r in sb("GET", f"fundamentals?select=symbol,period,{sel}"
+                       "&kind=eq.annual&order=symbol,period"):
+        annuals.setdefault(r["symbol"], {})[r["period"]] = \
+            {k: v for k, v in r.items() if k not in ("symbol", "period") and v is not None}
+    for r in sb("GET", "fundamentals?select=symbol,period,eps:data->eps"
+                       "&kind=eq.quarter&order=symbol,period"):
+        if r.get("eps") is not None:
+            quarters.setdefault(r["symbol"], {})[r["period"]] = {"eps": r["eps"]}
+    for r in sb("GET", "fundamentals?select=symbol,period,promoters:data->promoters"
+                       "&kind=eq.shareholding&order=symbol,period"):
+        if r.get("promoters") is not None:
+            sh[r["symbol"]] = r["promoters"]  # ordered asc: last write = newest
+    if not annuals:
+        return 0
+    names = {c["nse_symbol"]: (c.get("name"), c.get("sector")) for c in
+             sb("GET", "companies?select=nse_symbol,name,sector") if c.get("nse_symbol")}
+    prev = {r["symbol"]: r["price"] for r in
+            sb("GET", "screener_metrics?select=symbol,price")}
+    syms = sorted(annuals)
+    data = fetch_spark([f"{s}.NS" for s in syms])
+    rows = []
+    for s in syms:
+        p = parse_spark(data.get(f"{s}.NS", {}) or {})
+        price = p.price if p else prev.get(s)
+        name, sector = names.get(s, (None, None))
+        rows.append(screener_metrics_row(s, name, sector, annuals[s],
+                                         quarters.get(s, {}), sh.get(s), price, now))
+    return upsert(sb, rows, table="screener_metrics", key="symbol")
 
 
 def refresh_deep_new(sb, now):

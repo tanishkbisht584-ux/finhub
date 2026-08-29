@@ -290,6 +290,105 @@ def test_map_shp_facts_empty():
     assert mapped == {} and unmapped == []
 
 
+# ---------- screening engine ----------
+
+def annuals_for_screen(**newest_extra):
+    """6 growing FYs; newest carries eps/book value etc. for ratio math."""
+    base = series([100, 120, 150, 180, 220, 270])  # 2020..2025, profit = sales//2
+    newest = base["FY2025"]
+    newest.update({"eps": 13.5, "net_profit": 135, "roe": 18.0, "roce": 22.0,
+                   "opm": 21.0, "borrowings": 50, "reserves": 240, "equity_cap": 10,
+                   "div_payout": 25.0, "book_value": 90.0, **newest_extra})
+    return base
+
+
+QUARTERS_EPS = {"2026-06": {"eps": 4.0}, "2026-03": {"eps": 3.5},
+                "2025-12": {"eps": 3.5}, "2025-09": {"eps": 3.0}}
+
+
+def row_for(**kw):
+    args = {"sym": "TCS", "name": "TCS Ltd", "sector": "IT",
+            "annuals": annuals_for_screen(), "quarters": QUARTERS_EPS,
+            "promoter_pct": 50.5, "price": 280.0, "now": NOW}
+    args.update(kw)
+    return fu.screener_metrics_row(**args)
+
+
+def test_ttm_eps_needs_four_quarters():
+    assert fu.ttm_eps(QUARTERS_EPS) == 14.0
+    assert fu.ttm_eps({k: QUARTERS_EPS[k] for k in list(QUARTERS_EPS)[:3]}) is None
+    assert fu.ttm_eps({}) is None
+
+
+def test_screener_row_pe_prefers_ttm_eps():
+    r = row_for()
+    assert r["pe"] == round(280.0 / 14.0, 2)
+    r2 = row_for(quarters={})  # falls back to newest annual eps
+    assert r2["pe"] == round(280.0 / 13.5, 2)
+
+
+def test_screener_row_negative_eps_no_pe_no_div_yield():
+    ann = annuals_for_screen(eps=-2.0, net_profit=-20)
+    r = row_for(annuals=ann, quarters={})
+    assert r["pe"] is None and r["div_yield"] is None
+    # loss-makers still have shares (signs cancel) and therefore an mcap
+    assert r["mcap_cr"] == round(280.0 * 10, 1)
+
+
+def test_screener_row_mcap_from_np_over_eps():
+    r = row_for()
+    assert r["mcap_cr"] == round(280.0 * (135 / 13.5), 1)  # 2800 Cr
+
+
+def test_screener_row_pb_book_value_then_equity_fallback():
+    assert row_for()["pb"] == round(280.0 / 90.0, 2)
+    ann = annuals_for_screen()
+    del ann["FY2025"]["book_value"]
+    r = row_for(annuals=ann)  # (reserves+equity_cap)/shares = 250/10 = 25/share
+    assert r["pb"] == round(280.0 / 25.0, 2)
+
+
+def test_screener_row_negative_equity_nulls_pb_and_de():
+    ann = annuals_for_screen(reserves=-100, equity_cap=10)
+    del ann["FY2025"]["book_value"]
+    r = row_for(annuals=ann)
+    assert r["pb"] is None and r["de"] is None
+
+
+def test_screener_row_missing_borrowings_with_equity_is_de_zero():
+    ann = annuals_for_screen()
+    del ann["FY2025"]["borrowings"]
+    assert row_for(annuals=ann)["de"] == 0.0
+    assert row_for()["de"] == round(50 / 250, 2)
+
+
+def test_screener_row_bank_without_opm_still_emits_row():
+    ann = annuals_for_screen()
+    del ann["FY2025"]["opm"]
+    r = row_for(annuals=ann)
+    assert r["opm"] is None and r["roe"] == 18.0
+
+
+def test_screener_row_no_price_keeps_fundamental_metrics():
+    r = row_for(price=None)
+    assert r["price"] is None and r["pe"] is None and r["mcap_cr"] is None
+    assert r["roe"] == 18.0 and r["sales_cagr_5y"] is not None
+
+
+def test_screener_row_cagr_and_div_yield():
+    r = row_for()
+    assert r["sales_cagr_5y"] == 22.0  # 100 -> 270 over 5y
+    assert r["profit_cagr_3y"] is not None
+    assert r["div_yield"] == round(25.0 * 13.5 / 100 / 280.0 * 100, 2)
+    assert r["promoter_pct"] == 50.5
+
+
+def test_screener_row_always_full_column_set():
+    sparse = row_for(annuals={"FY2025": {"sales": 10}}, quarters={},
+                     promoter_pct=None, price=None)
+    assert set(sparse) == set(fu.SCREENER_COLS)
+
+
 # ---------- table rows ----------
 
 def test_fundamentals_rows_shapes_and_pk():

@@ -163,11 +163,13 @@ def test_analysis_groups_are_slotted_daily(monkeypatch):
     market._last_run["technicals"] = ist(2026, 8, 21, 16, 16)
     assert not market.due("technicals", ist(2026, 8, 22, 9, 0))         # same slot (yesterday's close)
     assert market.due("technicals", ist(2026, 8, 22, 16, 16))
-    assert [g for g, _ in market.GROUPS][-7:] == ["fundamentals", "technicals", "macro", "nse",
-                                                  "bonds", "deep_new", "deep_warm"]
-    # deep cadence: requests drain every 5 min, warm pass once daily at 17:30
+    assert [g for g, _ in market.GROUPS][-8:] == ["fundamentals", "technicals", "macro", "nse",
+                                                  "bonds", "deep_new", "deep_warm", "screener"]
+    # deep cadence: requests drain every 5 min, warm pass daily 17:30, then
+    # the screener rebuild at 18:00 reads what the warm pass just wrote
     assert market.INTERVAL["deep_new"] == 5
     assert market.DAILY_SLOT["deep_warm"] == (17, 30)
+    assert market.DAILY_SLOT["screener"] == (18, 0)
 
 
 # ---------- flows ----------
