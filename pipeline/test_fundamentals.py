@@ -235,6 +235,61 @@ def test_shape_docs():
     assert len(d["announcements"]) == 1  # empty row dropped
 
 
+def test_shape_docs_splits_concalls_out_of_announcements():
+    anns = [{"desc": "Transcript of Earnings Conference Call", "an_dt": "1", "attchmntFile": "u1"},
+            {"desc": "Investor Presentation Q1", "an_dt": "2", "attchmntFile": "u2"},
+            {"desc": "Analyst / Institutional Investor Meet intimation", "an_dt": "3", "attchmntFile": "u3"},
+            {"desc": "Board Meeting outcome", "an_dt": "4", "attchmntFile": "u4"}]
+    d = fu.shape_docs(None, anns)
+    assert [c["url"] for c in d["concalls"]] == ["u1", "u2", "u3"]
+    assert [a["url"] for a in d["announcements"]] == ["u4"]
+
+
+def test_shape_ratings_normalizes_key_variants():
+    rows = [{"creditRatingAgencyName": "CRISIL", "rating": "AAA/Stable",
+             "date": "03-Jul-2026", "attchmntFile": "https://x/r.pdf"},
+            {"cra": "ICRA", "crRating": "AA+", "crDate": "29-Jan-2026"},
+            {"junk": True}]
+    out = fu.shape_ratings({"data": rows})
+    assert out[0] == {"agency": "CRISIL", "rating": "AAA/Stable",
+                      "date": "03-Jul-2026", "url": "https://x/r.pdf"}
+    assert out[1]["agency"] == "ICRA" and out[1]["rating"] == "AA+"
+    assert len(out) == 2  # unkeyable row dropped
+
+
+# ---------- SHP XBRL: FII/DII split (step A — patterns pending runner check) ----------
+
+SHP_XBRL = """<html>
+<ix:nonFraction name='in-bse-shp:ForeignPortfolioInvestorsCategoryI' contextRef='C1'>17.19</ix:nonFraction>
+<ix:nonFraction name="in-bse-shp:MutualFunds">9.90</ix:nonFraction>
+<ix:nonFraction name="in-bse-shp:InsuranceCompanies">6.20</ix:nonFraction>
+<ix:nonNumeric name="in-bse-shp:CentralGovernmentStateGovernments">0.17</ix:nonNumeric>
+<ix:nonFraction name="in-bse-shp:TotalNumberOfShareholders">46,51,863</ix:nonFraction>
+<ix:nonFraction name="in-bse-shp:SomethingUnrelated">1.0</ix:nonFraction>
+</html>"""
+
+
+def test_parse_ix_facts_localnames_and_text():
+    facts = fu.parse_ix_facts(SHP_XBRL)
+    assert facts["ForeignPortfolioInvestorsCategoryI"] == "17.19"
+    assert facts["TotalNumberOfShareholders"] == "46,51,863"
+    assert "SomethingUnrelated" in facts
+
+
+def test_map_shp_facts_splits_and_reports_unmapped():
+    mapped, unmapped = fu.map_shp_facts(fu.parse_ix_facts(SHP_XBRL))
+    assert mapped["fiis"] == 17.19
+    assert mapped["diis"] == round(9.90 + 6.20, 2)  # MF + insurance summed
+    assert mapped["govt"] == 0.17
+    assert mapped["n_holders"] == 4651863
+    assert "SomethingUnrelated" in unmapped
+
+
+def test_map_shp_facts_empty():
+    mapped, unmapped = fu.map_shp_facts({})
+    assert mapped == {} and unmapped == []
+
+
 # ---------- table rows ----------
 
 def test_fundamentals_rows_shapes_and_pk():

@@ -171,7 +171,24 @@ class DocsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final reports = (docs['annual_reports'] as List?) ?? const [];
     final anns = (docs['announcements'] as List?) ?? const [];
-    if (reports.isEmpty && anns.isEmpty) return const SizedBox.shrink();
+    final calls = (docs['concalls'] as List?) ?? const [];
+    final ratings = (docs['credit_ratings'] as List?) ?? const [];
+    if (reports.isEmpty && anns.isEmpty && calls.isEmpty && ratings.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    Widget linkRow(Map a, {String? trail}) => Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: InkWell(
+            onTap: a['url'] == null ? null : () => openExternal(context, '${a['url']}'),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${a['subject'] ?? trail}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: mono.copyWith(fontSize: 12, color: ink, height: 1.3)),
+              Text('${a['date'] ?? ''}', style: mono.copyWith(fontSize: 10)),
+            ]),
+          ),
+        );
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if (reports.isNotEmpty) ...[
         Text('ANNUAL REPORTS', style: mono.copyWith(fontSize: 11, color: inkDim)),
@@ -190,25 +207,25 @@ class DocsSection extends StatelessWidget {
         ]),
         const SizedBox(height: 12),
       ],
+      if (calls.isNotEmpty) ...[
+        Text('CONCALLS', style: mono.copyWith(fontSize: 11, color: inkDim)),
+        const SizedBox(height: 6),
+        for (final a in calls.take(12)) linkRow(a as Map),
+      ],
+      if (ratings.isNotEmpty) ...[
+        Text('CREDIT RATINGS', style: mono.copyWith(fontSize: 11, color: inkDim)),
+        const SizedBox(height: 6),
+        for (final Map r in ratings)
+          linkRow({
+            'subject': [r['agency'], r['rating']].where((v) => v != null).join(' · '),
+            'date': r['date'],
+            'url': r['url'],
+          }),
+      ],
       if (anns.isNotEmpty) ...[
         Text('ANNOUNCEMENTS', style: mono.copyWith(fontSize: 11, color: inkDim)),
         const SizedBox(height: 6),
-        for (final a in anns.take(10))
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: InkWell(
-              onTap: (a as Map)['url'] == null
-                  ? null
-                  : () => openExternal(context, '${a['url']}'),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${a['subject']}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: mono.copyWith(fontSize: 12, color: ink, height: 1.3)),
-                Text('${a['date'] ?? ''}', style: mono.copyWith(fontSize: 10)),
-              ]),
-            ),
-          ),
+        for (final a in anns.take(10)) linkRow(a as Map),
       ],
       Text('NSE filings', style: mono.copyWith(fontSize: 10)),
     ]);

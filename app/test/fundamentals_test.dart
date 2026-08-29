@@ -109,6 +109,25 @@ void main() {
           home: Scaffold(body: DocsSection({}))));
       expect(find.byType(Text), findsNothing);
     });
+
+    testWidgets('renders concalls and credit ratings blocks', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: DocsSection(const {
+        'concalls': [
+          {'date': '25-Jul-2026', 'subject': 'Transcript of Earnings Call', 'url': 'u1'},
+        ],
+        'credit_ratings': [
+          {'agency': 'CRISIL', 'rating': 'AAA/Stable', 'date': '03-Jul-2026', 'url': 'u2'},
+        ],
+      })))));
+      expect(find.text('CONCALLS'), findsOneWidget);
+      expect(find.text('Transcript of Earnings Call'), findsOneWidget);
+      expect(find.text('CREDIT RATINGS'), findsOneWidget);
+      expect(find.textContaining('CRISIL'), findsOneWidget);
+      expect(find.textContaining('AAA/Stable'), findsOneWidget);
+    });
   });
 
   group('PeersTable', () {

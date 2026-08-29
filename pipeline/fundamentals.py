@@ -12,12 +12,13 @@ reads — opening a stock page is the trigger; Nifty50 + followed pre-warm daily
 ponytail: Yahoo's *History modules are legacy and could go dark; the swap
 target is the timeseries endpoint, isolated inside fetch_statements.
 """
+import re
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import requests
 
-from market import (BROWSER_UA, NSE_API, QS_URL, TIMEOUT, nse_session,
+from market import (BROWSER_UA, IST, NSE_API, QS_URL, TIMEOUT, nse_session,
                     parse_nse_date, upsert, yahoo_session)
 
 CR = 1e7  # raw INR per crore
@@ -284,14 +285,119 @@ def shape_shareholding(rows):
     return out
 
 
-def shape_docs(reports, announcements, cap=20):
-    """{annual_reports: [{fy,url}], announcements: [{date,subject,url}]}."""
+CONCALL_RE = re.compile(
+    r"transcript|earnings\s+(conference\s+)?call|concall|con\.?\s*call"
+    r"|analyst.{0,30}(meet|call)|investor\s+(presentation|meet)", re.I)
+
+
+def shape_docs(reports, announcements, ratings=None, cap=20):
+    """{annual_reports: [{fy,url}], announcements: [{date,subject,url}],
+    concalls: [...], credit_ratings: [...]}. Concall-ish announcements
+    (transcripts, PPTs, analyst meets) move to their own list, Screener-style."""
     ars = [{"fy": r.get("toYr"), "url": r.get("fileName")}
            for r in (reports or {}).get("data") or [] if r.get("fileName")]
-    anns = [{"date": a.get("an_dt"), "subject": a.get("desc") or a.get("attchmntText"),
-             "url": a.get("attchmntFile")}
-            for a in announcements or [] if a.get("desc") or a.get("attchmntText")]
-    return {"annual_reports": ars, "announcements": anns[:cap]}
+    anns, calls = [], []
+    for a in announcements or []:
+        subject = a.get("desc") or a.get("attchmntText")
+        if not subject:
+            continue
+        row = {"date": a.get("an_dt"), "subject": subject, "url": a.get("attchmntFile")}
+        (calls if CONCALL_RE.search(subject) else anns).append(row)
+    out = {"annual_reports": ars, "announcements": anns[:cap], "concalls": calls[:12]}
+    if ratings:
+        out["credit_ratings"] = ratings
+    return out
+
+
+def _first(r, *keys):
+    for k in keys:
+        if r.get(k):
+            return r[k]
+    return None
+
+
+def shape_ratings(j, cap=8):
+    """corporate-credit-rating rows -> [{agency, rating, date, url}]. Key names
+    are best guesses normalized through variants — verify from a runner."""
+    out = []
+    for r in (j.get("data") if isinstance(j, dict) else j) or []:
+        agency = _first(r, "creditRatingAgencyName", "cra", "agency", "creditRatingAgency")
+        rating = _first(r, "rating", "crRating", "creditRating")
+        if not agency and not rating:
+            continue
+        out.append({"agency": agency, "rating": rating,
+                    "date": _first(r, "date", "crDate", "an_dt"),
+                    "url": _first(r, "attchmntFile", "xbrl", "fileName")})
+    return out[:cap]
+
+
+# SEBI SHP taxonomy localname patterns -> our shareholding keys. Step A best
+# guesses (2026-08-29); the unmapped-names diagnostic in enrich_shareholding
+# prints one real filing's element names to the CI log for step B correction.
+SHP_PATTERNS = (
+    ("fiis", re.compile(r"ForeignPortfolioInvestor|ForeignInstitutionalInvestor", re.I)),
+    ("diis", re.compile(r"MutualFund|InsuranceCompan|ProvidentFund|PensionFund"
+                        r"|FinancialInstitution|AlternateInvestmentFund", re.I)),
+    ("govt", re.compile(r"CentralGovernment|StateGovernment|PresidentOfIndia", re.I)),
+    ("n_holders", re.compile(r"TotalNumberOfShareholders|NumberOfShareholders$", re.I)),
+)
+
+
+def parse_ix_facts(html):
+    """{localname: text} for every ix:nonNumeric/nonFraction fact — the same
+    regex approach as market.parse_pit_xbrl, kept generic. First value wins."""
+    out = {}
+    for name, val in re.findall(
+            r"<ix:non(?:Numeric|Fraction)[^>]*name=['\"]([^'\"]+)['\"][^>]*>(.*?)"
+            r"</ix:non(?:Numeric|Fraction)>", html, re.S):
+        key = name.split(":")[-1]
+        if key not in out:
+            out[key] = re.sub(r"<[^>]+>", "", val).strip()
+    return out
+
+
+def map_shp_facts(facts):
+    """(mapped {fiis, diis, govt, n_holders}, unmapped localnames). Facts whose
+    localname matches multiple patterns of one key are summed (DII buckets)."""
+    sums, unmapped = {}, []
+    for name, text in facts.items():
+        try:
+            v = float(str(text).replace(",", ""))
+        except ValueError:
+            continue
+        for key, pat in SHP_PATTERNS:
+            if pat.search(name):
+                sums[key] = sums.get(key, 0) + v
+                break
+        else:
+            unmapped.append(name)
+    if "n_holders" in sums:
+        sums["n_holders"] = int(sums["n_holders"])
+    return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in sums.items()}, unmapped
+
+
+def enrich_shareholding(sh, master_rows, fetch):
+    """Merge the FII/DII split from the newest filing's XBRL into the newest
+    shareholding period. One doc fetch per symbol per pass (insider's cost
+    model); any failure leaves the master's promoter/public split untouched."""
+    if not sh or not master_rows:
+        return sh
+    newest = master_rows[0]  # API order is newest-first, like the master shape
+    url = _first(newest, "xbrl", "xbrlFile", "submissionLink")
+    if not url:
+        print(f"FUND SHP no xbrl field; row keys: {sorted(newest)[:20]}")
+        return sh
+    try:
+        mapped, unmapped = map_shp_facts(parse_ix_facts(fetch(url)))
+    except Exception as e:
+        print(f"FUND SHP xbrl fetch/parse: {e}")
+        return sh
+    if unmapped:
+        print(f"FUND SHP unmapped elements (step B): {unmapped[:40]}")
+    period = max(sh)
+    if mapped:
+        sh[period] = {**sh[period], **mapped}
+    return sh
 
 
 def fetch_nse_deep(sym, session):
@@ -305,24 +411,33 @@ def fetch_nse_deep(sym, session):
             raise RuntimeError(f"non-JSON {r.status_code}")
         return r.json()
 
-    sh, reports, anns = {}, None, None
+    sh, reports, anns, ratings = {}, None, None, None
     try:
-        sh = shape_shareholding(get("corporate-share-holdings-master",
-                                    index="equities", symbol=sym))
+        master = get("corporate-share-holdings-master", index="equities", symbol=sym)
+        sh = shape_shareholding(master)
+        sh = enrich_shareholding(sh, master, lambda u: session.get(u, timeout=25).text)
     except Exception as e:
         print(f"FUND NSE shareholding {sym}: {e}")
     try:
         reports = get("annual-reports", index="equities", symbol=sym)
     except Exception as e:
         print(f"FUND NSE reports {sym}: {e}")
-    try:
-        anns = get("corporate-announcements", index="equities", symbol=sym)
+    try:  # ~2y window so more than one page of concalls/announcements lands
+        ist = datetime.now(IST)
+        anns = get("corporate-announcements", index="equities", symbol=sym,
+                   from_date=(ist - timedelta(days=730)).strftime("%d-%m-%Y"),
+                   to_date=ist.strftime("%d-%m-%Y"))
         if isinstance(anns, dict):
             anns = anns.get("data")
     except Exception as e:
         print(f"FUND NSE announcements {sym}: {e}")
-    docs = shape_docs(reports, anns)
-    if not docs["annual_reports"] and not docs["announcements"]:
+    try:  # endpoint path unverified (undocumented) — silent absence if wrong
+        ratings = shape_ratings(get("corporate-credit-rating", index="equities", symbol=sym))
+    except Exception as e:
+        print(f"FUND NSE ratings {sym}: {e}")
+    docs = shape_docs(reports, anns, ratings)
+    if not any(docs.get(k) for k in ("annual_reports", "announcements", "concalls",
+                                     "credit_ratings")):
         docs = {}
     return sh, docs
 
