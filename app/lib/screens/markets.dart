@@ -7,9 +7,10 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
+import '../section_ribbon.dart';
 import '../theme.dart';
 import '../ticks.dart';
-import 'feed.dart' show homeTab, marketsTab, filterPill;
+import 'feed.dart' show homeTab, marketsTab;
 import 'stock.dart';
 
 /// Everything the Markets tab shows, from the pipeline's `quotes` and
@@ -610,7 +611,7 @@ class _MarketsBodyState extends State<MarketsBody> {
     );
     if (secs.length < 2) return scroll;
     return Column(children: [
-      _Ribbon([for (final s in secs) (id: s.id, label: s.label)], _active, _jump),
+      SectionRibbon([for (final s in secs) (id: s.id, label: s.label)], _active, _jump),
       Expanded(
         child: NotificationListener<ScrollUpdateNotification>(
           onNotification: _track,
@@ -618,121 +619,6 @@ class _MarketsBodyState extends State<MarketsBody> {
         ),
       ),
     ]);
-  }
-}
-
-/// The sticky nav under the AppBar: one chip per section, the active one
-/// tracks the scroll, tap jumps, the magnifier filters chips by heading.
-class _Ribbon extends StatefulWidget {
-  const _Ribbon(this.sections, this.active, this.onJump);
-  final List<({String id, String label})> sections;
-  final ValueNotifier<String> active;
-  final void Function(String id) onJump;
-
-  @override
-  State<_Ribbon> createState() => _RibbonState();
-}
-
-class _RibbonState extends State<_Ribbon> {
-  bool _searching = false;
-  String _q = '';
-  final _chipKeys = <String, GlobalKey>{};
-
-  @override
-  void initState() {
-    super.initState();
-    widget.active.addListener(_follow);
-  }
-
-  @override
-  void dispose() {
-    widget.active.removeListener(_follow);
-    super.dispose();
-  }
-
-  /// Keep the active chip in view as the page scrolls underneath.
-  void _follow() {
-    if (!mounted) return;
-    setState(() {});
-    final ctx = _chipKeys[widget.active.value]?.currentContext;
-    if (ctx != null) {
-      Scrollable.ensureVisible(ctx,
-          alignment: 0.5,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final q = _q.trim().toLowerCase();
-    final match = [
-      for (final s in widget.sections)
-        if (q.isEmpty || s.label.toLowerCase().contains(q)) s
-    ];
-    // Before any scroll, the first section is the active one.
-    final activeId = widget.sections.any((s) => s.id == widget.active.value)
-        ? widget.active.value
-        : widget.sections.first.id;
-    return Container(
-      decoration: const BoxDecoration(
-          color: bg, border: Border(bottom: BorderSide(color: border))),
-      padding: const EdgeInsets.fromLTRB(12, 6, 0, 6),
-      child: Row(children: [
-        InkWell(
-          onTap: () => setState(() {
-            _searching = !_searching;
-            _q = '';
-          }),
-          child: Padding(
-            padding: const EdgeInsets.all(4),
-            child: Icon(_searching ? Icons.close : Icons.search,
-                size: 18, color: inkDim),
-          ),
-        ),
-        if (_searching)
-          SizedBox(
-            width: 120,
-            child: TextField(
-              autofocus: true,
-              onChanged: (v) => setState(() => _q = v),
-              style: mono.copyWith(fontSize: 12),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'jump to…',
-                hintStyle: mono.copyWith(fontSize: 12, color: inkDim),
-                enabledBorder:
-                    const UnderlineInputBorder(borderSide: BorderSide(color: border)),
-                focusedBorder:
-                    const UnderlineInputBorder(borderSide: BorderSide(color: green)),
-              ),
-            ),
-          ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.only(right: 12),
-            child: Row(children: [
-              for (final s in match)
-                Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: KeyedSubtree(
-                    key: _chipKeys.putIfAbsent(s.id, GlobalKey.new),
-                    child: filterPill(s.label, s.id == activeId, green, () {
-                      widget.onJump(s.id);
-                      setState(() {
-                        _searching = false;
-                        _q = '';
-                      });
-                    }),
-                  ),
-                ),
-            ]),
-          ),
-        ),
-      ]),
-    );
   }
 }
 

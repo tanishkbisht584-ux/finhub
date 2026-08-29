@@ -15,6 +15,7 @@ class RemoteConfig {
     this.maintenance = '',
     this.deepReadEnabled = true,
     this.qaEnabled = true,
+    this.screenerPageEnabled = true,
     this.liveDefault = true,
     this.livePollSeconds = 15,
     this.ambientPollSeconds = 90,
@@ -26,6 +27,7 @@ class RemoteConfig {
   final String maintenance;
   final bool deepReadEnabled;
   final bool qaEnabled;
+  final bool screenerPageEnabled;
   final bool liveDefault;
   final int livePollSeconds;
   final int ambientPollSeconds;
@@ -49,6 +51,7 @@ class RemoteConfig {
       maintenance: str(j['maintenance'], defaults.maintenance),
       deepReadEnabled: flag('deep_read_enabled', defaults.deepReadEnabled),
       qaEnabled: flag('qa_enabled', defaults.qaEnabled),
+      screenerPageEnabled: flag('screener_page_enabled', defaults.screenerPageEnabled),
       liveDefault: flag('live_default', defaults.liveDefault),
       livePollSeconds: secs('live_poll_seconds', defaults.livePollSeconds, 5),
       ambientPollSeconds: secs('ambient_poll_seconds', defaults.ambientPollSeconds, 15),

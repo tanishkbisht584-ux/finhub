@@ -7,9 +7,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../analysis.dart';
 import '../follows.dart';
+import '../fundamentals.dart';
 import '../models.dart';
+import '../remote_config.dart';
+import '../section_ribbon.dart';
 import '../theme.dart';
 import '../ticks.dart';
+import 'feed.dart' show filterPill;
+import 'stock_sections.dart';
 import 'story_detail.dart';
 
 /// Spec §8 screen 4: delayed price + light line chart + 52-wk range + related
@@ -32,17 +37,79 @@ class _StockScreenState extends State<StockScreen> {
   List<String> _events = const []; // NSE results/deals/insider lines (market_blobs)
   Timer? _analysisPoll;
   int _analysisPolls = 0;
+  FundamentalsData _fund = FundamentalsData.fromRows(const []);
+  Timer? _fundPoll;
+  int _fundPolls = 0;
+  String _range = '1M';
+  List<double> _chartCloses = const [];
+  final _tracker = SectionTracker();
+
+  // Yahoo chart range/interval per pill; the 1M fetch doubles as the quote.
+  static const _ranges = {'1M': ('1mo', '1d'), '6M': ('6mo', '1d'),
+                          '1Y': ('1y', '1d'), '5Y': ('5y', '1wk'),
+                          'MAX': ('max', '1mo')};
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadFundamentals();
   }
 
   @override
   void dispose() {
     _analysisPoll?.cancel();
+    _fundPoll?.cancel();
+    _tracker.dispose();
     super.dispose();
+  }
+
+  /// Statement history from the `fundamentals` table. Empty -> ask the
+  /// pipeline (same analysis_requests door as meta.f/t) and poll it in, the
+  /// exact rhythm of _maybeRequestAnalysis.
+  void _loadFundamentals() {
+    if (!remoteConfig.screenerPageEnabled) return;
+    final sym = widget.company.nseSymbol;
+    if (sym.isEmpty) return;
+    loadFundamentals(sym).then((d) {
+      if (!mounted) return;
+      setState(() => _fund = d);
+      if (d.summary.isNotEmpty) return;
+      final sb = Supabase.instance.client;
+      if (sb.auth.currentUser != null) {
+        sb.from('analysis_requests').insert({'symbol': sym}).then((_) {}, onError: (_) {});
+      }
+      _fundPoll ??= Timer.periodic(const Duration(seconds: 75), (t) {
+        if (!mounted || ++_fundPolls > 5 || _fund.summary.isNotEmpty) {
+          t.cancel();
+          return;
+        }
+        loadFundamentals(sym).then((d) {
+          if (mounted && !d.isEmpty) setState(() => _fund = d);
+        });
+      });
+    });
+  }
+
+  /// Re-fetch the chart at a pill's range; the header quote stays on the
+  /// 1M/1d numbers from _load.
+  Future<void> _fetchRange(String label) async {
+    setState(() => _range = label);
+    final (rng, iv) = _ranges[label]!;
+    try {
+      final r = await http
+          .get(
+            Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/'
+                '${widget.company.nseSymbol}.NS?range=$rng&interval=$iv'),
+            headers: {'User-Agent': 'Mozilla/5.0'},
+          )
+          .timeout(const Duration(seconds: 10));
+      if (!mounted || r.statusCode != 200) return;
+      final closes = Quote.fromChartJson(jsonDecode(r.body)).closes;
+      if (mounted && _range == label && closes.isNotEmpty) {
+        setState(() => _chartCloses = closes);
+      }
+    } catch (_) {} // pill just keeps the old line; retap retries
   }
 
   /// Out-of-universe stock: no meta.f/meta.t yet. Ask the pipeline to backfill
@@ -105,7 +172,11 @@ class _StockScreenState extends State<StockScreen> {
         .then((r) {
           if (!mounted) return;
           if (r.statusCode != 200) return setState(() => _quoteFailed = true);
-          setState(() => _quote = Quote.fromChartJson(jsonDecode(r.body)));
+          final q = Quote.fromChartJson(jsonDecode(r.body));
+          setState(() {
+            _quote = q;
+            if (_range == '1M') _chartCloses = q.closes;
+          });
         })
         .catchError((_) {
           if (mounted) setState(() => _quoteFailed = true);
@@ -201,140 +272,289 @@ class _StockScreenState extends State<StockScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
+  List<Widget> _priceHeader() {
     final q = _quote;
     final up = q != null && q.price >= q.prevClose;
     final delta = q == null ? '' : (q.price - q.prevClose).toStringAsFixed(2);
     final pct = q == null || q.prevClose == 0
         ? ''
         : ((q.price - q.prevClose) / q.prevClose * 100).toStringAsFixed(2);
-    return Scaffold(
-      backgroundColor: bg,
-      appBar: AppBar(
-        leading: const BackButton(),
-        title: Text(widget.company.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: serif.copyWith(fontSize: 18)),
-        actions: [
-          IconButton(
-            onPressed: _toggleFollow,
-            icon: Icon(
-                _following ? Icons.star_rounded : Icons.star_outline_rounded,
-                color: _following ? amber : inkDim),
-            tooltip: _following ? 'Unfollow' : 'Follow',
+    final screener = remoteConfig.screenerPageEnabled;
+    final closes =
+        screener && _chartCloses.isNotEmpty ? _chartCloses : q?.closes ?? const <double>[];
+    return [
+      Text(widget.company.nseSymbol, style: mono.copyWith(fontSize: 12)),
+      const SizedBox(height: 8),
+      if (q != null) ...[
+        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text('₹${q.price.toStringAsFixed(2)}',
+              style: serif.copyWith(fontSize: 34, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 10),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text('${up ? '+' : ''}$delta ($pct%)',
+                style: mono.copyWith(fontSize: 13, color: up ? green : red)),
           ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          Text(widget.company.nseSymbol, style: mono.copyWith(fontSize: 12)),
-          const SizedBox(height: 8),
-          if (q != null) ...[
-            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text('₹${q.price.toStringAsFixed(2)}',
-                  style: serif.copyWith(
-                      fontSize: 34, fontWeight: FontWeight.w700)),
-              const SizedBox(width: 10),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Text('${up ? '+' : ''}$delta ($pct%)',
-                    style:
-                        mono.copyWith(fontSize: 13, color: up ? green : red)),
-              ),
+        ]),
+        const SizedBox(height: 16),
+        SizedBox(height: 64, child: Sparkline(closes, up ? green : red)),
+        const SizedBox(height: 10),
+        if (screener)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(children: [
+              for (final label in _ranges.keys)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: filterPill(label, _range == label, green,
+                      () => _fetchRange(label), fontSize: 10),
+                ),
             ]),
-            const SizedBox(height: 16),
-            SizedBox(height: 64, child: Sparkline(q.closes, up ? green : red)),
-            const SizedBox(height: 10),
-            if (q.high52 > 0)
-              Text(
-                  '52-wk  ₹${q.low52.toStringAsFixed(0)} – ₹${q.high52.toStringAsFixed(0)}',
-                  style: mono.copyWith(fontSize: 12)),
-            Text('Delayed price · Yahoo Finance',
-                style: mono.copyWith(fontSize: 10)),
-          ] else if (_quoteFailed)
-            GestureDetector(
-              onTap: _load,
-              child: Text('Price unavailable — tap to retry',
-                  style: mono.copyWith(fontSize: 13)),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Center(child: appSpinner()),
-            ),
-          ValueListenableBuilder<Map<String, Tick>>(
-            valueListenable: ticks,
-            builder: (_, m, __) {
-              final meta = m[widget.company.nseSymbol]?.meta ?? const {};
-              final fund = fundamentalLines(meta);
-              final tech = technicalLines(meta);
-              if (fund.isEmpty && tech.isEmpty) return const SizedBox.shrink();
-              return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (fund.isNotEmpty) ...[
-                      const Divider(height: 40),
-                      Text('FUNDAMENTALS', style: monoLabel),
-                      const SizedBox(height: 8),
-                      for (final (k, v) in fund) _kv(k, v),
-                      Text('Yahoo Finance · as of ${fmtDay(meta['f_at'])}',
-                          style: mono.copyWith(fontSize: 10)),
-                    ],
-                    if (tech.isNotEmpty) ...[
-                      const Divider(height: 40),
-                      Text('TECHNICALS', style: monoLabel),
-                      const SizedBox(height: 8),
-                      for (final (k, v) in tech) _kv(k, v),
-                      Text('computed from 1y daily closes · as of ${fmtDay(meta['t_at'])}',
-                          style: mono.copyWith(fontSize: 10)),
-                    ],
-                  ]);
-            },
           ),
-          if (_events.isNotEmpty) ...[
-            const Divider(height: 40),
-            Text('ON THE TAPE', style: monoLabel),
-            const SizedBox(height: 8),
-            for (final e in _events.take(8))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Text(e, style: mono.copyWith(fontSize: 12, height: 1.4)),
-              ),
-            Text('NSE · board meetings, bulk/block deals, insider filings',
-                style: mono.copyWith(fontSize: 10)),
-          ],
+        if (q.high52 > 0)
+          Text('52-wk  ₹${q.low52.toStringAsFixed(0)} – ₹${q.high52.toStringAsFixed(0)}',
+              style: mono.copyWith(fontSize: 12)),
+        Text('Delayed price · Yahoo Finance', style: mono.copyWith(fontSize: 10)),
+      ] else if (_quoteFailed)
+        GestureDetector(
+          onTap: _load,
+          child: Text('Price unavailable — tap to retry',
+              style: mono.copyWith(fontSize: 13)),
+        )
+      else
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Center(child: appSpinner()),
+        ),
+    ];
+  }
+
+  Widget _analysisStrips() => ValueListenableBuilder<Map<String, Tick>>(
+        valueListenable: ticks,
+        builder: (_, m, __) {
+          final meta = m[widget.company.nseSymbol]?.meta ?? const {};
+          final fund = fundamentalLines(meta);
+          final tech = technicalLines(meta);
+          final s = _fund.summary;
+          if (fund.isEmpty && tech.isEmpty) return const SizedBox.shrink();
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (fund.isNotEmpty) ...[
+              const Divider(height: 40),
+              Text('FUNDAMENTALS', style: monoLabel),
+              const SizedBox(height: 8),
+              for (final (k, v) in fund) _kv(k, v),
+              if (s['roce'] != null)
+                _kv('ROCE', fmtCell(s['roce'] as num?, CellFmt.pct)),
+              if (s['book_value'] != null)
+                _kv('Book value', '₹${fmtCell(s['book_value'] as num?, CellFmt.num2)}'),
+              Text('Yahoo Finance · as of ${fmtDay(meta['f_at'])}',
+                  style: mono.copyWith(fontSize: 10)),
+            ],
+            if (tech.isNotEmpty) ...[
+              const Divider(height: 40),
+              Text('TECHNICALS', style: monoLabel),
+              const SizedBox(height: 8),
+              for (final (k, v) in tech) _kv(k, v),
+              Text('computed from 1y daily closes · as of ${fmtDay(meta['t_at'])}',
+                  style: mono.copyWith(fontSize: 10)),
+            ],
+          ]);
+        },
+      );
+
+  List<Widget> _tape() => [
+        if (_events.isNotEmpty) ...[
           const Divider(height: 40),
-          Text('RECENT STORIES', style: monoLabel),
+          Text('ON THE TAPE', style: monoLabel),
           const SizedBox(height: 8),
-          if (_stories.isEmpty)
+          for (final e in _events.take(8))
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              child: _storiesFailed
-                  ? GestureDetector(
-                      onTap: _load,
-                      child: Text("Couldn't load stories — tap to retry",
-                          style: mono.copyWith(fontSize: 13)),
-                    )
-                  : Text('No tagged stories yet',
-                      style: mono.copyWith(fontSize: 13)),
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(e, style: mono.copyWith(fontSize: 12, height: 1.4)),
             ),
-          for (final s in _stories)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(s.hook ?? s.headline,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style:
-                      const TextStyle(color: ink, fontWeight: FontWeight.w600)),
-              subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => StoryDetailScreen(storyId: s.id))),
-            ),
+          Text('NSE · board meetings, bulk/block deals, insider filings',
+              style: mono.copyWith(fontSize: 10)),
         ],
-      ),
+      ];
+
+  List<Widget> _storyList() => [
+        const Divider(height: 40),
+        Text('RECENT STORIES', style: monoLabel),
+        const SizedBox(height: 8),
+        if (_stories.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: _storiesFailed
+                ? GestureDetector(
+                    onTap: _load,
+                    child: Text("Couldn't load stories — tap to retry",
+                        style: mono.copyWith(fontSize: 13)),
+                  )
+                : Text('No tagged stories yet', style: mono.copyWith(fontSize: 13)),
+          ),
+        for (final s in _stories)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(s.hook ?? s.headline,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: ink, fontWeight: FontWeight.w600)),
+            subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => StoryDetailScreen(storyId: s.id))),
+          ),
+      ];
+
+  /// One statement section: heading + divider + table, Screener order.
+  List<Widget> _table(String title, List<String> periods,
+          List<(String, String, CellFmt)> rows,
+          Map<String, Map<String, dynamic>> byPeriod) =>
+      [
+        const Divider(height: 40),
+        Text(title, style: monoLabel),
+        const SizedBox(height: 8),
+        StatementTable(periods: periods, rows: rows, byPeriod: byPeriod),
+        Text('₹ Cr · Yahoo Finance + backfill', style: mono.copyWith(fontSize: 10)),
+      ];
+
+  List<({String id, String label, Widget child})> _sections() {
+    final f = _fund;
+    final cagr = (f.summary['cagr'] as Map?)?.cast<String, dynamic>() ?? const {};
+    Map<String, dynamic> block(String k) =>
+        (cagr[k] as Map?)?.cast<String, dynamic>() ?? const {};
+    Widget col(List<Widget> children) =>
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    return [
+      (id: 'chart', label: 'CHART', child: col(_priceHeader())),
+      (id: 'ratios', label: 'RATIOS', child: _analysisStrips()),
+      if ((f.summary['pros'] as List?)?.isNotEmpty == true ||
+          (f.summary['cons'] as List?)?.isNotEmpty == true)
+        (
+          id: 'proscons',
+          label: 'PROS·CONS',
+          child: col([
+            const Divider(height: 40),
+            Text('ANALYSIS', style: monoLabel),
+            const SizedBox(height: 8),
+            ProsCons(f.summary),
+          ])
+        ),
+      if (cagr.isNotEmpty)
+        (
+          id: 'growth',
+          label: 'GROWTH',
+          child: col([
+            const Divider(height: 40),
+            Text('GROWTH', style: monoLabel),
+            const SizedBox(height: 8),
+            CagrStrip('Compounded Sales Growth', block('sales')),
+            CagrStrip('Compounded Profit Growth', block('profit')),
+            CagrStrip('Stock Price CAGR', block('price')),
+            CagrStrip('Return on Equity', block('roe')),
+          ])
+        ),
+      if (f.quarter.isNotEmpty)
+        (
+          id: 'quarters',
+          label: 'QUARTERS',
+          child: col(_table('QUARTERLY RESULTS', f.quarter.keys.toList(),
+              quarterRows, f.quarter))
+        ),
+      if (f.annual.isNotEmpty) ...[
+        (
+          id: 'pnl',
+          label: 'P&L',
+          child: col(
+              _table('PROFIT & LOSS', f.annual.keys.toList(), pnlRows, f.annual))
+        ),
+        (
+          id: 'bs',
+          label: 'BALANCE SHEET',
+          child: col(
+              _table('BALANCE SHEET', f.annual.keys.toList(), bsRows, f.annual))
+        ),
+        (
+          id: 'cf',
+          label: 'CASH FLOW',
+          child:
+              col(_table('CASH FLOW', f.annual.keys.toList(), cfRows, f.annual))
+        ),
+        (
+          id: 'trend',
+          label: 'RATIO TREND',
+          child: col(
+              _table('RATIOS', f.annual.keys.toList(), ratioRows, f.annual))
+        ),
+      ],
+      if (f.shareholding.isNotEmpty)
+        (
+          id: 'holders',
+          label: 'SHAREHOLDING',
+          child: col(_table('SHAREHOLDING PATTERN',
+              f.shareholding.keys.toList(), shareholdingRows, f.shareholding))
+        ),
+      if (_events.isNotEmpty) (id: 'tape', label: 'TAPE', child: col(_tape())),
+      (id: 'stories', label: 'STORIES', child: col(_storyList())),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Scaffold scaffold({required Widget body}) => Scaffold(
+          backgroundColor: bg,
+          appBar: AppBar(
+            leading: const BackButton(),
+            title: Text(widget.company.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: serif.copyWith(fontSize: 18)),
+            actions: [
+              IconButton(
+                onPressed: _toggleFollow,
+                icon: Icon(
+                    _following ? Icons.star_rounded : Icons.star_outline_rounded,
+                    color: _following ? amber : inkDim),
+                tooltip: _following ? 'Unfollow' : 'Follow',
+              ),
+            ],
+          ),
+          body: body,
+        );
+    if (!remoteConfig.screenerPageEnabled) {
+      return scaffold(
+        body: ListView(padding: const EdgeInsets.all(20), children: [
+          ..._priceHeader(),
+          _analysisStrips(),
+          ..._tape(),
+          ..._storyList(),
+        ]),
+      );
+    }
+    final secs = _sections();
+    _tracker.ids = [for (final s in secs) s.id];
+    // Eager layout (SingleChildScrollView, not ListView) so every section
+    // RenderBox exists for ribbon jump + scroll tracking — same trade as the
+    // Markets tab; the tables are bounded, this stays cheap.
+    return scaffold(
+      body: Column(children: [
+        SectionRibbon([for (final s in secs) (id: s.id, label: s.label)],
+            _tracker.active, _tracker.jump),
+        Expanded(
+          child: NotificationListener<ScrollUpdateNotification>(
+            onNotification: _tracker.track,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final s in secs)
+                    KeyedSubtree(key: _tracker.key(s.id), child: s.child),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ]),
     );
   }
 }
