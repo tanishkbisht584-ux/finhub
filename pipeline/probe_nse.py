@@ -37,11 +37,22 @@ def show(label, fn):
 def xbrl_elements(row):
     url = next((v for k, v in row.items() if "xbrl" in k.lower() and v), None)
     print("xbrl url:", url)
-    if url:
-        facts = parse_ix_facts(s.get(url, timeout=25).text)
-        print(f"{len(facts)} ix facts; element names:")
-        for name, val in list(facts.items())[:120]:
-            print(f"  {name} = {str(val)[:60]}")
+    if not url:
+        return
+    xml = s.get(url, timeout=25).text
+    facts = parse_ix_facts(xml)
+    print(f"{len(facts)} ix facts (inline)")
+    # plain-XBRL instance: dump element localnames with contextRef + first value
+    import re
+    seen = {}
+    for m in re.finditer(r"<(?:[\w.-]+:)?(\w+)[^>]*contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
+        name, ctx, val = m.group(1), m.group(2), m.group(3).strip()
+        if name not in seen and val:
+            seen[name] = (ctx, val)
+    print(f"{len(seen)} plain-XBRL elements; name = (context, value):")
+    for name, (ctx, val) in list(seen.items())[:150]:
+        print(f"  {name} = ({ctx[:40]}, {val[:50]})")
+    print("raw head:", xml[:1200].replace(chr(10), " ")[:1200])
 
 
 def shp():
@@ -53,17 +64,19 @@ def shp():
 
 
 def results():
-    for path in ("corporates-financial-results", "corporate-financial-results"):
-        try:
-            rows = rows_of(get(path, index="equities", symbol=SYM, period="Quarterly"))
-        except Exception as e:
-            print(f"{path}: {e}")
-            continue
-        print("rows:", len(rows), "| first row keys:", sorted(rows[0]) if rows else None)
-        if rows:
-            print("first row:", json.dumps(rows[0])[:600])
-            xbrl_elements(rows[0])
+    rows = rows_of(get("corporates-financial-results", index="equities",
+                       symbol=SYM, period="Quarterly"))
+    print("rows:", len(rows))
+    con = next((r for r in rows if "Consolidated" == r.get("consolidated")), rows[0] if rows else None)
+    if not con:
         return
+    print("consolidated row:", json.dumps(con)[:700])
+    xbrl_elements(con)
+    link = con.get("resultDetailedDataLink")
+    if link:
+        r = s.get(link, timeout=25)
+        print(f"\nresultDetailedDataLink [{r.status_code}] {r.headers.get('content-type')}")
+        print(r.text[:1500])
 
 
 def ratings():
