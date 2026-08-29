@@ -218,7 +218,7 @@ def test_market_is_an_admin_switch():
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new",
                                              "analysis_new", "fundamentals", "technicals",
-                                             "macro", "nse"]
+                                             "macro", "nse", "bonds"]
 
 
 def test_refresh_mf_new_fetches_only_unquoted_follows(monkeypatch):
@@ -391,6 +391,15 @@ def test_refresh_nse_blobs_isolates_one_dead_endpoint(monkeypatch):
             if url.endswith("corporates-pit-gg"):
                 assert params["from_date"] < params["to_date"]
                 return R({"data": []})
+            if url.endswith("ipo-current-issue"):
+                return R({"data": [{"symbol": "ABCIPO", "companyName": "ABC Ltd",
+                                    "issueStartDate": "01-Sep-2026", "issueEndDate": "03-Sep-2026",
+                                    "priceBand": "95-100", "issueSize": "1,200.00", "series": "EQ",
+                                    "status": "Open"}]})
+            if url.endswith("all-upcoming-issues"):
+                return R(None, ok=False)  # one dead IPO list is fine
+            if "live-analysis" in url:
+                return R(None, ok=False)  # whole F&O family down -> old blob stays
             raise AssertionError(url)
 
     written = []
@@ -403,8 +412,76 @@ def test_refresh_nse_blobs_isolates_one_dead_endpoint(monkeypatch):
         written.append((path, kw["json"]))
 
     n = market.refresh_nse_blobs(sb, NOW, session=S())
-    assert n == 3 and written[0][0] == "market_blobs?on_conflict=key"
+    assert n == 4 and written[0][0] == "market_blobs?on_conflict=key"
     keys = {r["key"] for r in written[0][1]}
-    assert keys == {"results_calendar", "bulk_deals", "insider_trades"}  # nse_indices kept its old blob
+    # nse_indices and fno kept their old blobs; ipos lands on one live list.
+    assert keys == {"results_calendar", "bulk_deals", "insider_trades", "ipos"}
     cal = next(r for r in written[0][1] if r["key"] == "results_calendar")["payload"]
     assert [c["symbol"] for c in cal] == ["HDFCBANK", "TCS"]
+    ipos = next(r for r in written[0][1] if r["key"] == "ipos")["payload"]
+    assert ipos["upcoming"] == [] and ipos["current"][0]["symbol"] == "ABCIPO"
+
+
+# ---------- trader coverage: IPOs, F&O, bonds ----------
+
+def test_shape_ipos_reads_lenient_fields_and_defaults_status():
+    cur = {"data": [{"symbol": "ABC", "companyName": "ABC Ltd", "issueStartDate": "01-Sep-2026",
+                     "issueEndDate": "03-Sep-2026", "priceBand": "95-100",
+                     "issueSize": "1200 Cr", "series": "EQ", "status": "Open"},
+                    {"noise": True}]}
+    up = [{"sym": "XYZ", "company": "XYZ Ltd", "startDate": "10-Sep-2026"}]
+    out = market.shape_ipos(cur, up)
+    assert out["current"] == [{"symbol": "ABC", "company": "ABC Ltd", "open": "01-Sep-2026",
+                              "close": "03-Sep-2026", "band": "95-100", "size": "1200 Cr",
+                              "series": "EQ", "status": "Open"}]
+    assert out["upcoming"][0]["symbol"] == "XYZ"
+    assert out["upcoming"][0]["status"] == "upcoming"
+
+
+def test_shape_oi_spurts_splits_gainers_and_losers():
+    j = {"data": [{"symbol": "A", "avgInOI": "38.2", "ltp": "1,250.50", "pChange": 1.2},
+                  {"symbol": "B", "avgInOI": -12.0},
+                  {"symbol": "C"},  # no OI change -> dropped
+                  {"symbol": "D", "avgInOI": 5.0}]}
+    out = market.shape_oi_spurts(j)
+    assert [r["symbol"] for r in out["oi_gainers"]] == ["A", "D"]
+    assert out["oi_gainers"][0]["ltp"] == 1250.5
+    assert [r["symbol"] for r in out["oi_losers"]] == ["B"]
+
+
+def test_shape_variations_handles_flat_and_nested_payloads():
+    flat = {"data": [{"symbol": "A", "pChange": "4.5", "ltp": 100}]}
+    nested = {"FOSec": {"data": [{"symbol": "B", "perChange": -3.1}]}}
+    assert market.shape_variations(flat) == [{"symbol": "A", "ltp": 100.0, "pct": 4.5}]
+    assert market.shape_variations(nested)[0]["pct"] == -3.1
+
+
+def test_parse_stooq_csv_and_refresh_bonds(monkeypatch):
+    csv = ("Date,Open,High,Low,Close,Volume\n"
+           "2026-08-27,6.80,6.90,6.79,6.85,0\n"
+           "2026-08-28,6.85,6.86,6.80,6.82,0\n")
+    assert market.parse_stooq_csv(csv) == (6.82, 6.85, "2026-08-28")
+    assert market.parse_stooq_csv("Date,Open,High,Low,Close\n") is None
+
+    class R:
+        text = csv
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    written = []
+
+    def sb(method, path, **kw):
+        written.append((path, kw["json"]))
+
+    assert market.refresh_bonds(sb, NOW) == 1
+    ys = written[0][1][0]["payload"]["yields"]
+    assert [y["tenor"] for y in ys] == ["10Y", "5Y", "2Y"]
+    assert ys[0]["yield"] == 6.82 and ys[0]["chg_bp"] == -3.0
+
+    def dead(*a, **k):
+        raise market.requests.RequestException("down")
+
+    monkeypatch.setattr(market.requests, "get", dead)
+    assert market.refresh_bonds(sb, NOW) == 0  # no data -> old blob stays

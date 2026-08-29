@@ -62,8 +62,8 @@ Parsed = namedtuple("Parsed", "price prev change_pct as_of closes")
 _last_run = {}  # group -> utc datetime of the last attempt (success or not)
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
-INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "macro": 24 * 60, "mf_new": 5,
-            "analysis_new": 5}
+INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
+            "mf_new": 5, "analysis_new": 5}
 
 
 def market_hours(now):
@@ -817,6 +817,131 @@ def shape_indices(j, keep=("BROAD MARKET INDICES", "SECTORAL INDICES")):
             for r in j.get("data") or [] if r.get("key") in keep]
 
 
+# ---------- trader coverage (2026-08-29): IPOs, F&O snapshot, G-Sec yields ----------
+# NSE field names below are read leniently (every observed spelling) because
+# these endpoints drift; verify actual shapes from a GitHub runner before
+# trusting a quiet blob (local machines get Akamai 403s).
+
+def _pick(d, *keys):
+    for k in keys:
+        v = d.get(k)
+        if v not in (None, "", "-"):
+            return v
+    return None
+
+
+def _num(v):
+    try:
+        return float(str(v).replace(",", "").replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _rows(j):
+    """NSE wraps lists as {"data": [...]} — sometimes one level deeper."""
+    if isinstance(j, list):
+        return j
+    if not isinstance(j, dict):
+        return []
+    if isinstance(j.get("data"), list):
+        return j["data"]
+    for sub in j.values():
+        if isinstance(sub, dict) and isinstance(sub.get("data"), list):
+            return sub["data"]
+    return []
+
+
+def shape_ipos(current, upcoming, cap=30):
+    def rows(j, fallback_status):
+        out = []
+        for d in _rows(j):
+            if not isinstance(d, dict):
+                continue
+            sym, name = _pick(d, "symbol", "sym"), _pick(d, "companyName", "company", "issuer")
+            if not (sym or name):
+                continue
+            out.append({"symbol": sym, "company": name,
+                        "open": _pick(d, "issueStartDate", "startDate", "openDt"),
+                        "close": _pick(d, "issueEndDate", "endDate", "closeDt"),
+                        "band": _pick(d, "priceBand", "issuePrice", "price"),
+                        "size": _pick(d, "issueSize", "size"),
+                        "series": _pick(d, "series", "issueType", "category"),
+                        "status": _pick(d, "status", "statusOfIssue") or fallback_status})
+        return out[:cap]
+    return {"current": rows(current, "open"), "upcoming": rows(upcoming, "upcoming")}
+
+
+def shape_oi_spurts(j, cap=8):
+    rows = []
+    for d in _rows(j):
+        sym = _pick(d, "symbol", "underlying")
+        oi_pct = _num(_pick(d, "avgInOI", "changeInOI", "oiChgPct", "pctChangeInOI"))
+        if not sym or oi_pct is None:
+            continue
+        rows.append({"symbol": sym, "ltp": _num(_pick(d, "ltp", "lastPrice", "ltP")),
+                     "pct": _num(_pick(d, "pChange", "perChange", "pctChange")),
+                     "oi_pct": oi_pct})
+    return {"oi_gainers": sorted((r for r in rows if r["oi_pct"] > 0),
+                                 key=lambda r: -r["oi_pct"])[:cap],
+            "oi_losers": sorted((r for r in rows if r["oi_pct"] < 0),
+                                key=lambda r: r["oi_pct"])[:cap]}
+
+
+def shape_variations(j, cap=8):
+    out = []
+    for d in _rows(j):
+        sym = _pick(d, "symbol")
+        pct = _num(_pick(d, "pChange", "perChange", "netPrice"))
+        if not sym or pct is None:
+            continue
+        out.append({"symbol": sym, "ltp": _num(_pick(d, "ltp", "lastPrice", "ltP")), "pct": pct})
+    return out[:cap]
+
+
+# India G-Sec yields off Stooq's keyless daily-history CSV.
+# ponytail: Stooq only; if it drops these symbols, FRED INDIRLTLT01STM exists
+# but is monthly — decide then whether stale beats absent.
+STOOQ_BONDS = (("10Y", "10yiny.b"), ("5Y", "5yiny.b"), ("2Y", "2yiny.b"))
+
+
+def parse_stooq_csv(text):
+    """Date,Open,High,Low,Close(,Volume) history -> (last, prev, date) closes."""
+    closes = []
+    for line in (text or "").strip().splitlines()[1:]:
+        parts = line.split(",")
+        if len(parts) >= 5:
+            try:
+                closes.append((parts[0], float(parts[4])))
+            except ValueError:
+                continue
+    if not closes:
+        return None
+    (date, last), prev = closes[-1], (closes[-2][1] if len(closes) > 1 else None)
+    return last, prev, date
+
+
+def refresh_bonds(sb, now):
+    yields = []
+    for tenor, sym in STOOQ_BONDS:
+        try:
+            r = requests.get("https://stooq.com/q/d/l/", params={"s": sym, "i": "d"},
+                             headers=BROWSER_UA, timeout=TIMEOUT)
+            r.raise_for_status()
+            parsed = parse_stooq_csv(r.text)
+        except Exception as e:
+            print(f"MARKET bonds {sym}: {e}")
+            continue
+        if not parsed:
+            continue
+        y, prev, date = parsed
+        yields.append({"tenor": tenor, "yield": y, "prev": prev, "date": date,
+                       "chg_bp": round((y - prev) * 100, 1) if prev is not None else None})
+    if not yields:
+        return 0  # old blob stays; never had one -> no BONDS section
+    return upsert(sb, [{"key": "bonds", "payload": {"yields": yields},
+                        "updated_at": now.isoformat()}], table="market_blobs", key="key")
+
+
 def refresh_nse_blobs(sb, now, session=None):
     known = {c["nse_symbol"] for c in sb("GET", "companies?select=nse_symbol") if c.get("nse_symbol")}
     s = session or nse_session()
@@ -852,6 +977,40 @@ def refresh_nse_blobs(sb, now, session=None):
             raise RuntimeError("all flow pieces failed")  # keep the old blob
         return out
 
+    def ipos():
+        cur = up = None
+        try:
+            cur = get("ipo-current-issue")
+        except Exception as e:
+            print(f"MARKET NSE ipo current: {e}")
+        try:
+            up = get("all-upcoming-issues", category="ipo")
+        except Exception as e:
+            print(f"MARKET NSE ipo upcoming: {e}")
+        if cur is None and up is None:
+            raise RuntimeError("both IPO endpoints failed")  # keep the old blob
+        return shape_ipos(cur or {}, up or {})
+
+    def fno():
+        out = {}
+        try:
+            out.update(shape_oi_spurts(get("live-analysis-oi-spurts-underlyings")))
+        except Exception as e:
+            print(f"MARKET NSE fno oi: {e}")
+        for side, idx in (("gainers", "gainers"), ("losers", "loosers")):  # NSE's spelling
+            try:
+                out[side] = shape_variations(get("live-analysis-variations", index=idx))
+            except Exception as e:
+                print(f"MARKET NSE fno {side}: {e}")
+        for label, idx in (("hi52", "high"), ("lo52", "low")):
+            try:
+                out[label] = len(_rows(get("live-analysis-52Week", index=idx)))
+            except Exception as e:
+                print(f"MARKET NSE fno {label}: {e}")
+        if not out:
+            raise RuntimeError("all F&O pieces failed")  # keep the old blob
+        return out
+
     jobs = {
         "results_calendar": lambda: results_calendar(
             get("event-calendar", index="equities"),
@@ -866,6 +1025,8 @@ def refresh_nse_blobs(sb, now, session=None):
             fetch=lambda u: s.get(u, timeout=25).text),
         "nse_indices": lambda: shape_indices(get("allIndices")),
         "flows": flows,
+        "ipos": ipos,
+        "fno": fno,
     }
     rows = []
     for key, fn in jobs.items():
@@ -881,7 +1042,8 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
           ("analysis_new", refresh_analysis_new),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
-          ("macro", refresh_macro), ("nse", refresh_nse_blobs))
+          ("macro", refresh_macro), ("nse", refresh_nse_blobs),
+          ("bonds", refresh_bonds))
 
 
 def refresh(sb, now=None):

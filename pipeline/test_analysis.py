@@ -163,7 +163,8 @@ def test_analysis_groups_are_slotted_daily(monkeypatch):
     market._last_run["technicals"] = ist(2026, 8, 21, 16, 16)
     assert not market.due("technicals", ist(2026, 8, 22, 9, 0))         # same slot (yesterday's close)
     assert market.due("technicals", ist(2026, 8, 22, 16, 16))
-    assert [g for g, _ in market.GROUPS][-4:] == ["fundamentals", "technicals", "macro", "nse"]
+    assert [g for g, _ in market.GROUPS][-5:] == ["fundamentals", "technicals", "macro", "nse",
+                                                  "bonds"]
 
 
 # ---------- flows ----------
