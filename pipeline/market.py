@@ -63,7 +63,7 @@ _last_run = {}  # group -> utc datetime of the last attempt (success or not)
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
-            "mf_new": 5, "analysis_new": 5}
+            "mf_new": 5, "analysis_new": 5, "deep_new": 5}
 
 
 def market_hours(now):
@@ -88,7 +88,8 @@ def nav_slot(now):
     return day_slot(now, 22, 30)  # mfapi posts the day's NAV ~22:00-23:00 IST
 
 
-DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15)}
+DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
+              "deep_warm": (17, 30)}
 
 
 def due(group, now):
@@ -1038,13 +1039,24 @@ def refresh_nse_blobs(sb, now, session=None):
     return upsert(sb, rows, table="market_blobs", key="key")
 
 
+def refresh_deep_new(sb, now):
+    import fundamentals  # local: fundamentals imports us, top-level would cycle
+    return fundamentals.refresh_deep_new(sb, now)
+
+
+def refresh_deep_warm(sb, now):
+    import fundamentals
+    return fundamentals.refresh_deep_warm(sb, now)
+
+
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
           ("analysis_new", refresh_analysis_new),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
-          ("bonds", refresh_bonds))
+          ("bonds", refresh_bonds),
+          ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm))
 
 
 def refresh(sb, now=None):
