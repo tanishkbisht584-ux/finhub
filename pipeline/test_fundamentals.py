@@ -203,17 +203,58 @@ def test_pros_cons_weak_company():
     assert s["pros"] == []
 
 
+# ---------- NSE deep: shareholding + docs ----------
+
+def test_shape_shareholding_periods_and_floats():
+    rows = [{"symbol": "TCS", "date": "30-Jun-2026", "pr_and_prgrp": "50.48",
+             "public_val": "49.02", "employeeTrusts": "0.50"},
+            {"symbol": "TCS", "date": "31-Mar-2026", "pr_and_prgrp": "50.50",
+             "public_val": "49.50", "employeeTrusts": "-"}]
+    sh = fu.shape_shareholding(rows)
+    assert list(sh) == ["2026-06", "2026-03"]
+    assert sh["2026-06"] == {"promoters": 50.48, "public": 49.02, "employee_trusts": 0.5}
+    assert sh["2026-03"] == {"promoters": 50.5, "public": 49.5}  # dash dropped
+
+
+def test_shape_shareholding_garbage_rows_skipped():
+    assert fu.shape_shareholding([{"date": "not-a-date"}, {}]) == {}
+
+
+def test_shape_docs():
+    reports = {"data": [{"fromYr": "2025", "toYr": "2026", "fileName": "https://x/ar26.pdf"},
+                        {"fromYr": "2024", "toYr": "2025", "fileName": "https://x/ar25.pdf"}]}
+    anns = [{"desc": "Board Meeting", "an_dt": "28-Aug-2026 18:05:00",
+             "attchmntFile": "https://x/a.pdf", "attchmntText": "Outcome of board meeting"},
+            {"desc": None, "an_dt": None, "attchmntFile": None}]
+    d = fu.shape_docs(reports, anns)
+    assert d["annual_reports"] == [{"fy": "2026", "url": "https://x/ar26.pdf"},
+                                   {"fy": "2025", "url": "https://x/ar25.pdf"}]
+    assert d["announcements"][0] == {"date": "28-Aug-2026 18:05:00",
+                                     "subject": "Board Meeting",
+                                     "url": "https://x/a.pdf"}
+    assert len(d["announcements"]) == 1  # empty row dropped
+
+
 # ---------- table rows ----------
 
 def test_fundamentals_rows_shapes_and_pk():
     annuals = {"FY2026": {"sales": 10, "end": "2026-03-31"}}
     quarters = {"2026-06": {"sales": 3}}
     summary = {"cagr": {}, "pros": [], "cons": []}
-    rows = fu.fundamentals_rows("TCS", annuals, quarters, summary, NOW)
+    rows = fu.fundamentals_rows("TCS", annuals, quarters, summary, NOW,
+                                shareholding={"2026-06": {"promoters": 50.5}},
+                                docs={"announcements": []})
     keyed = {(r["symbol"], r["kind"], r["period"]): r for r in rows}
     assert ("TCS", "annual", "FY2026") in keyed
     assert ("TCS", "quarter", "2026-06") in keyed
     assert ("TCS", "summary", "latest") in keyed
+    assert keyed[("TCS", "shareholding", "2026-06")]["data"] == {"promoters": 50.5}
+    assert ("TCS", "docs", "latest") in keyed
     a = keyed[("TCS", "annual", "FY2026")]
     assert a["data"]["src"] == "yahoo" and a["data"]["sales"] == 10
     assert all(r["updated_at"] == NOW.isoformat() for r in rows)
+
+
+def test_fundamentals_rows_without_nse_pieces():
+    rows = fu.fundamentals_rows("TCS", {"FY2026": {"sales": 10}}, {}, {}, NOW)
+    assert {r["kind"] for r in rows} == {"annual"}

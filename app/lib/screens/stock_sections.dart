@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../fundamentals.dart';
+import '../models.dart';
 import '../theme.dart';
 
 /// Screener-style statement tables and strips for the stock page. All render
@@ -69,6 +70,7 @@ const shareholdingRows = [
   ('DIIs %', 'diis', CellFmt.pct),
   ('Government %', 'govt', CellFmt.pct),
   ('Public %', 'public', CellFmt.pct),
+  ('Employee Trusts %', 'employee_trusts', CellFmt.pct),
   ('No. of Shareholders', 'n_holders', CellFmt.cr),
 ];
 
@@ -157,6 +159,107 @@ class CagrStrip extends StatelessWidget {
         ]),
       ]),
     );
+  }
+}
+
+/// Annual-report links + recent NSE announcements from the docs row.
+class DocsSection extends StatelessWidget {
+  const DocsSection(this.docs, {super.key});
+  final Map<String, dynamic> docs;
+
+  @override
+  Widget build(BuildContext context) {
+    final reports = (docs['annual_reports'] as List?) ?? const [];
+    final anns = (docs['announcements'] as List?) ?? const [];
+    if (reports.isEmpty && anns.isEmpty) return const SizedBox.shrink();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (reports.isNotEmpty) ...[
+        Text('ANNUAL REPORTS', style: mono.copyWith(fontSize: 11, color: inkDim)),
+        const SizedBox(height: 6),
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          for (final Map r in reports.take(12))
+            InkWell(
+              onTap: () => openExternal(context, '${r['url']}'),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(border: Border.all(color: border)),
+                child: Text('FY${r['fy']}',
+                    style: mono.copyWith(fontSize: 11, color: green)),
+              ),
+            ),
+        ]),
+        const SizedBox(height: 12),
+      ],
+      if (anns.isNotEmpty) ...[
+        Text('ANNOUNCEMENTS', style: mono.copyWith(fontSize: 11, color: inkDim)),
+        const SizedBox(height: 6),
+        for (final a in anns.take(10))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: InkWell(
+              onTap: (a as Map)['url'] == null
+                  ? null
+                  : () => openExternal(context, '${a['url']}'),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${a['subject']}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: mono.copyWith(fontSize: 12, color: ink, height: 1.3)),
+                Text('${a['date'] ?? ''}', style: mono.copyWith(fontSize: 10)),
+              ]),
+            ),
+          ),
+      ],
+      Text('NSE filings', style: mono.copyWith(fontSize: 10)),
+    ]);
+  }
+}
+
+/// Same-sector companies from the hot quote universe, biggest first. Ranking
+/// and the self-exclusion live here so a test can feed raw ticks.
+class PeersTable extends StatelessWidget {
+  const PeersTable(this.peers, {super.key, required this.self});
+  final List<Tick> peers;
+  final String self;
+
+  @override
+  Widget build(BuildContext context) {
+    num mcap(Tick t) => ((t.meta['f'] as Map?)?['mcap'] as num?) ?? 0;
+    final rows = [
+      for (final t in peers)
+        if (t.symbol != self) t
+    ]..sort((a, b) => mcap(b).compareTo(mcap(a)));
+    if (rows.isEmpty) return const SizedBox.shrink();
+    Widget cell(String s, {int flex = 1, bool head = false, bool right = true}) =>
+        Expanded(
+          flex: flex,
+          child: Text(s,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: right ? TextAlign.right : TextAlign.left,
+              style: mono.copyWith(fontSize: 11, color: head ? inkDim : ink)),
+        );
+    return Column(children: [
+      Row(children: [
+        cell('NAME', flex: 3, head: true, right: false),
+        cell('PRICE', head: true),
+        cell('P/E', head: true),
+        cell('MCAP CR', flex: 2, head: true),
+        cell('ROE', head: true),
+      ]),
+      const SizedBox(height: 4),
+      for (final t in rows.take(10))
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Row(children: [
+            cell(t.name, flex: 3, right: false),
+            cell(t.price == 0 ? '—' : fmtNum(t.price)),
+            cell(fmtCell(((t.meta['f'] as Map?)?['pe'] as num?), CellFmt.num2)),
+            cell(fmtCell(mcap(t) == 0 ? null : mcap(t) / 1e7, CellFmt.cr), flex: 2),
+            cell(fmtCell(((t.meta['f'] as Map?)?['roe'] as num?), CellFmt.pct)),
+          ]),
+        ),
+    ]);
   }
 }
 

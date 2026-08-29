@@ -1,4 +1,5 @@
 import 'package:finswipe/fundamentals.dart';
+import 'package:finswipe/models.dart';
 import 'package:finswipe/screens/stock_sections.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -83,6 +84,49 @@ void main() {
                   rows: rows,
                   byPeriod: byPeriod))));
       expect(find.text('CWIP'), findsNothing);
+    });
+  });
+
+  group('DocsSection', () {
+    testWidgets('renders report years and announcement subjects', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: DocsSection(const {
+        'annual_reports': [
+          {'fy': '2026', 'url': 'https://x/ar26.pdf'},
+        ],
+        'announcements': [
+          {'date': '28-Aug-2026 18:05:00', 'subject': 'Board Meeting', 'url': 'https://x/a.pdf'},
+        ],
+      }))));
+      expect(find.text('FY2026'), findsOneWidget);
+      expect(find.text('Board Meeting'), findsOneWidget);
+      expect(find.textContaining('28-Aug-2026'), findsOneWidget);
+    });
+
+    testWidgets('empty docs renders nothing', (t) async {
+      await t.pumpWidget(const MaterialApp(
+          home: Scaffold(body: DocsSection({}))));
+      expect(find.byType(Text), findsNothing);
+    });
+  });
+
+  group('PeersTable', () {
+    Tick tick(String sym, double price, num mcap, num? pe) => Tick.fromJson({
+          'symbol': sym, 'kind': 'equity', 'name': '$sym Ltd', 'price': price,
+          'meta': {'f': {'mcap': mcap, if (pe != null) 'pe': pe, 'roe': 12.0}},
+        });
+
+    testWidgets('sorts by market cap, excludes self, caps at 10', (t) async {
+      final peers = [
+        for (var i = 0; i < 12; i++) tick('P$i', 100.0 + i, 1000 - i, 20),
+        tick('SELF', 50, 99999, 5),
+      ];
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(body: PeersTable(peers, self: 'SELF'))));
+      expect(find.text('SELF Ltd'), findsNothing);
+      expect(find.text('P0 Ltd'), findsOneWidget); // biggest mcap first
+      expect(find.text('P11 Ltd'), findsNothing); // 11th largest cut
     });
   });
 

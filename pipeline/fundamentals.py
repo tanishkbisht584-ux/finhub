@@ -17,7 +17,8 @@ from datetime import timedelta
 
 import requests
 
-from market import BROWSER_UA, QS_URL, TIMEOUT, upsert, yahoo_session
+from market import (BROWSER_UA, NSE_API, QS_URL, TIMEOUT, nse_session,
+                    parse_nse_date, upsert, yahoo_session)
 
 CR = 1e7  # raw INR per crore
 
@@ -260,14 +261,86 @@ def compute_summary(annuals, quarters, monthly_closes):
     return s
 
 
+# ---------- NSE deep: shareholding + document links ----------
+
+def shape_shareholding(rows):
+    """corporate-share-holdings-master rows -> {'2026-06': {promoters, public,
+    employee_trusts}}. NSE serves the split as strings, '-' where absent; the
+    FII/DII breakdown lives in per-quarter XBRL and is deliberately skipped."""
+    out = {}
+    for r in rows or []:
+        d = parse_nse_date(r.get("date"))
+        if not d:
+            continue
+        row = {}
+        for key, field in (("promoters", "pr_and_prgrp"), ("public", "public_val"),
+                           ("employee_trusts", "employeeTrusts")):
+            try:
+                row[key] = round(float(r.get(field)), 2)
+            except (TypeError, ValueError):
+                continue
+        if row:
+            out[f"{d.year}-{d.month:02d}"] = row
+    return out
+
+
+def shape_docs(reports, announcements, cap=20):
+    """{annual_reports: [{fy,url}], announcements: [{date,subject,url}]}."""
+    ars = [{"fy": r.get("toYr"), "url": r.get("fileName")}
+           for r in (reports or {}).get("data") or [] if r.get("fileName")]
+    anns = [{"date": a.get("an_dt"), "subject": a.get("desc") or a.get("attchmntText"),
+             "url": a.get("attchmntFile")}
+            for a in announcements or [] if a.get("desc") or a.get("attchmntText")]
+    return {"annual_reports": ars, "announcements": anns[:cap]}
+
+
+def fetch_nse_deep(sym, session):
+    """(shareholding, docs) for one symbol; every piece fails independently and
+    just leaves its section empty. Endpoint shapes per NseIndiaApi docs —
+    verify from a runner on first deploy (NSE blocks this dev machine)."""
+    def get(path, **params):
+        r = session.get(NSE_API + path, params=params, timeout=25)
+        r.raise_for_status()
+        if "json" not in r.headers.get("content-type", ""):
+            raise RuntimeError(f"non-JSON {r.status_code}")
+        return r.json()
+
+    sh, reports, anns = {}, None, None
+    try:
+        sh = shape_shareholding(get("corporate-share-holdings-master",
+                                    index="equities", symbol=sym))
+    except Exception as e:
+        print(f"FUND NSE shareholding {sym}: {e}")
+    try:
+        reports = get("annual-reports", index="equities", symbol=sym)
+    except Exception as e:
+        print(f"FUND NSE reports {sym}: {e}")
+    try:
+        anns = get("corporate-announcements", index="equities", symbol=sym)
+        if isinstance(anns, dict):
+            anns = anns.get("data")
+    except Exception as e:
+        print(f"FUND NSE announcements {sym}: {e}")
+    docs = shape_docs(reports, anns)
+    if not docs["annual_reports"] and not docs["announcements"]:
+        docs = {}
+    return sh, docs
+
+
 # ---------- table rows ----------
 
-def fundamentals_rows(sym, annuals, quarters, summary, now, src="yahoo"):
+def fundamentals_rows(sym, annuals, quarters, summary, now, src="yahoo",
+                      shareholding=None, docs=None):
     ts = now.isoformat()
     rows = [{"symbol": sym, "kind": "annual", "period": p, "data": {**d, "src": src},
              "updated_at": ts} for p, d in annuals.items()]
     rows += [{"symbol": sym, "kind": "quarter", "period": p, "data": {**d, "src": src},
               "updated_at": ts} for p, d in quarters.items()]
+    rows += [{"symbol": sym, "kind": "shareholding", "period": p, "data": d,
+              "updated_at": ts} for p, d in (shareholding or {}).items()]
+    if docs:
+        rows.append({"symbol": sym, "kind": "docs", "period": "latest",
+                     "data": docs, "updated_at": ts})
     if summary:
         rows.append({"symbol": sym, "kind": "summary", "period": "latest",
                      "data": summary, "updated_at": ts})
@@ -308,6 +381,7 @@ def _existing_fresh(sb, symbols, now):
 
 def deep_fetch(sb, symbols, now):
     n = 0
+    nse = nse_session() if symbols else None
     for sym in symbols:
         try:
             annuals, quarters = fetch_statements(sym)
@@ -322,8 +396,10 @@ def deep_fetch(sb, symbols, now):
                 closes = fetch_monthly_closes(sym)
             except Exception as e:
                 print(f"FUND closes {sym}: {e}")
+            shareholding, docs = fetch_nse_deep(sym, nse)
             summary = compute_summary({**prior, **annuals}, quarters, closes)
-            n += upsert(sb, fundamentals_rows(sym, annuals, quarters, summary, now),
+            n += upsert(sb, fundamentals_rows(sym, annuals, quarters, summary, now,
+                                              shareholding=shareholding, docs=docs),
                         table="fundamentals", key="symbol,kind,period")
         except Exception as e:
             print(f"FUND {sym}: {e}")

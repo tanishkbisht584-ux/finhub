@@ -40,6 +40,7 @@ class _StockScreenState extends State<StockScreen> {
   FundamentalsData _fund = FundamentalsData.fromRows(const []);
   Timer? _fundPoll;
   int _fundPolls = 0;
+  List<Tick> _peers = const [];
   String _range = '1M';
   List<double> _chartCloses = const [];
   final _tracker = SectionTracker();
@@ -89,6 +90,27 @@ class _StockScreenState extends State<StockScreen> {
         });
       });
     });
+  }
+
+  /// Same-Yahoo-sector rows from the hot quote universe — the PEERS table.
+  /// No sector in meta yet (analysis pending) just means no section.
+  void _loadPeers() {
+    if (!remoteConfig.screenerPageEnabled || _peers.isNotEmpty) return;
+    final meta = ticks.value[widget.company.nseSymbol]?.meta;
+    final sector = ((meta?['f'] as Map?)?['sector'] as String?) ?? '';
+    if (sector.isEmpty) return;
+    Supabase.instance.client
+        .from('quotes')
+        .select(tickCols)
+        .eq('kind', 'equity')
+        .filter('meta->f->>sector', 'eq', sector)
+        .limit(30)
+        .then((rows) {
+      if (!mounted) return;
+      setState(() => _peers = [
+            for (final r in rows) Tick.fromJson(Map<String, dynamic>.from(r))
+          ]);
+    }).catchError((_) {});
   }
 
   /// Re-fetch the chart at a pill's range; the header quote stays on the
@@ -150,6 +172,7 @@ class _StockScreenState extends State<StockScreen> {
       if (t != null && _quote == null && mounted) {
         setState(() => _quote = Quote.seed(t.price, t.prevClose ?? t.price));
       }
+      _loadPeers();
     }
 
     if (ticks.value[sym] != null) {
@@ -453,6 +476,19 @@ class _StockScreenState extends State<StockScreen> {
             CagrStrip('Return on Equity', block('roe')),
           ])
         ),
+      if (_peers.isNotEmpty)
+        (
+          id: 'peers',
+          label: 'PEERS',
+          child: col([
+            const Divider(height: 40),
+            Text('PEERS', style: monoLabel),
+            const SizedBox(height: 8),
+            PeersTable(_peers, self: widget.company.nseSymbol),
+            Text('same Yahoo sector · tracked stocks only',
+                style: mono.copyWith(fontSize: 10)),
+          ])
+        ),
       if (f.quarter.isNotEmpty)
         (
           id: 'quarters',
@@ -492,6 +528,17 @@ class _StockScreenState extends State<StockScreen> {
           label: 'SHAREHOLDING',
           child: col(_table('SHAREHOLDING PATTERN',
               f.shareholding.keys.toList(), shareholdingRows, f.shareholding))
+        ),
+      if (f.docs.isNotEmpty)
+        (
+          id: 'docs',
+          label: 'DOCS',
+          child: col([
+            const Divider(height: 40),
+            Text('DOCUMENTS', style: monoLabel),
+            const SizedBox(height: 8),
+            DocsSection(f.docs),
+          ])
         ),
       if (_events.isNotEmpty) (id: 'tape', label: 'TAPE', child: col(_tape())),
       (id: 'stories', label: 'STORIES', child: col(_storyList())),
