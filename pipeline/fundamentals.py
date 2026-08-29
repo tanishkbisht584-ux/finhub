@@ -562,7 +562,11 @@ def screener_metrics_row(sym, name, sector, annuals, quarters, promoter_pct, pri
          "pb": round(price / bv, 2) if price and bv and bv > 0 else None,
          "div_yield": round(payout * eps_a / 100 / price * 100, 2)
              if price and payout is not None and eps_a and eps_a > 0 else None,
-         "roe": _latest(annuals, "roe"), "roce": _latest(annuals, "roce"),
+         # kaggle annuals carry no roe field — np/equity fills it
+         "roe": _latest(annuals, "roe") if _latest(annuals, "roe") is not None
+             else (round(np_ / equity * 100, 1)
+                   if np_ is not None and equity is not None and equity > 0 else None),
+         "roce": _latest(annuals, "roce"),
          "de": (round((borrowings or 0) / equity, 2)
                 if equity is not None and equity > 0 else None),
          "opm": _latest(annuals, "opm"),

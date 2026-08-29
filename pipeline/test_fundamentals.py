@@ -383,6 +383,16 @@ def test_screener_row_cagr_and_div_yield():
     assert r["promoter_pct"] == 50.5
 
 
+def test_screener_row_roe_falls_back_to_np_over_equity():
+    # kaggle annuals carry no roe field; np/equity fills it (135/250 = 54%)
+    ann = annuals_for_screen()
+    del ann["FY2025"]["roe"]
+    assert row_for(annuals=ann)["roe"] == round(135 / 250 * 100, 1)
+    ann2 = annuals_for_screen(reserves=-100, equity_cap=10)
+    del ann2["FY2025"]["roe"]
+    assert row_for(annuals=ann2)["roe"] is None  # negative equity: no ROE
+
+
 def test_screener_row_always_full_column_set():
     sparse = row_for(annuals={"FY2025": {"sales": 10}}, quarters={},
                      promoter_pct=None, price=None)
