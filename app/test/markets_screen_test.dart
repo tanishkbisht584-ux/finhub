@@ -47,7 +47,9 @@ final _blobs = <String, dynamic>{
     'breadth': {'NIFTY 50': {'adv': 25, 'dec': 24}, 'NIFTY 500': {'adv': 217, 'dec': 276}},
   },
   'nse_indices': [
-    {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46},
+    {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46,
+     'last': 30532, 'pe': '28', 'advances': '3', 'declines': '7',
+     'pct_30d': 1.8, 'pct_1y': -4.2, 'year_high': 37200, 'year_low': 28100},
     {'index': 'NIFTY 100', 'group': 'BROAD MARKET INDICES', 'pct': 0.02},
   ],
 };
@@ -72,8 +74,14 @@ final _phase3 = MarketsData(
 Widget _app(MarketsData d, {void Function(int, bool)? onFollow}) => MaterialApp(
     home: Scaffold(body: MarketsBody(d, onFollowMf: onFollow, onAddMf: () {})));
 
+/// The one vertical scroller; the heatmap GridView adds inert Scrollables
+/// below it, so `.first` on the descendant search is the outer one.
+final _scroll = find.descendant(
+    of: find.byKey(const Key('marketsScroll')),
+    matching: find.byType(Scrollable)).first;
+
 Future<void> _toEnd(WidgetTester tester) async {
-  await tester.drag(find.byType(ListView).first, const Offset(0, -6000));
+  await tester.drag(find.byKey(const Key('marketsScroll')), const Offset(0, -6000));
   await tester.pump();
 }
 
@@ -81,7 +89,7 @@ void main() {
   testWidgets('Markets body renders every section with formatted numbers',
       (tester) async {
     await tester.pumpWidget(_app(_data));
-    for (final h in ['INDICES', 'YOUR WATCHLIST', 'CURRENCIES', 'CRYPTO', 'COMMODITIES']) {
+    for (final h in ['INDICES', 'WATCHLIST', 'FX', 'CRYPTO', 'COMMODITIES']) {
       expect(find.text(h), findsOneWidget, reason: h);
     }
     expect(find.text('NIFTY 50'), findsOneWidget);
@@ -115,19 +123,23 @@ void main() {
       'NSE lists, sector tiles', (tester) async {
     final toggles = <(int, bool)>[];
     await tester.pumpWidget(_app(_phase3, onFollow: (c, f) => toggles.add((c, f))));
-    // Sectors: only SECTORAL group, "NIFTY " prefix dropped.
+    // Sectors open the tab: heatmap first, watchlist right below.
     expect(find.text('SECTORS'), findsOneWidget);
-    expect(find.text('IT'), findsOneWidget);
+    expect(find.text('IT'), findsOneWidget); // only SECTORAL group, prefix dropped
     expect(find.text('100'), findsNothing);
+    expect(
+        tester.getTopLeft(find.text('SECTORS')).dy <
+            tester.getTopLeft(find.text('WATCHLIST')).dy,
+        isTrue);
     await tester.scrollUntilVisible(find.text('FLOWS'), 300,
-        scrollable: find.byType(Scrollable).first);
+        scrollable: _scroll);
     await tester.pump();
     expect(find.text('−₹543 Cr'), findsOneWidget);       // FII net, red side
     expect(find.text('+₹2,124 Cr'), findsOneWidget);     // DII net
     expect(find.text('PCR 1.08'), findsOneWidget);
     expect(find.text('25↑ 24↓'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('MUTUAL FUNDS'), 300,
-        scrollable: find.byType(Scrollable).first);
+    await tester.scrollUntilVisible(find.text('MF'), 300,
+        scrollable: _scroll);
     await tester.pump();
     // Followed scheme (Axis) sorts above the default (Parag) despite the alphabet.
     final axis = tester.getTopLeft(find.text('Axis ELSS Tax Saver Fund'));
@@ -138,20 +150,33 @@ void main() {
     await tester.tap(find.byIcon(Icons.star_outline_rounded).first);
     expect(toggles, [(122639, true)]);
     expect(find.text('+ Add fund'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('ECONOMY'), 300,
-        scrollable: find.byType(Scrollable).first);
+    await tester.scrollUntilVisible(find.text('MACRO'), 300,
+        scrollable: _scroll);
     await tester.pump();
     expect(find.text('4.33%'), findsOneWidget);
     expect(find.text('-0.25'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('INSIDER TRADES'), 300,
-        scrollable: find.byType(Scrollable).first);
+    await tester.scrollUntilVisible(find.text('INSIDER'), 300,
+        scrollable: _scroll);
     await tester.pump();
-    expect(find.text('RESULTS THIS FORTNIGHT'), findsOneWidget);
+    expect(find.text('RESULTS'), findsOneWidget);
     expect(find.text('28 Aug'), findsOneWidget);
-    expect(find.text('BULK & BLOCK DEALS'), findsOneWidget);
+    expect(find.text('DEALS'), findsOneWidget);
     expect(find.text('BUY ₹8.0 Cr'), findsOneWidget);
     expect(find.textContaining('NSE · '), findsWidgets); // blob stamp on deals
     expect(find.text('A Person'), findsOneWidget);
+  });
+
+  testWidgets('tapping a sector tile opens the full NSE row in a sheet',
+      (tester) async {
+    await tester.pumpWidget(_app(_phase3));
+    await tester.tap(find.text('IT'));
+    await tester.pumpAndSettle();
+    expect(find.text('NIFTY IT'), findsOneWidget); // sheet title
+    expect(find.text('P/E'), findsOneWidget);
+    expect(find.text('3↑ 7↓'), findsOneWidget);
+    expect(find.text('▲1.80%'), findsOneWidget);          // 30d
+    expect(find.text('▼4.20%'), findsOneWidget);          // 1y
+    expect(find.text('37,200 / 28,100'), findsOneWidget); // 52w
   });
 
   testWidgets('empty data explains itself instead of a blank screen',

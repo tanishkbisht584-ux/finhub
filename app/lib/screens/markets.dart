@@ -221,15 +221,31 @@ class _MarketsScreenState extends ConsumerState<MarketsScreen> {
   }
 }
 
-/// The sections themselves, stateless so a test can feed it [MarketsData].
-class MarketsBody extends StatelessWidget {
+/// One Markets section: [id] anchors ribbon jumps, [label] is the trader-term
+/// heading shown both as the section header and the ribbon chip.
+typedef _Sec = ({String id, String label, Widget child});
+
+/// The sections themselves; a test can feed it [MarketsData] directly.
+/// Everything lays out eagerly (SingleChildScrollView, not ListView) so every
+/// section RenderBox exists for ribbon jump + scroll tracking.
+class MarketsBody extends StatefulWidget {
   const MarketsBody(this.data, {super.key, this.onFollowMf, this.onAddMf});
   final MarketsData data;
   final void Function(int code, bool follow)? onFollowMf;
   final VoidCallback? onAddMf;
 
   @override
-  Widget build(BuildContext context) {
+  State<MarketsBody> createState() => _MarketsBodyState();
+}
+
+class _MarketsBodyState extends State<MarketsBody> {
+  final _keys = <String, GlobalKey>{};
+  GlobalKey _key(String id) => _keys.putIfAbsent(id, GlobalKey.new);
+
+  List<_Sec> _sections() {
+    final data = widget.data;
+    final onFollowMf = widget.onFollowMf;
+    final onAddMf = widget.onAddMf;
     final indices = data.kind('index');
     final watch = data.watchlist;
     final mf = data.kind('mf')
@@ -248,24 +264,30 @@ class MarketsBody extends StatelessWidget {
     ];
     final flows =
         (data.blobs['flows'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final stale = _stale(data.updatedAt);
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-      children: [
-        if (data.ticks.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 48),
-            child: Text(
-                'No market data yet.\nThe pipeline fills this in within a few minutes.',
-                textAlign: TextAlign.center,
-                style: mono.copyWith(fontSize: 13, height: 1.6)),
-          ),
-        if (indices.isNotEmpty)
-          _Section('Indices', [
-            for (final t in indices) _TickRow(t, spark: true),
-          ]),
-        _Section('Your watchlist', [
+    return [
+      if (sectors.isNotEmpty)
+        (
+          id: 'sectors',
+          label: 'SECTORS',
+          child: _Section('Sectors', [
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: GridView.count(
+                crossAxisCount: 3,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 1.55,
+                children: [for (final s in sectors) _HeatTile(s)],
+              ),
+            ),
+          ], stamp: data.blobUpdated['nse_indices']),
+        ),
+      (
+        id: 'watch',
+        label: 'WATCHLIST',
+        child: _Section('Watchlist', [
           if (watch.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 10),
@@ -281,17 +303,20 @@ class MarketsBody extends StatelessWidget {
               ]),
             ),
         ]),
-        if (sectors.isNotEmpty)
-          _Section('Sectors', [
-            Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Wrap(spacing: 8, runSpacing: 8, children: [
-                for (final s in sectors) _SectorTile(s),
-              ]),
-            ),
+      ),
+      if (indices.isNotEmpty)
+        (
+          id: 'indices',
+          label: 'INDICES',
+          child: _Section('Indices', [
+            for (final t in indices) _TickRow(t, spark: true),
           ]),
-        if (flows.isNotEmpty)
-          _Section('Flows', [
+        ),
+      if (flows.isNotEmpty)
+        (
+          id: 'flows',
+          label: 'FLOWS',
+          child: _Section('Flows', [
             for (final side in ['fii', 'dii'])
               if (flows[side] is Map)
                 _flowRow(side.toUpperCase(),
@@ -317,21 +342,37 @@ class MarketsBody extends StatelessWidget {
                         ? green
                         : red),
           ], stamp: data.blobUpdated['flows']),
-        if (data.kind('fx').isNotEmpty)
-          _Section('Currencies', [
+        ),
+      if (data.kind('fx').isNotEmpty)
+        (
+          id: 'fx',
+          label: 'FX',
+          child: _Section('FX', [
             for (final t in data.kind('fx')) _TickRow(t, spark: true),
           ]),
-        if (data.kind('crypto').isNotEmpty)
-          _Section('Crypto', [
+        ),
+      if (data.kind('crypto').isNotEmpty)
+        (
+          id: 'crypto',
+          label: 'CRYPTO',
+          child: _Section('Crypto', [
             for (final t in data.kind('crypto')) _TickRow(t),
           ]),
-        if (data.kind('commodity').isNotEmpty)
-          _Section('Commodities', [
+        ),
+      if (data.kind('commodity').isNotEmpty)
+        (
+          id: 'commodities',
+          label: 'COMMODITIES',
+          child: _Section('Commodities', [
             for (final t in data.kind('commodity'))
               _TickRow(t, spark: t.closes.length > 1),
           ]),
-        if (mf.isNotEmpty || onAddMf != null)
-          _Section('Mutual funds', [
+        ),
+      if (mf.isNotEmpty || onAddMf != null)
+        (
+          id: 'mf',
+          label: 'MF',
+          child: _Section('MF', [
             for (final t in mf)
               _MfRow(t, data.followedMf.contains(t.meta['scheme_code']),
                   onFollowMf),
@@ -341,12 +382,20 @@ class MarketsBody extends StatelessWidget {
                   onPressed: onAddMf,
                   child: Text('+ Add fund',
                       style: mono.copyWith(fontSize: 12, color: green)))),
-        if (macro.isNotEmpty)
-          _Section('Economy', [
+        ),
+      if (macro.isNotEmpty)
+        (
+          id: 'macro',
+          label: 'MACRO',
+          child: _Section('Macro', [
             for (final t in macro) _MacroRow(t),
           ]),
-        if (results.isNotEmpty)
-          _Section('Results this fortnight', [
+        ),
+      if (results.isNotEmpty)
+        (
+          id: 'results',
+          label: 'RESULTS',
+          child: _Section('Results', [
             _Collapsible([
               for (final r in results) _LineRow(
                   lead: r['symbol']?.toString() ?? '',
@@ -355,8 +404,12 @@ class MarketsBody extends StatelessWidget {
                   sub: r['purpose']?.toString())
             ]),
           ], stamp: data.blobUpdated['results_calendar']),
-        if (deals.isNotEmpty)
-          _Section('Bulk & block deals', [
+        ),
+      if (deals.isNotEmpty)
+        (
+          id: 'deals',
+          label: 'DEALS',
+          child: _Section('Deals', [
             _Collapsible([
               for (final d in deals)
                 _LineRow(
@@ -368,8 +421,12 @@ class MarketsBody extends StatelessWidget {
                         '${d['type']} · ${fmtNum((d['qty'] as num).toDouble(), decimals: 0)} @ ₹${fmtNum((d['price'] as num).toDouble())} · ${d['date'] ?? ''}')
             ]),
           ], stamp: data.blobUpdated['bulk_deals']),
-        if (insider.isNotEmpty)
-          _Section('Insider trades', [
+        ),
+      if (insider.isNotEmpty)
+        (
+          id: 'insider',
+          label: 'INSIDER',
+          child: _Section('Insider', [
             _Collapsible([
               for (final i in insider)
                 _LineRow(
@@ -382,16 +439,42 @@ class MarketsBody extends StatelessWidget {
                     sub: '${i['category'] ?? ''} · ${i['mode'] ?? ''} · ${i['date'] ?? ''}')
             ]),
           ], stamp: data.blobUpdated['insider_trades']),
-        const SizedBox(height: 20),
-        Text(
-            [
-              if (data.updatedAt != null)
-                'as of ${_hhmmIst(data.updatedAt!)} IST',
-              if (stale) 'stale — pipeline has not refreshed',
-              'Yahoo Finance · CoinGecko · mfapi.in · NSE · delayed',
-            ].join(' · '),
-            style: mono.copyWith(fontSize: 10, color: stale ? amber : inkDim)),
-      ],
+        ),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final data = widget.data;
+    final secs = _sections();
+    final stale = _stale(data.updatedAt);
+    return SingleChildScrollView(
+      key: const Key('marketsScroll'),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (data.ticks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              child: Text(
+                  'No market data yet.\nThe pipeline fills this in within a few minutes.',
+                  textAlign: TextAlign.center,
+                  style: mono.copyWith(fontSize: 13, height: 1.6)),
+            ),
+          for (final s in secs) KeyedSubtree(key: _key(s.id), child: s.child),
+          const SizedBox(height: 20),
+          Text(
+              [
+                if (data.updatedAt != null)
+                  'as of ${_hhmmIst(data.updatedAt!)} IST',
+                if (stale) 'stale — pipeline has not refreshed',
+                'Yahoo Finance · CoinGecko · mfapi.in · NSE · delayed',
+              ].join(' · '),
+              style: mono.copyWith(fontSize: 10, color: stale ? amber : inkDim)),
+        ],
+      ),
     );
   }
 }
@@ -677,29 +760,119 @@ Widget _flowRow(String who, Map<String, dynamic> d, String? date) {
           'buy ₹${fmtNum(((d['buy'] ?? 0) as num).toDouble(), decimals: 0)} Cr · sell ₹${fmtNum(((d['sell'] ?? 0) as num).toDouble(), decimals: 0)} Cr');
 }
 
-/// Sector heatmap tile: index name without the "NIFTY " prefix, tinted by %.
-class _SectorTile extends StatelessWidget {
-  const _SectorTile(this.s);
+/// Tile names must survive a 3-across grid; only the long ones get overrides,
+/// the rest just lose their "NIFTY " prefix.
+const _shortSector = {
+  'FINANCIAL SERVICES': 'FIN SVCS',
+  'FINANCIAL SERVICES 25/50': 'FIN SVC 25/50',
+  'CONSUMER DURABLES': 'CONS DUR',
+  'PRIVATE BANK': 'PVT BANK',
+  'MIDSMALL HEALTHCARE': 'MIDSML HLTH',
+};
+
+String _sectorName(Map<String, dynamic> s) {
+  final n = (s['index'] as String? ?? '')
+      .replaceFirst(RegExp(r'^NIFTY\s*'), '')
+      .replaceFirst(' INDEX', '');
+  return _shortSector[n] ?? n;
+}
+
+/// Sector heatmap tile: tinted by today's %, tap for the full NSE row.
+class _HeatTile extends StatelessWidget {
+  const _HeatTile(this.s);
   final Map<String, dynamic> s;
 
   @override
   Widget build(BuildContext context) {
     final pct = (s['pct'] as num?)?.toDouble();
     final c = pct == null ? inkDim : (pct >= 0 ? green : red);
-    final name = (s['index'] as String? ?? '')
-        .replaceFirst(RegExp(r'^NIFTY\s*'), '')
-        .replaceFirst(' INDEX', '');
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-      decoration: BoxDecoration(
-          color: c.withValues(alpha: (pct?.abs() ?? 0).clamp(0.4, 2.5) / 10),
-          border: Border.all(color: c.withValues(alpha: 0.45))),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(name, style: mono.copyWith(fontSize: 10, color: ink)),
-        Text(fmtPct(pct), style: mono.copyWith(fontSize: 11, color: c)),
-      ]),
+    final last = (s['last'] as num?)?.toDouble();
+    return InkWell(
+      onTap: () => _showSectorSheet(context, s),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+        decoration: BoxDecoration(
+            color: c.withValues(alpha: (pct?.abs() ?? 0).clamp(0.4, 2.5) / 10),
+            border: Border.all(color: c.withValues(alpha: 0.45))),
+        child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(_sectorName(s),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: mono.copyWith(fontSize: 10, color: ink)),
+              Text(fmtPct(pct), style: mono.copyWith(fontSize: 13, color: c)),
+              if (last != null)
+                Text(fmtNum(last, decimals: 0),
+                    style: mono.copyWith(fontSize: 9)),
+            ]),
+      ),
     );
   }
+}
+
+/// Everything NSE gives us for one sectoral index — the tile shows two fields,
+/// this sheet shows the rest. Values arrive as num or string; parse leniently.
+void _showSectorSheet(BuildContext context, Map<String, dynamic> s) {
+  double? n(Object? v) => v == null ? null : double.tryParse('$v');
+  Color pctColor(double? v) => v == null ? inkDim : (v >= 0 ? green : red);
+  final pct = n(s['pct']);
+  final d30 = n(s['pct_30d']);
+  final y1 = n(s['pct_1y']);
+  final adv = n(s['advances']);
+  final dec = n(s['declines']);
+  final hi = n(s['year_high']);
+  final lo = n(s['year_low']);
+  final pe = n(s['pe']);
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: surface,
+    builder: (_) => Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+      child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${s['index'] ?? ''}'.toUpperCase(), style: monoLabel),
+            const SizedBox(height: 6),
+            const Divider(height: 1),
+            _LineRow(
+                lead: 'TODAY',
+                main: n(s['last']) == null
+                    ? 'change'
+                    : 'level ${fmtNum(n(s['last'])!, decimals: 0)}',
+                trail: fmtPct(pct),
+                trailColor: pctColor(pct)),
+            if (pe != null)
+              _LineRow(lead: 'P/E', main: 'valuation', trail: fmtNum(pe)),
+            if (adv != null && dec != null)
+              _LineRow(
+                  lead: 'BREADTH',
+                  main: 'advance / decline',
+                  trail: '${adv.toInt()}↑ ${dec.toInt()}↓',
+                  trailColor: adv >= dec ? green : red),
+            if (d30 != null)
+              _LineRow(
+                  lead: '30D',
+                  main: 'one month',
+                  trail: fmtPct(d30),
+                  trailColor: pctColor(d30)),
+            if (y1 != null)
+              _LineRow(
+                  lead: '1Y',
+                  main: 'one year',
+                  trail: fmtPct(y1),
+                  trailColor: pctColor(y1)),
+            if (hi != null && lo != null)
+              _LineRow(
+                  lead: '52W',
+                  main: 'high / low',
+                  trail:
+                      '${fmtNum(hi, decimals: 0)} / ${fmtNum(lo, decimals: 0)}'),
+          ]),
+    ),
+  );
 }
 
 /// Lead (symbol) · main text · trailing value, with a sub-line. Used for the
