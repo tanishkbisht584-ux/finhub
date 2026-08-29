@@ -74,12 +74,6 @@ final _phase3 = MarketsData(
 Widget _app(MarketsData d, {void Function(int, bool)? onFollow}) => MaterialApp(
     home: Scaffold(body: MarketsBody(d, onFollowMf: onFollow, onAddMf: () {})));
 
-/// The one vertical scroller; the heatmap GridView adds inert Scrollables
-/// below it, so `.first` on the descendant search is the outer one.
-final _scroll = find.descendant(
-    of: find.byKey(const Key('marketsScroll')),
-    matching: find.byType(Scrollable)).first;
-
 Future<void> _toEnd(WidgetTester tester) async {
   await tester.drag(find.byKey(const Key('marketsScroll')), const Offset(0, -6000));
   await tester.pump();
@@ -89,9 +83,11 @@ void main() {
   testWidgets('Markets body renders every section with formatted numbers',
       (tester) async {
     await tester.pumpWidget(_app(_data));
+    // Each heading appears twice: ribbon chip + section header.
     for (final h in ['INDICES', 'WATCHLIST', 'FX', 'CRYPTO', 'COMMODITIES']) {
-      expect(find.text(h), findsOneWidget, reason: h);
+      expect(find.text(h), findsNWidgets(2), reason: h);
     }
+    expect(find.text('MACRO'), findsNothing); // empty section = no chip either
     expect(find.text('NIFTY 50'), findsOneWidget);
     expect(find.text('₹24,252'), findsOneWidget);
     expect(find.text('▲0.08%'), findsOneWidget);
@@ -123,47 +119,80 @@ void main() {
       'NSE lists, sector tiles', (tester) async {
     final toggles = <(int, bool)>[];
     await tester.pumpWidget(_app(_phase3, onFollow: (c, f) => toggles.add((c, f))));
-    // Sectors open the tab: heatmap first, watchlist right below.
-    expect(find.text('SECTORS'), findsOneWidget);
+    // Sectors open the tab: heatmap first, watchlist right below. (Two
+    // matches per heading: ribbon chip first in the tree, header second.)
+    expect(find.text('SECTORS'), findsNWidgets(2));
     expect(find.text('IT'), findsOneWidget); // only SECTORAL group, prefix dropped
     expect(find.text('100'), findsNothing);
     expect(
-        tester.getTopLeft(find.text('SECTORS')).dy <
-            tester.getTopLeft(find.text('WATCHLIST')).dy,
+        tester.getTopLeft(find.text('SECTORS').last).dy <
+            tester.getTopLeft(find.text('WATCHLIST').last).dy,
         isTrue);
-    await tester.scrollUntilVisible(find.text('FLOWS'), 300,
-        scrollable: _scroll);
-    await tester.pump();
+    // Everything lays out eagerly now, so the rest is visible to finders
+    // without scrolling; only taps need the widget on screen.
     expect(find.text('−₹543 Cr'), findsOneWidget);       // FII net, red side
     expect(find.text('+₹2,124 Cr'), findsOneWidget);     // DII net
     expect(find.text('PCR 1.08'), findsOneWidget);
     expect(find.text('25↑ 24↓'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('MF'), 300,
-        scrollable: _scroll);
-    await tester.pump();
     // Followed scheme (Axis) sorts above the default (Parag) despite the alphabet.
     final axis = tester.getTopLeft(find.text('Axis ELSS Tax Saver Fund'));
     final ppfas = tester.getTopLeft(find.text('Parag Parikh Flexi Cap Fund'));
     expect(axis.dy < ppfas.dy, isTrue);
     expect(find.byIcon(Icons.star_rounded), findsOneWidget);
     expect(find.textContaining('1y ▼1.2%'), findsOneWidget);
+    await tester.ensureVisible(find.byIcon(Icons.star_outline_rounded).first);
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.star_outline_rounded).first);
     expect(toggles, [(122639, true)]);
     expect(find.text('+ Add fund'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('MACRO'), 300,
-        scrollable: _scroll);
-    await tester.pump();
     expect(find.text('4.33%'), findsOneWidget);
     expect(find.text('-0.25'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('INSIDER'), 300,
-        scrollable: _scroll);
-    await tester.pump();
-    expect(find.text('RESULTS'), findsOneWidget);
+    expect(find.text('RESULTS'), findsNWidgets(2));
     expect(find.text('28 Aug'), findsOneWidget);
-    expect(find.text('DEALS'), findsOneWidget);
+    expect(find.text('DEALS'), findsNWidgets(2));
     expect(find.text('BUY ₹8.0 Cr'), findsOneWidget);
     expect(find.textContaining('NSE · '), findsWidgets); // blob stamp on deals
     expect(find.text('A Person'), findsOneWidget);
+  });
+
+  testWidgets('ribbon chip tracks the scroll and taps jump to the section',
+      (tester) async {
+    FontWeight? chipWeight(String label) =>
+        tester.widget<Text>(find.text(label).first).style?.fontWeight;
+    await tester.pumpWidget(_app(_phase3));
+    // Before any scroll the first section owns the ribbon.
+    expect(chipWeight('SECTORS'), FontWeight.w700);
+    // Scrolling to the very bottom hands the ribbon to the last section.
+    await _toEnd(tester);
+    await tester.pumpAndSettle();
+    expect(chipWeight('INSIDER'), FontWeight.w700);
+    // Tap a chip to jump back up (bring it into the ribbon's viewport first).
+    await tester.ensureVisible(find.text('FLOWS').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('FLOWS').first);
+    await tester.pumpAndSettle();
+    expect(chipWeight('FLOWS'), FontWeight.w700);
+    final header = tester.getTopLeft(find.text('FLOWS').last);
+    expect(header.dy, greaterThanOrEqualTo(0));
+    expect(header.dy, lessThan(600)); // inside the test viewport
+  });
+
+  testWidgets('ribbon search filters headings and jumps on tap',
+      (tester) async {
+    await tester.pumpWidget(_app(_phase3));
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'cry');
+    await tester.pump();
+    // Chips filtered to CRYPTO; section headers are untouched.
+    expect(find.text('FLOWS'), findsOneWidget); // header only, chip gone
+    expect(find.text('CRYPTO'), findsNWidgets(2));
+    await tester.tap(find.text('CRYPTO').first);
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing); // search closes on jump
+    final header = tester.getTopLeft(find.text('CRYPTO').last);
+    expect(header.dy, greaterThanOrEqualTo(0));
+    expect(header.dy, lessThan(600));
   });
 
   testWidgets('tapping a sector tile opens the full NSE row in a sheet',
