@@ -43,6 +43,8 @@ class _StockScreenState extends State<StockScreen> {
   List<Tick> _peers = const [];
   String _range = '1M';
   List<double> _chartCloses = const [];
+  List<DateTime> _chartTimes = const [];
+  bool _showPe = false;
   final _tracker = SectionTracker();
 
   // Yahoo chart range/interval per pill; the 1M fetch doubles as the quote.
@@ -127,9 +129,12 @@ class _StockScreenState extends State<StockScreen> {
           )
           .timeout(const Duration(seconds: 10));
       if (!mounted || r.statusCode != 200) return;
-      final closes = Quote.fromChartJson(jsonDecode(r.body)).closes;
-      if (mounted && _range == label && closes.isNotEmpty) {
-        setState(() => _chartCloses = closes);
+      final q = Quote.fromChartJson(jsonDecode(r.body));
+      if (mounted && _range == label && q.closes.isNotEmpty) {
+        setState(() {
+          _chartCloses = q.closes;
+          _chartTimes = q.times;
+        });
       }
     } catch (_) {} // pill just keeps the old line; retap retries
   }
@@ -198,7 +203,10 @@ class _StockScreenState extends State<StockScreen> {
           final q = Quote.fromChartJson(jsonDecode(r.body));
           setState(() {
             _quote = q;
-            if (_range == '1M') _chartCloses = q.closes;
+            if (_range == '1M') {
+              _chartCloses = q.closes;
+              _chartTimes = q.times;
+            }
           });
         })
         .catchError((_) {
@@ -305,6 +313,10 @@ class _StockScreenState extends State<StockScreen> {
     final screener = remoteConfig.screenerPageEnabled;
     final closes =
         screener && _chartCloses.isNotEmpty ? _chartCloses : q?.closes ?? const <double>[];
+    final pe = _showPe && _fund.quarter.length >= 4
+        ? peSeries(closes, _chartTimes, _fund.quarter)
+        : null;
+    final peLatest = pe?.reversed.firstWhere((v) => v != null, orElse: () => null);
     return [
       Text(widget.company.nseSymbol, style: mono.copyWith(fontSize: 12)),
       const SizedBox(height: 8),
@@ -320,8 +332,14 @@ class _StockScreenState extends State<StockScreen> {
           ),
         ]),
         const SizedBox(height: 16),
-        SizedBox(height: 64, child: Sparkline(closes, up ? green : red)),
+        SizedBox(height: 64, child: Sparkline(closes, up ? green : red, secondary: pe)),
         const SizedBox(height: 10),
+        if (peLatest != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text('P/E ${peLatest.toStringAsFixed(1)} · TTM, quarter-end steps',
+                style: mono.copyWith(fontSize: 10, color: amber)),
+          ),
         if (screener)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
@@ -332,6 +350,9 @@ class _StockScreenState extends State<StockScreen> {
                   child: filterPill(label, _range == label, green,
                       () => _fetchRange(label), fontSize: 10),
                 ),
+              if (_fund.quarter.length >= 4)
+                filterPill('P/E', _showPe, amber,
+                    () => setState(() => _showPe = !_showPe), fontSize: 10),
             ]),
           ),
         if (q.high52 > 0)
@@ -622,19 +643,24 @@ Widget _kv(String k, String v) => Padding(
 /// One polyline, no chart package: the spec asks for a "light line chart" and
 /// a painter is 20 lines against a dependency.
 class Sparkline extends StatelessWidget {
-  const Sparkline(this.values, this.color, {super.key});
+  const Sparkline(this.values, this.color, {super.key, this.secondary});
   final List<double> values;
   final Color color;
 
+  /// Optional overlay (the P/E line): aligned with [values], nulls break the
+  /// line, normalized on its own scale, drawn thin in amber.
+  final List<double?>? secondary;
+
   @override
-  Widget build(BuildContext context) =>
-      CustomPaint(size: Size.infinite, painter: _SparkPainter(values, color));
+  Widget build(BuildContext context) => CustomPaint(
+      size: Size.infinite, painter: _SparkPainter(values, color, secondary));
 }
 
 class _SparkPainter extends CustomPainter {
-  _SparkPainter(this.values, this.color);
+  _SparkPainter(this.values, this.color, [this.secondary]);
   final List<double> values;
   final Color color;
+  final List<double?>? secondary;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -654,9 +680,36 @@ class _SparkPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.5
           ..color = color);
+    final sec = secondary;
+    if (sec == null) return;
+    final vals = [for (final v in sec) if (v != null) v];
+    if (vals.length < 2) return;
+    final slo = vals.reduce((a, b) => a < b ? a : b);
+    final shi = vals.reduce((a, b) => a > b ? a : b);
+    final sspan = (shi - slo) == 0 ? 1.0 : shi - slo;
+    final spath = Path();
+    var pen = false;
+    final n = sec.length < values.length ? sec.length : values.length;
+    for (var i = 0; i < n; i++) {
+      final v = sec[i];
+      if (v == null) {
+        pen = false;
+        continue;
+      }
+      final x = i / (values.length - 1) * size.width;
+      final y = size.height - (v - slo) / sspan * size.height;
+      pen ? spath.lineTo(x, y) : spath.moveTo(x, y);
+      pen = true;
+    }
+    canvas.drawPath(
+        spath,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0
+          ..color = amber);
   }
 
   @override
   bool shouldRepaint(_SparkPainter old) =>
-      old.values != values || old.color != color;
+      old.values != values || old.color != color || old.secondary != secondary;
 }

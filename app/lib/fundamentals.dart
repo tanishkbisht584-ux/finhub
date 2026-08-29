@@ -61,6 +61,32 @@ String periodLabel(String p) {
   return '${m[d.month - 1]} ${d.year % 100}';
 }
 
+/// P/E over time for the chart overlay: price(t) / TTM-EPS(t), where TTM EPS
+/// is a step function over quarter-end dates (sum of the 4 newest quarterly
+/// eps ending on/before t). Null until 4 quarters exist or when TTM <= 0 —
+/// the overlay simply starts where coverage starts.
+List<double?> peSeries(List<double> closes, List<DateTime> times,
+    Map<String, Map<String, dynamic>> quarters) {
+  final pts = <(DateTime, double)>[];
+  for (final p in quarters.keys.toList()..sort()) {
+    final eps = quarters[p]!['eps'];
+    final d = DateTime.tryParse('$p-01');
+    if (eps is num && d != null) {
+      pts.add((DateTime(d.year, d.month + 1, 0), eps.toDouble())); // month end
+    }
+  }
+  final n = closes.length < times.length ? closes.length : times.length;
+  return [
+    for (var i = 0; i < n; i++)
+      () {
+        final have = [for (final (end, eps) in pts) if (!end.isAfter(times[i])) eps];
+        if (have.length < 4) return null;
+        final ttm = have.skip(have.length - 4).reduce((a, b) => a + b);
+        return ttm > 0 ? closes[i] / ttm : null;
+      }()
+  ];
+}
+
 enum CellFmt { cr, pct, num2, days }
 
 String fmtCell(num? v, CellFmt f) {

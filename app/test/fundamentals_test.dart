@@ -87,6 +87,43 @@ void main() {
     });
   });
 
+  group('peSeries', () {
+    final quarters = {
+      '2025-06': {'eps': 8.0},
+      '2025-09': {'eps': 10.0},
+      '2025-12': {'eps': 10.0},
+      '2026-03': {'eps': 10.0},
+      '2026-06': {'eps': 12.0},
+    };
+
+    test('price over TTM eps as a step function on quarter ends', () {
+      final pe = peSeries(
+          [400, 420],
+          [DateTime(2026, 5, 1), DateTime(2026, 8, 1)],
+          quarters);
+      // May: TTM = 8+10+10+10 = 38 · Aug: 10+10+10+12 = 42
+      expect(pe[0], closeTo(400 / 38, 0.01));
+      expect(pe[1], closeTo(420 / 42, 0.01));
+    });
+
+    test('null until four quarters exist before t', () {
+      final pe = peSeries(
+          [100, 100],
+          [DateTime(2025, 8, 1), DateTime(2026, 8, 1)],
+          quarters);
+      expect(pe[0], isNull); // only 2025-06 ended by Aug 2025
+      expect(pe[1], isNotNull);
+    });
+
+    test('negative TTM eps gives null, empty inputs give empty', () {
+      final loss = {
+        for (final e in quarters.entries) e.key: {'eps': -1.0}
+      };
+      expect(peSeries([100], [DateTime(2026, 8, 1)], loss), [null]);
+      expect(peSeries([], [], quarters), isEmpty);
+    });
+  });
+
   group('DocsSection', () {
     testWidgets('renders report years and announcement subjects', (t) async {
       await t.pumpWidget(MaterialApp(

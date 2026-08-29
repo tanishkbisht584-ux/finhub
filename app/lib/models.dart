@@ -243,27 +243,43 @@ class Quote {
   final double high52;
   final double low52;
   final List<double> closes;
+  final List<DateTime> times; // aligned with closes (nulls dropped from both)
 
-  Quote.fromChartJson(Map<String, dynamic> j)
-      : this._(Map<String, dynamic>.from(j['chart']['result'][0]));
+  factory Quote.fromChartJson(Map<String, dynamic> j) =>
+      Quote._(Map<String, dynamic>.from(j['chart']['result'][0]));
 
   /// Header-only quote from the pipeline's `quotes` row: no 52-wk range, no
   /// closes. The stock page paints this first, then swaps in the chart fetch.
   Quote.seed(this.price, this.prevClose)
       : high52 = 0,
         low52 = 0,
-        closes = const [];
+        closes = const [],
+        times = const [];
 
-  Quote._(Map<String, dynamic> r)
-      : price = (r['meta']['regularMarketPrice'] as num).toDouble(),
-        prevClose = (r['meta']['chartPreviousClose'] as num).toDouble(),
-        high52 = (r['meta']['fiftyTwoWeekHigh'] as num?)?.toDouble() ?? 0,
-        low52 = (r['meta']['fiftyTwoWeekLow'] as num?)?.toDouble() ?? 0,
-        closes = [
-          for (final c
-              in (r['indicators']['quote'][0]['close'] as List? ?? const []))
-            if (c != null) (c as num).toDouble()
-        ];
+  factory Quote._(Map<String, dynamic> r) {
+    final rawCloses = r['indicators']['quote'][0]['close'] as List? ?? const [];
+    final rawTimes = r['timestamp'] as List? ?? const [];
+    final closes = <double>[];
+    final times = <DateTime>[];
+    for (var i = 0; i < rawCloses.length; i++) {
+      final c = rawCloses[i];
+      if (c == null) continue;
+      closes.add((c as num).toDouble());
+      times.add(i < rawTimes.length
+          ? DateTime.fromMillisecondsSinceEpoch((rawTimes[i] as num).toInt() * 1000)
+          : DateTime.fromMillisecondsSinceEpoch(0));
+    }
+    return Quote._fields(
+        (r['meta']['regularMarketPrice'] as num).toDouble(),
+        (r['meta']['chartPreviousClose'] as num).toDouble(),
+        (r['meta']['fiftyTwoWeekHigh'] as num?)?.toDouble() ?? 0,
+        (r['meta']['fiftyTwoWeekLow'] as num?)?.toDouble() ?? 0,
+        closes,
+        times);
+  }
+
+  Quote._fields(this.price, this.prevClose, this.high52, this.low52,
+      this.closes, this.times);
 }
 
 /// One newspaper page of a deep read (spec 2026-08-16).
