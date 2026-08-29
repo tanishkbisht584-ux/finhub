@@ -245,49 +245,53 @@ def test_shape_docs_splits_concalls_out_of_announcements():
     assert [a["url"] for a in d["announcements"]] == ["u4"]
 
 
-def test_shape_ratings_normalizes_key_variants():
-    rows = [{"creditRatingAgencyName": "CRISIL", "rating": "AAA/Stable",
-             "date": "03-Jul-2026", "attchmntFile": "https://x/r.pdf"},
-            {"cra": "ICRA", "crRating": "AA+", "crDate": "29-Jan-2026"},
-            {"junk": True}]
-    out = fu.shape_ratings({"data": rows})
-    assert out[0] == {"agency": "CRISIL", "rating": "AAA/Stable",
-                      "date": "03-Jul-2026", "url": "https://x/r.pdf"}
-    assert out[1]["agency"] == "ICRA" and out[1]["rating"] == "AA+"
-    assert len(out) == 2  # unkeyable row dropped
+def test_shape_ratings_filters_global_feed_by_symbol():
+    # real corporate-credit-rating shape (probe 2026-08-29): a global recent-
+    # filings list; the symbol param is ignored server-side.
+    rows = [{"Symbol": "RELIANCE", "NameOfCRAgency": "CRISIL Ratings Limited",
+             "CreditRating": "AAA", "RatingAction": "Reaffirm", "DateofCR": "28-08-2026"},
+            {"Symbol": "RELIANCE", "NameOfCRAgency": "ICRA", "CreditRating": "AA+",
+             "RatingAction": "", "DateofCR": "29-01-2026"},
+            {"Symbol": "Not listed", "NameOfCRAgency": "CRISIL Ratings Limited",
+             "CreditRating": "AAA", "DateofCR": "28-08-2026"},
+            {"Symbol": "TCS", "NameOfCRAgency": "CARE", "CreditRating": "AAA"}]
+    out = fu.shape_ratings(rows, "RELIANCE")
+    assert len(out) == 2
+    assert out[0] == {"agency": "CRISIL Ratings Limited", "rating": "AAA (Reaffirm)",
+                      "date": "28-08-2026", "url": None}
+    assert out[1]["rating"] == "AA+"
+    assert fu.shape_ratings(rows, "WIPRO") == []
 
 
-# ---------- SHP XBRL: FII/DII split (step A — patterns pending runner check) ----------
+# ---------- SHP XBRL: FII/DII split (plain XBRL, contexts probed 2026-08-29) ----------
 
-SHP_XBRL = """<html>
-<ix:nonFraction name='in-bse-shp:ForeignPortfolioInvestorsCategoryI' contextRef='C1'>17.19</ix:nonFraction>
-<ix:nonFraction name="in-bse-shp:MutualFunds">9.90</ix:nonFraction>
-<ix:nonFraction name="in-bse-shp:InsuranceCompanies">6.20</ix:nonFraction>
-<ix:nonNumeric name="in-bse-shp:CentralGovernmentStateGovernments">0.17</ix:nonNumeric>
-<ix:nonFraction name="in-bse-shp:TotalNumberOfShareholders">46,51,863</ix:nonFraction>
-<ix:nonFraction name="in-bse-shp:SomethingUnrelated">1.0</ix:nonFraction>
-</html>"""
+def _shp(el, ctx, v):
+    return f'<in-bse-shp:{el} contextRef="{ctx}">{v}</in-bse-shp:{el}>'
 
 
-def test_parse_ix_facts_localnames_and_text():
-    facts = fu.parse_ix_facts(SHP_XBRL)
-    assert facts["ForeignPortfolioInvestorsCategoryI"] == "17.19"
-    assert facts["TotalNumberOfShareholders"] == "46,51,863"
-    assert "SomethingUnrelated" in facts
+SHP_XBRL = f"""<?xml version="1.0"?><xbrli:xbrl>
+{_shp("ShareholdingAsAPercentageOfTotalNumberOfShares", "ShareholdingOfPromoterAndPromoterGroup_ContextI", "0.5048")}
+{_shp("ShareholdingAsAPercentageOfTotalNumberOfShares", "InstitutionsForeign_ContextI", "0.172")}
+{_shp("ShareholdingAsAPercentageOfTotalNumberOfShares", "InstitutionsDomestic_ContextI", "0.2119")}
+{_shp("ShareholdingAsAPercentageOfTotalNumberOfShares", "Governments_ContextI", "0.001")}
+{_shp("ShareholdingAsAPercentageOfTotalNumberOfShares", "NonInstitutions_ContextI", "0.1104")}
+{_shp("ShareholdingAsAPercentageOfTotalNumberOfShares", "MutualFundsOrUTI_ContextI", "0.1011")}
+{_shp("ShareholdingAsAPercentageOfTotalNumberOfShares", "IndividualsOrHUF_Context15", "0.0012")}
+{_shp("NumberOfShareholders", "ShareholdingPattern_ContextI", "4651863")}
+{_shp("NumberOfShareholders", "Banks_ContextI", "131")}
+</xbrli:xbrl>"""
 
 
-def test_map_shp_facts_splits_and_reports_unmapped():
-    mapped, unmapped = fu.map_shp_facts(fu.parse_ix_facts(SHP_XBRL))
-    assert mapped["fiis"] == 17.19
-    assert mapped["diis"] == round(9.90 + 6.20, 2)  # MF + insurance summed
-    assert mapped["govt"] == 0.17
-    assert mapped["n_holders"] == 4651863
-    assert "SomethingUnrelated" in unmapped
+def test_parse_shp_xml_category_totals_as_percent():
+    m = fu.parse_shp_xml(SHP_XBRL)
+    # Screener's rows: fiis = Institutions (Foreign), diis = Institutions
+    # (Domestic), public = Non-institutions — verified against the crawl
+    assert m == {"promoters": 50.48, "fiis": 17.2, "diis": 21.19,
+                 "govt": 0.1, "public": 11.04, "n_holders": 4651863}
 
 
-def test_map_shp_facts_empty():
-    mapped, unmapped = fu.map_shp_facts({})
-    assert mapped == {} and unmapped == []
+def test_parse_shp_xml_empty_or_alien():
+    assert fu.parse_shp_xml("<xml></xml>") == {}
 
 
 # ---------- screening engine ----------
@@ -397,6 +401,68 @@ def test_screener_row_always_full_column_set():
     sparse = row_for(annuals={"FY2025": {"sales": 10}}, quarters={},
                      promoter_pct=None, price=None)
     assert set(sparse) == set(fu.SCREENER_COLS)
+
+
+# ---------- results XBRL: the 2023-2025 quarterly hole ----------
+# fixture condensed from the real RELIANCE Q3-FY25 filing (probe 2026-08-29)
+
+def _fin(el, ctx, v):
+    return f'<in-bse-fin:{el} contextRef="{ctx}" unitRef="INR">{v}</in-bse-fin:{el}>'
+
+
+RESULTS_XML = f"""<?xml version="1.0"?><xbrli:xbrl>
+<xbrli:context id="OneD"><xbrli:period><xbrli:startDate>2024-10-01</xbrli:startDate>
+<xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="FourD"><xbrli:period><xbrli:startDate>2024-04-01</xbrli:startDate>
+<xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+{_fin("RevenueFromOperations", "OneD", "2438650000000.00")}
+{_fin("RevenueFromOperations", "FourD", "7000000000000.00")}
+{_fin("OtherIncome", "OneD", "42140000000.00")}
+{_fin("FinanceCosts", "OneD", "61790000000.00")}
+{_fin("DepreciationDepletionAndAmortisationExpense", "OneD", "131810000000.00")}
+{_fin("ProfitBeforeTax", "OneD", "286430000000.00")}
+{_fin("TaxExpense", "OneD", "68390000000.00")}
+{_fin("ProfitLossForPeriod", "OneD", "219300000000.00")}
+{_fin("BasicEarningsLossPerShareFromContinuingAndDiscontinuedOperations", "OneD", "13.70")}
+</xbrli:xbrl>"""
+
+
+def test_parse_results_xml_maps_quarter_from_matching_context():
+    q = fu.parse_results_xml(RESULTS_XML, "01-Oct-2024", "31-Dec-2024")
+    assert q["sales"] == 243865            # Cr, from the OneD context, not YTD
+    assert q["other_income"] == 4214 and q["interest"] == 6179
+    assert q["depreciation"] == 13181 and q["pbt"] == 28643
+    assert q["net_profit"] == 21930 and q["eps"] == 13.7
+    assert q["tax_pct"] == round(68390 / 286430 * 100, 1)
+    # Screener-style operating profit: pbt + interest + depreciation - other income
+    assert q["op_profit"] == 28643 + 6179 + 13181 - 4214
+    assert q["expenses"] == q["sales"] - q["op_profit"]
+    assert q["opm"] == round(q["op_profit"] / q["sales"] * 100, 1)
+    assert q["end"] == "2024-12-31" and q["src"] == "nse"
+
+
+def test_parse_results_xml_no_matching_context():
+    assert fu.parse_results_xml(RESULTS_XML, "01-Jan-2024", "31-Mar-2024") == {}
+
+
+def test_pick_results_filings_prefers_consolidated_skips_banks_and_known():
+    rows = [
+        {"fromDate": "01-Oct-2024", "toDate": "31-Dec-2024", "consolidated": "Consolidated",
+         "bank": "N", "xbrl": "u-con"},
+        {"fromDate": "01-Oct-2024", "toDate": "31-Dec-2024", "consolidated": "Non-Consolidated",
+         "bank": "N", "xbrl": "u-std"},
+        {"fromDate": "01-Jul-2024", "toDate": "30-Sep-2024", "consolidated": "Non-Consolidated",
+         "bank": "N", "xbrl": "u-q2"},
+        {"fromDate": "01-Apr-2024", "toDate": "30-Jun-2024", "consolidated": "Consolidated",
+         "bank": "Y", "xbrl": "u-bank"},
+        {"fromDate": "01-Jan-2024", "toDate": "31-Mar-2024", "consolidated": "Consolidated",
+         "bank": "N", "xbrl": None},
+        {"fromDate": "01-Oct-2023", "toDate": "31-Dec-2023", "consolidated": "Consolidated",
+         "bank": "N", "xbrl": "u-known"},
+    ]
+    picked = fu.pick_results_filings(rows, have={"2023-12"}, cap=5)
+    assert [(f["xbrl"], fu.quarter_of_nse(f["toDate"])) for f in picked] == \
+        [("u-con", "2024-12"), ("u-q2", "2024-09")]
 
 
 # ---------- table rows ----------

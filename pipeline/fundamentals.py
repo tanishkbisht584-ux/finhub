@@ -319,31 +319,35 @@ def _first(r, *keys):
     return None
 
 
-def shape_ratings(j, cap=8):
-    """corporate-credit-rating rows -> [{agency, rating, date, url}]. Key names
-    are best guesses normalized through variants — verify from a runner."""
+def shape_ratings(rows, sym, cap=8):
+    """corporate-credit-rating is a GLOBAL recent-filings feed (probed
+    2026-08-29: the symbol param is ignored server-side) — filter here."""
     out = []
-    for r in (j.get("data") if isinstance(j, dict) else j) or []:
-        agency = _first(r, "creditRatingAgencyName", "cra", "agency", "creditRatingAgency")
-        rating = _first(r, "rating", "crRating", "creditRating")
-        if not agency and not rating:
+    for r in (rows.get("data") if isinstance(rows, dict) else rows) or []:
+        if r.get("Symbol") != sym:
             continue
-        out.append({"agency": agency, "rating": rating,
-                    "date": _first(r, "date", "crDate", "an_dt"),
-                    "url": _first(r, "attchmntFile", "xbrl", "fileName")})
+        rating = r.get("CreditRating")
+        action = r.get("RatingAction")
+        if rating and action:
+            rating = f"{rating} ({action})"
+        if not r.get("NameOfCRAgency") and not rating:
+            continue
+        out.append({"agency": r.get("NameOfCRAgency"), "rating": rating,
+                    "date": r.get("DateofCR"), "url": r.get("attchmntFile")})
     return out[:cap]
 
 
-# SEBI SHP taxonomy localname patterns -> our shareholding keys. Step A best
-# guesses (2026-08-29); the unmapped-names diagnostic in enrich_shareholding
-# prints one real filing's element names to the CI log for step B correction.
-SHP_PATTERNS = (
-    ("fiis", re.compile(r"ForeignPortfolioInvestor|ForeignInstitutionalInvestor", re.I)),
-    ("diis", re.compile(r"MutualFund|InsuranceCompan|ProvidentFund|PensionFund"
-                        r"|FinancialInstitution|AlternateInvestmentFund", re.I)),
-    ("govt", re.compile(r"CentralGovernment|StateGovernment|PresidentOfIndia", re.I)),
-    ("n_holders", re.compile(r"TotalNumberOfShareholders|NumberOfShareholders$", re.I)),
-)
+# SHP plain-XBRL: one percentage element repeated per category context; the
+# context ids are semantic totals (probed against the real RELIANCE Jun-2026
+# filing, values match Screener's rows). Fractions of 1 -> percent.
+SHP_CONTEXTS = {
+    "promoters": "ShareholdingOfPromoterAndPromoterGroup_ContextI",
+    "fiis": "InstitutionsForeign_ContextI",
+    "diis": "InstitutionsDomestic_ContextI",
+    "govt": "Governments_ContextI",
+    "public": "NonInstitutions_ContextI",  # Screener's "Public" row
+}
+SHP_PCT_EL = "ShareholdingAsAPercentageOfTotalNumberOfShares"
 
 
 def parse_ix_facts(html):
@@ -359,54 +363,170 @@ def parse_ix_facts(html):
     return out
 
 
-def map_shp_facts(facts):
-    """(mapped {fiis, diis, govt, n_holders}, unmapped localnames). Facts whose
-    localname matches multiple patterns of one key are summed (DII buckets)."""
-    sums, unmapped = {}, []
-    for name, text in facts.items():
+def parse_shp_xml(xml):
+    """One SHP filing -> {promoters, fiis, diis, govt, public, n_holders}."""
+    by_ctx = {}
+    for m in re.finditer(
+            rf"<[\w.-]+:{SHP_PCT_EL} contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
+        by_ctx.setdefault(m.group(1), m.group(2).strip())
+    out = {}
+    for key, ctx in SHP_CONTEXTS.items():
         try:
-            v = float(str(text).replace(",", ""))
-        except ValueError:
+            out[key] = round(float(by_ctx[ctx]) * 100, 2)
+        except (KeyError, ValueError):
             continue
-        for key, pat in SHP_PATTERNS:
-            if pat.search(name):
-                sums[key] = sums.get(key, 0) + v
-                break
-        else:
-            unmapped.append(name)
-    if "n_holders" in sums:
-        sums["n_holders"] = int(sums["n_holders"])
-    return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in sums.items()}, unmapped
+    m = re.search(r"<[\w.-]+:NumberOfShareholders contextRef="
+                  r"\"ShareholdingPattern_ContextI\"[^>]*>([^<]*)<", xml)
+    if m:
+        try:
+            out["n_holders"] = int(float(m.group(1)))
+        except ValueError:
+            pass
+    return out
 
 
-def enrich_shareholding(sh, master_rows, fetch):
-    """Merge the FII/DII split from the newest filing's XBRL into the newest
-    shareholding period. One doc fetch per symbol per pass (insider's cost
-    model); any failure leaves the master's promoter/public split untouched."""
+def enrich_shareholding(sh, master_rows, fetch, cap=4):
+    """Merge the FII/DII split from filings' XBRL into periods that lack it —
+    walks newest-first so history back to ~2021 drains over passes, `cap` doc
+    fetches per pass. Failures leave the master's promoter/public untouched."""
     if not sh or not master_rows:
         return sh
-    newest = master_rows[0]  # API order is newest-first, like the master shape
-    url = _first(newest, "xbrl", "xbrlFile", "submissionLink")
-    if not url:
-        print(f"FUND SHP no xbrl field; row keys: {sorted(newest)[:20]}")
-        return sh
-    try:
-        mapped, unmapped = map_shp_facts(parse_ix_facts(fetch(url)))
-    except Exception as e:
-        print(f"FUND SHP xbrl fetch/parse: {e}")
-        return sh
-    if unmapped:
-        print(f"FUND SHP unmapped elements (step B): {unmapped[:40]}")
-    period = max(sh)
-    if mapped:
-        sh[period] = {**sh[period], **mapped}
+    fetched = 0
+    for row in master_rows:  # API order is newest-first
+        d = parse_nse_date(row.get("date"))
+        period = f"{d.year}-{d.month:02d}" if d else None
+        if not period or period not in sh or "fiis" in sh[period]:
+            continue
+        if fetched >= cap:
+            break
+        url = row.get("xbrl")
+        if not url:
+            continue
+        try:
+            mapped = parse_shp_xml(fetch(url))
+        except Exception as e:
+            print(f"FUND SHP xbrl {period}: {e}")
+            continue
+        fetched += 1
+        if mapped:
+            sh[period] = {**sh[period], **mapped}
     return sh
 
 
-def fetch_nse_deep(sym, session):
+# ---------- results XBRL: fills the 2023-2025 quarterly hole ----------
+# in-bse-fin taxonomy element -> our quarter field (verified against the real
+# RELIANCE Q3-FY25 filing via the probe workflow, 2026-08-29). Values are raw
+# rupees; /1e7 to Cr. op_profit/expenses/opm derived the Screener way.
+
+RESULTS_ELEMENTS = {
+    "RevenueFromOperations": "sales",
+    "OtherIncome": "other_income",
+    "FinanceCosts": "interest",
+    "DepreciationDepletionAndAmortisationExpense": "depreciation",
+    "ProfitBeforeTax": "pbt",
+    "TaxExpense": "_tax",
+    "ProfitLossForPeriod": "net_profit",
+    "BasicEarningsLossPerShareFromContinuingAndDiscontinuedOperations": "eps",
+}
+
+
+def _nse_dmy(s):
+    d = parse_nse_date(s)
+    return d.isoformat() if d else None
+
+
+def quarter_of_nse(to_date):
+    d = parse_nse_date(to_date)
+    return f"{d.year}-{d.month:02d}" if d else None
+
+
+def parse_results_xml(xml, from_date, to_date):
+    """One filing's XBRL -> our quarter dict, reading only facts whose context
+    period matches the filing's own quarter (YTD contexts are ignored)."""
+    want = (_nse_dmy(from_date), _nse_dmy(to_date))
+    if not all(want):
+        return {}
+    ctxs = set()
+    for m in re.finditer(
+            r"<xbrli:context id=\"([^\"]+)\">.*?<xbrli:startDate>([^<]+)</xbrli:startDate>\s*"
+            r"<xbrli:endDate>([^<]+)</xbrli:endDate>", xml, re.S):
+        if (m.group(2).strip(), m.group(3).strip()) == want:
+            ctxs.add(m.group(1))
+    if not ctxs:
+        return {}
+    raw = {}
+    for m in re.finditer(
+            r"<[\w.-]+:(\w+) contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
+        field = RESULTS_ELEMENTS.get(m.group(1))
+        if field and m.group(2) in ctxs and field not in raw:
+            try:
+                raw[field] = float(m.group(3))
+            except ValueError:
+                continue
+    if "sales" not in raw or "net_profit" not in raw:
+        return {}
+    q = {"sales": _cr(raw["sales"]), "other_income": _cr(raw.get("other_income")),
+         "interest": _cr(raw.get("interest")), "depreciation": _cr(raw.get("depreciation")),
+         "pbt": _cr(raw.get("pbt")), "net_profit": _cr(raw["net_profit"]),
+         "eps": round(raw["eps"], 2) if raw.get("eps") is not None else None,
+         "tax_pct": _pct(raw.get("_tax"), raw.get("pbt"))}
+    if q["pbt"] is not None:
+        q["op_profit"] = q["pbt"] + (q["interest"] or 0) + (q["depreciation"] or 0) \
+            - (q["other_income"] or 0)
+        q["expenses"] = q["sales"] - q["op_profit"]
+        q["opm"] = _pct(q["op_profit"], q["sales"])
+    q["end"] = _nse_dmy(to_date)
+    q["src"] = "nse"
+    return {k: v for k, v in q.items() if v is not None}
+
+
+def pick_results_filings(rows, have, cap=2):
+    """Newest-first filings worth fetching: consolidated preferred per quarter,
+    banks skipped (different element set), known periods skipped."""
+    by_q = {}
+    for r in rows or []:
+        period = quarter_of_nse(r.get("toDate"))
+        if not period or period in have or not r.get("xbrl") or r.get("bank") == "Y":
+            continue
+        cur = by_q.get(period)
+        if cur is None or (cur.get("consolidated") != "Consolidated"
+                           and r.get("consolidated") == "Consolidated"):
+            by_q[period] = r
+    return [by_q[p] for p in sorted(by_q, reverse=True)][:cap]
+
+
+def fetch_results_quarters(sym, session, have, cap=2):
+    """{period: quarter dict} for missing quarters, cap XBRL doc fetches per
+    pass — the hole drains over successive passes."""
+    r = session.get(NSE_API + "corporates-financial-results",
+                    params={"index": "equities", "symbol": sym, "period": "Quarterly"},
+                    timeout=25)
+    r.raise_for_status()
+    rows = r.json()
+    rows = (rows.get("data") if isinstance(rows, dict) else rows) or []
+    out = {}
+    for f in pick_results_filings(rows, have, cap):
+        try:
+            q = parse_results_xml(session.get(f["xbrl"], timeout=25).text,
+                                  f.get("fromDate"), f.get("toDate"))
+            if q:
+                out[quarter_of_nse(f["toDate"])] = q
+        except Exception as e:
+            print(f"FUND results xbrl {sym} {f.get('toDate')}: {e}")
+    return out
+
+
+def fetch_ratings_feed(session):
+    """The global credit-rating filings list, once per deep pass."""
+    r = session.get(NSE_API + "corporate-credit-rating", timeout=25)
+    r.raise_for_status()
+    return r.json() if "json" in r.headers.get("content-type", "") else []
+
+
+def fetch_nse_deep(sym, session, ratings_feed=None):
     """(shareholding, docs) for one symbol; every piece fails independently and
-    just leaves its section empty. Endpoint shapes per NseIndiaApi docs —
-    verify from a runner on first deploy (NSE blocks this dev machine)."""
+    just leaves its section empty. Shapes verified by the probe workflow
+    (2026-08-29 run)."""
     def get(path, **params):
         r = session.get(NSE_API + path, params=params, timeout=25)
         r.raise_for_status()
@@ -434,10 +554,8 @@ def fetch_nse_deep(sym, session):
             anns = anns.get("data")
     except Exception as e:
         print(f"FUND NSE announcements {sym}: {e}")
-    try:  # endpoint path unverified (undocumented) — silent absence if wrong
-        ratings = shape_ratings(get("corporate-credit-rating", index="equities", symbol=sym))
-    except Exception as e:
-        print(f"FUND NSE ratings {sym}: {e}")
+    if ratings_feed is not None:  # global feed fetched once per pass
+        ratings = shape_ratings(ratings_feed, sym)
     docs = shape_docs(reports, anns, ratings)
     if not any(docs.get(k) for k in ("annual_reports", "announcements", "concalls",
                                      "credit_ratings")):
@@ -450,9 +568,9 @@ def fetch_nse_deep(sym, session):
 def fundamentals_rows(sym, annuals, quarters, summary, now, src="yahoo",
                       shareholding=None, docs=None):
     ts = now.isoformat()
-    rows = [{"symbol": sym, "kind": "annual", "period": p, "data": {**d, "src": src},
-             "updated_at": ts} for p, d in annuals.items()]
-    rows += [{"symbol": sym, "kind": "quarter", "period": p, "data": {**d, "src": src},
+    rows = [{"symbol": sym, "kind": "annual", "period": p, "data": {"src": src, **d},
+             "updated_at": ts} for p, d in annuals.items()]  # d's own src wins
+    rows += [{"symbol": sym, "kind": "quarter", "period": p, "data": {"src": src, **d},
               "updated_at": ts} for p, d in quarters.items()]
     rows += [{"symbol": sym, "kind": "shareholding", "period": p, "data": d,
               "updated_at": ts} for p, d in (shareholding or {}).items()]
@@ -500,6 +618,12 @@ def _existing_fresh(sb, symbols, now):
 def deep_fetch(sb, symbols, now):
     n = 0
     nse = nse_session() if symbols else None
+    ratings_feed = []
+    if symbols:
+        try:
+            ratings_feed = fetch_ratings_feed(nse)
+        except Exception as e:
+            print(f"FUND ratings feed: {e}")
     for sym in symbols:
         try:
             annuals, quarters = fetch_statements(sym)
@@ -509,12 +633,21 @@ def deep_fetch(sb, symbols, now):
             # for the CAGR math — the upsert itself never deletes old periods.
             prior = {r["period"]: r["data"] for r in
                      sb("GET", f"fundamentals?select=period,data&kind=eq.annual&symbol=eq.{sym}")}
+            prior_q = {r["period"] for r in
+                       sb("GET", f"fundamentals?select=period&kind=eq.quarter&symbol=eq.{sym}")}
+            try:  # NSE results XBRL fills quarters neither Yahoo nor the
+                  # backfill covered (the 2023-2025 hole; older ones too),
+                  # 2 doc fetches per pass — the gap drains over passes.
+                quarters.update(fetch_results_quarters(
+                    sym, nse, prior_q | set(quarters)))
+            except Exception as e:
+                print(f"FUND results {sym}: {e}")
             closes = []
             try:
                 closes = fetch_monthly_closes(sym)
             except Exception as e:
                 print(f"FUND closes {sym}: {e}")
-            shareholding, docs = fetch_nse_deep(sym, nse)
+            shareholding, docs = fetch_nse_deep(sym, nse, ratings_feed)
             summary = compute_summary({**prior, **annuals}, quarters, closes)
             n += upsert(sb, fundamentals_rows(sym, annuals, quarters, summary, now,
                                               shareholding=shareholding, docs=docs),
