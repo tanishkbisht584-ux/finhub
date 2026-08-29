@@ -1211,7 +1211,7 @@ Widget filterPill(String label, bool on, Color tint, VoidCallback onTap,
 
 /// Shared dressing for the clay-black filter sheets: square corners, mono
 /// header, one Wrap of pills.
-void _showPillSheet(BuildContext context, String header,
+void showPillSheet(BuildContext context, String header,
     Widget Function(BuildContext) pills) {
   showModalBottomSheet(
     context: context,
@@ -1313,7 +1313,7 @@ void showFeedFilterSheet(BuildContext context) {
 
 /// Mini sheet behind the card's IMPACT text.
 void showImpactSheet(BuildContext context) {
-  _showPillSheet(
+  showPillSheet(
     context,
     'MIN IMPACT',
     (context) => ValueListenableBuilder<int>(
@@ -1332,7 +1332,7 @@ void showImpactSheet(BuildContext context) {
 
 /// Mini sheet behind the card's SHORT/LONG text.
 void showHorizonSheet(BuildContext context) {
-  _showPillSheet(
+  showPillSheet(
     context,
     'HORIZON',
     (context) => ValueListenableBuilder<String>(
@@ -2219,7 +2219,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
   /// filter dial's MUTED row — no SnackBar (filterPill already haptics).
   void _showMuteSheet() {
     final pub = publisher(widget.story.sourceName);
-    _showPillSheet(
+    showPillSheet(
       context,
       'MUTE',
       (sheet) => Wrap(spacing: 8, runSpacing: 8, children: [

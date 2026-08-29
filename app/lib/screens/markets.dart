@@ -7,10 +7,12 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
+import '../remote_config.dart';
 import '../section_ribbon.dart';
 import '../theme.dart';
 import '../ticks.dart';
-import 'feed.dart' show homeTab, marketsTab;
+import 'feed.dart' show homeTab, marketsTab, filterPill;
+import 'screens.dart';
 import 'stock.dart';
 
 /// Everything the Markets tab shows, from the pipeline's `quotes` and
@@ -351,6 +353,30 @@ class _MarketsBodyState extends State<MarketsBody> {
             ),
         ]),
       ),
+      if (remoteConfig.screenerQueryEnabled)
+        (
+          id: 'screens',
+          label: 'SCREENS',
+          child: _Section('Screens', [
+            const SizedBox(height: 10),
+            Builder(
+              builder: (context) => Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final p in screenPresets)
+                  filterPill(p.name, false, green, () {
+                    Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => ScreensScreen(preset: p)));
+                  }, fontSize: 10),
+                filterPill('CUSTOM', false, amber, () {
+                  Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const ScreensScreen()));
+                }, fontSize: 10),
+              ]),
+            ),
+            const SizedBox(height: 4),
+            Text('filter every covered stock by fundamentals · rebuilt daily',
+                style: mono.copyWith(fontSize: 10)),
+          ]),
+        ),
       if (indices.isNotEmpty)
         (
           id: 'indices',
