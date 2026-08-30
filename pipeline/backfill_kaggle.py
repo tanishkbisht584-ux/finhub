@@ -35,6 +35,9 @@ from datetime import datetime, timezone
 ROW_LABELS = {
     "Sales": "sales", "Expenses": "expenses", "Operating Profit": "op_profit",
     "OPM %": "opm", "Other Income": "other_income", "Interest": "interest",
+    # bank pages use different labels for the same rows
+    "Revenue": "sales", "Financing Profit": "op_profit",
+    "Financing Margin %": "opm", "ROE %": "roe",
     "Depreciation": "depreciation", "Profit before tax": "pbt", "Tax %": "tax_pct",
     "Net Profit": "net_profit", "EPS in Rs": "eps", "Dividend Payout %": "div_payout",
     "Equity Capital": "equity_cap", "Reserves": "reserves", "Borrowings": "borrowings",
@@ -185,6 +188,21 @@ def validate_overlap(kaggle, yahoo):
     return bad, checked
 
 
+def refresh_symbols(items, existing_data):
+    """(symbols whose re-parse adds a missing `sales`, their overwritable
+    kaggle annual/quarter keys). Lets a parser fix (e.g. bank row labels)
+    refresh already-written kaggle rows — never touches yahoo/nse rows.
+    Run fixup_snapshot --only=<symbols> afterwards (split_adj is re-derived)."""
+    syms = {s for (s, kind, period), data in items.items()
+            if data.get("sales") is not None
+            and (old := existing_data.get((s, kind, period))) is not None
+            and old.get("src") == "kaggle" and old.get("sales") is None}
+    overwritable = {k for k, d in existing_data.items()
+                    if k[0] in syms and k[1] in ("annual", "quarter")
+                    and d.get("src") == "kaggle"}
+    return syms, overwritable
+
+
 def rows_to_write(items, existing_keys, ts):
     """items {(sym, kind, period): data} -> upsert rows; existing keys and
     empty data skipped; annual/quarter rows tagged src=kaggle (shareholding
@@ -243,9 +261,15 @@ def main():
 
     existing = sb("GET", "fundamentals?select=symbol,kind,period,data"
                          "&kind=in.(annual,quarter,shareholding)&order=symbol,period")
-    existing_keys = {(r["symbol"], r["kind"], r["period"]) for r in existing}
-    yahoo = {(r["symbol"], r["kind"], r["period"]): r["data"] for r in existing
-             if r["kind"] == "annual" and (r.get("data") or {}).get("src") != "kaggle"}
+    existing_data = {(r["symbol"], r["kind"], r["period"]): r["data"] for r in existing}
+    refreshed, overwritable = refresh_symbols(items, existing_data)
+    if refreshed:
+        print(f"{len(refreshed)} symbols gain missing fields — their kaggle rows "
+              f"will be rewritten; run: py -3 fixup_snapshot.py --only="
+              + ",".join(sorted(refreshed)))
+    existing_keys = set(existing_data) - overwritable
+    yahoo = {k: d for k, d in existing_data.items()
+             if k[1] == "annual" and (d or {}).get("src") != "kaggle"}
     bad, checked = validate_overlap(items, yahoo)
     print(f"validated against {checked} Yahoo overlap years; {len(bad)} diverge >{DIVERGE_PCT}%")
     for key, field, kv, yv in bad[:20]:

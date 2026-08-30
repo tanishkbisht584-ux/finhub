@@ -71,8 +71,14 @@ def test_fy_label_after_march_rolls_into_next_fy():
 
 # ---------- statement parsing ----------
 
+def test_parse_statements_returns_reported_stats():
+    _, _, stats = fu.parse_statements(stmt_fixture())
+    assert stats["shares"] == 10 * CR   # real share count, not np/eps inference
+    assert stats["book_value"] == 90.0
+
+
 def test_parse_statements_pnl_in_crores():
-    annuals, _ = fu.parse_statements(stmt_fixture())
+    annuals, _, _ = fu.parse_statements(stmt_fixture())
     a = annuals["FY2026"]
     assert a["sales"] == 1000 and a["op_profit"] == 200 and a["expenses"] == 800
     assert a["opm"] == 20.0
@@ -86,7 +92,7 @@ def test_parse_statements_pnl_in_crores():
 
 
 def test_parse_statements_balance_sheet():
-    annuals, _ = fu.parse_statements(stmt_fixture())
+    annuals, _, _ = fu.parse_statements(stmt_fixture())
     a = annuals["FY2026"]
     assert a["equity_cap"] == 50 and a["reserves"] == 850  # equity - common stock
     assert a["borrowings"] == 300
@@ -97,7 +103,7 @@ def test_parse_statements_balance_sheet():
 
 
 def test_parse_statements_cash_flow_and_fcf():
-    annuals, _ = fu.parse_statements(stmt_fixture())
+    annuals, _, _ = fu.parse_statements(stmt_fixture())
     a = annuals["FY2026"]
     assert a["cfo"] == 250 and a["cfi"] == -120 and a["cff"] == -80
     assert a["net_cf"] == 50
@@ -105,7 +111,7 @@ def test_parse_statements_cash_flow_and_fcf():
 
 
 def test_parse_statements_ratio_inputs():
-    annuals, _ = fu.parse_statements(stmt_fixture())
+    annuals, _, _ = fu.parse_statements(stmt_fixture())
     a = annuals["FY2026"]
     assert a["debtor_days"] == round(110 / 1000 * 365)
     assert a["inventory_days"] == round(137 / 500 * 365)
@@ -116,7 +122,7 @@ def test_parse_statements_ratio_inputs():
 
 
 def test_parse_statements_quarters():
-    _, quarters = fu.parse_statements(stmt_fixture())
+    _, quarters, _ = fu.parse_statements(stmt_fixture())
     q = quarters["2026-06"]
     assert q["sales"] == 280 and q["op_profit"] == 60 and q["opm"] == round(60 / 280 * 100, 1)
     assert q["net_profit"] == 43 and q["eps"] == round(43 * 1e7 / (10 * 1e7), 2)
@@ -131,7 +137,7 @@ def test_parse_statements_bank_missing_lines_no_crash():
         del s["costOfRevenue"], s["operatingIncome"]
     for s in r["balanceSheetHistory"]["balanceSheetStatements"]:
         del s["inventory"], s["totalCurrentAssets"], s["totalCurrentLiabilities"]
-    annuals, _ = fu.parse_statements(j)
+    annuals, _, _ = fu.parse_statements(j)
     a = annuals["FY2026"]
     assert a["sales"] == 1000 and a["net_profit"] == 143
     for gone in ("op_profit", "opm", "inventory_days", "wc_days", "roce"):
@@ -139,8 +145,8 @@ def test_parse_statements_bank_missing_lines_no_crash():
 
 
 def test_parse_statements_empty_payload():
-    assert fu.parse_statements({"quoteSummary": {"result": []}}) == ({}, {})
-    assert fu.parse_statements({}) == ({}, {})
+    assert fu.parse_statements({"quoteSummary": {"result": []}}) == ({}, {}, {})
+    assert fu.parse_statements({}) == ({}, {}, {})
 
 
 # ---------- summary: CAGR + pros/cons ----------
@@ -337,7 +343,8 @@ QUARTERS_EPS = {"2026-06": {"eps": 4.0}, "2026-03": {"eps": 3.5},
 def row_for(**kw):
     args = {"sym": "TCS", "name": "TCS Ltd", "sector": "IT",
             "annuals": annuals_for_screen(), "quarters": QUARTERS_EPS,
-            "promoter_pct": 50.5, "price": 280.0, "now": NOW}
+            "promoter_pct": 50.5, "price": 280.0, "now": NOW,
+            "shares": None, "dps_ttm": None}
     args.update(kw)
     return fu.screener_metrics_row(**args)
 
@@ -403,11 +410,10 @@ def test_screener_row_no_price_keeps_fundamental_metrics():
     assert r["roe"] == 18.0 and r["sales_cagr_5y"] is not None
 
 
-def test_screener_row_cagr_and_div_yield():
+def test_screener_row_cagr_and_promoter():
     r = row_for()
     assert r["sales_cagr_5y"] == 22.0  # 100 -> 270 over 5y
     assert r["profit_cagr_3y"] is not None
-    assert r["div_yield"] == round(25.0 * 13.5 / 100 / 280.0 * 100, 2)
     assert r["promoter_pct"] == 50.5
 
 
@@ -487,6 +493,59 @@ def test_pick_results_filings_prefers_consolidated_skips_banks_and_known():
     picked = fu.pick_results_filings(rows, have={"2023-12"}, cap=5)
     assert [(f["xbrl"], fu.quarter_of_nse(f["toDate"])) for f in picked] == \
         [("u-con", "2024-12"), ("u-q2", "2024-09")]
+
+
+def test_basis_ok_accepts_matching_overlap_rejects_standalone():
+    prior = {"FY2023": {"sales": 876396, "src": "kaggle"},
+             "FY2022": {"sales": 698672, "src": "kaggle"}}
+    # TCS-like: same consolidated basis -> accept
+    assert fu.basis_ok({"FY2023": {"sales": 225458}}, {"FY2023": {"sales": 225458, "src": "kaggle"}})
+    # RELIANCE-like: Yahoo standalone is 40% below verified consolidated -> reject
+    assert not fu.basis_ok({"FY2023": {"sales": 529773}}, prior)
+    # no overlap year (post-2023 listing) -> nothing contradicts, accept
+    assert fu.basis_ok({"FY2026": {"sales": 100}}, {})
+    # prior rows that are themselves yahoo don't count as a reference
+    assert fu.basis_ok({"FY2023": {"sales": 100}},
+                       {"FY2023": {"sales": 900, "src": "yahoo"}})
+    # reference lacks sales (pre-fix bank rows): eps is the fallback check —
+    # HDFCBANK-like: yahoo eps 28.62 vs Screener's ~82 -> reject
+    assert not fu.basis_ok({"FY2023": {"sales": 118057, "eps": 28.62}},
+                           {"FY2023": {"eps": 82.4, "src": "kaggle"}})
+    assert fu.basis_ok({"FY2023": {"eps": 80.1}},
+                       {"FY2023": {"eps": 82.4, "src": "kaggle"}})
+
+
+def test_ttm_dps_trailing_365_days():
+    day = 86400
+    now_ts = int(NOW.timestamp())
+    divs = {str(now_ts - 30 * day): {"amount": 6.0},
+            str(now_ts - 300 * day): {"amount": 4.0},
+            str(now_ts - 400 * day): {"amount": 99.0}}  # outside the window
+    assert fu.ttm_dps(divs, NOW) == 10.0
+    assert fu.ttm_dps({}, NOW) is None
+
+
+def test_screener_row_prefers_reported_shares_for_mcap_and_pb():
+    # reported 12 Cr shares beats the np/eps inference (10 Cr)
+    r = row_for(shares=12 * 1e7)
+    assert r["mcap_cr"] == round(280.0 * 12, 1)
+    r2 = row_for()  # no shares -> inference fallback stays
+    assert r2["mcap_cr"] == round(280.0 * 10, 1)
+
+
+def test_screener_row_div_yield_from_ttm_dps_only():
+    assert row_for(dps_ttm=5.6)["div_yield"] == round(5.6 / 280.0 * 100, 2)
+    # payout-derived approximation is gone: without dps_ttm there is no yield
+    assert row_for()["div_yield"] is None
+
+
+def test_warm_universe_priority_and_cap():
+    ages = {"COLD1": "2026-08-01T00:00:00", "COLD2": "2026-08-10T00:00:00",
+            "NIFTY": "2026-08-20T00:00:00", "FOLLOWED": "2026-08-14T00:00:00",
+            "FRESH": "2026-08-29T11:00:00"}  # < 7d old at NOW -> excluded
+    out = fu.warm_universe(ages, priority=["FOLLOWED", "NIFTY"], now=NOW, cap=3)
+    # priority symbols first, then oldest-summary-first; fresh one dropped
+    assert out == ["FOLLOWED", "NIFTY", "COLD1"]
 
 
 def test_scale_px_rows_scales_price_linked_columns_only():

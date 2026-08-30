@@ -113,8 +113,10 @@ def _ratios(pnl_s, bs_s):
 
 
 def parse_statements(j):
-    """(annuals {FY2026: {...}}, quarters {2026-06: {...}}) — one dict per period
-    carrying P&L + BS + CF + ratio fields, ₹ Cr, nulls dropped. Newest first."""
+    """(annuals {FY2026: {...}}, quarters {2026-06: {...}}, stats {shares,
+    book_value}) — periods carry P&L + BS + CF + ratio fields in ₹ Cr, nulls
+    dropped, newest first; stats are the REPORTED share count and per-share
+    book value from defaultKeyStatistics (never inferred)."""
     r = ((j.get("quoteSummary") or {}).get("result") or [{}])[0]
     stats = r.get("defaultKeyStatistics") or {}
     shares = (stats.get("sharesOutstanding") or {}).get("raw")
@@ -140,11 +142,16 @@ def parse_statements(j):
         s = _stmt_map("incomeStatementHistoryQuarterly", "incomeStatementHistory", j)[end]
         d = {**_pnl(s, shares), "end": end}
         quarters[end[:7]] = {k: v for k, v in d.items() if v is not None}
-    if stats.get("bookValue") is not None and annuals:
-        newest = next(iter(annuals))
-        annuals[newest]["book_value"] = (stats["bookValue"] or {}).get("raw") \
-            if isinstance(stats.get("bookValue"), dict) else stats.get("bookValue")
-    return annuals, quarters
+    bv = (stats["bookValue"] or {}).get("raw") \
+        if isinstance(stats.get("bookValue"), dict) else stats.get("bookValue")
+    if bv is not None and annuals:
+        annuals[next(iter(annuals))]["book_value"] = bv
+    out_stats = {}
+    if shares:
+        out_stats["shares"] = shares
+    if bv is not None:
+        out_stats["book_value"] = bv
+    return annuals, quarters, out_stats
 
 
 # ---------- summary: CAGRs + rule-based pros/cons ----------
@@ -454,6 +461,11 @@ def quarter_of_nse(to_date):
     return f"{d.year}-{d.month:02d}" if d else None
 
 
+def fy_of_nse(to_date):
+    d = parse_nse_date(to_date)
+    return fy_label(d.isoformat()) if d else None
+
+
 def parse_results_xml(xml, from_date, to_date):
     """One filing's XBRL -> our quarter dict, reading only facts whose context
     period matches the filing's own quarter (YTD contexts are ignored)."""
@@ -494,12 +506,12 @@ def parse_results_xml(xml, from_date, to_date):
     return {k: v for k, v in q.items() if v is not None}
 
 
-def pick_results_filings(rows, have, cap=2):
-    """Newest-first filings worth fetching: consolidated preferred per quarter,
+def pick_results_filings(rows, have, cap=2, keyfn=quarter_of_nse):
+    """Newest-first filings worth fetching: consolidated preferred per period,
     banks skipped (different element set), known periods skipped."""
     by_q = {}
     for r in rows or []:
-        period = quarter_of_nse(r.get("toDate"))
+        period = keyfn(r.get("toDate"))
         if not period or period in have or not r.get("xbrl") or r.get("bank") == "Y":
             continue
         cur = by_q.get(period)
@@ -509,22 +521,24 @@ def pick_results_filings(rows, have, cap=2):
     return [by_q[p] for p in sorted(by_q, reverse=True)][:cap]
 
 
-def fetch_results_quarters(sym, session, have, cap=2):
-    """{period: quarter dict} for missing quarters, cap XBRL doc fetches per
-    pass — the hole drains over successive passes."""
+def fetch_results_quarters(sym, session, have, cap=2, period="Quarterly",
+                           keyfn=quarter_of_nse):
+    """{period key: parsed dict} for missing periods, cap XBRL doc fetches per
+    pass — gaps drain over successive passes. period='Annual' + keyfn=fy_of_nse
+    yields full-year consolidated P&L rows through the same parser."""
     r = session.get(NSE_API + "corporates-financial-results",
-                    params={"index": "equities", "symbol": sym, "period": "Quarterly"},
+                    params={"index": "equities", "symbol": sym, "period": period},
                     timeout=25)
     r.raise_for_status()
     rows = r.json()
     rows = (rows.get("data") if isinstance(rows, dict) else rows) or []
     out = {}
-    for f in pick_results_filings(rows, have, cap):
+    for f in pick_results_filings(rows, have, cap, keyfn):
         try:
             q = parse_results_xml(session.get(f["xbrl"], timeout=25).text,
                                   f.get("fromDate"), f.get("toDate"))
             if q:
-                out[quarter_of_nse(f["toDate"])] = q
+                out[keyfn(f["toDate"])] = q
         except Exception as e:
             print(f"FUND results xbrl {sym} {f.get('toDate')}: {e}")
     return out
@@ -611,12 +625,24 @@ def fetch_statements(sym):
     return parse_statements(r.json())
 
 
-def fetch_monthly_closes(sym):
+def ttm_dps(dividends, now):
+    """Per-share dividends paid in the trailing 365 days — Screener's
+    current-yield basis, not a fiscal-year bucket."""
+    cutoff = now.timestamp() - 365 * 86400
+    vals = [d.get("amount") or 0 for ts, d in (dividends or {}).items()
+            if int(ts) >= cutoff]
+    return round(sum(vals), 2) if vals else None
+
+
+def fetch_chart_deep(sym, now):
+    """(monthly closes 10y, trailing-12M dps) — one chart call."""
     r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
-                     params={"range": "10y", "interval": "1mo"},
+                     params={"range": "10y", "interval": "1mo", "events": "div"},
                      headers=BROWSER_UA, timeout=TIMEOUT)
     r.raise_for_status()
-    return r.json()["chart"]["result"][0]["indicators"]["quote"][0].get("close") or []
+    res = r.json()["chart"]["result"][0]
+    closes = (res.get("indicators", {}).get("quote") or [{}])[0].get("close") or []
+    return closes, ttm_dps((res.get("events") or {}).get("dividends"), now)
 
 
 def _existing_fresh(sb, symbols, now):
@@ -629,44 +655,82 @@ def _existing_fresh(sb, symbols, now):
     return {r["symbol"] for r in rows} & set(symbols)
 
 
-def deep_fetch(sb, symbols, now):
+def basis_ok(yahoo_annuals, prior_annuals, tol=0.10):
+    """Yahoo's legacy statement modules serve STANDALONE (or, for banks, a
+    different revenue definition) for some .NS symbols — measured 2026-08-29:
+    RELIANCE FY2023 came back 529,773 vs the verified consolidated 876,396.
+    Gate: compare the newest overlap year against a non-yahoo (kaggle/nse)
+    prior row; >tol sales divergence rejects ALL Yahoo statement data for the
+    symbol (NSE consolidated XBRL fills instead). No reference year = accept."""
+    for field in ("sales", "eps"):  # eps catches banks whose ref lacks sales
+        for period in sorted(set(yahoo_annuals) & set(prior_annuals), reverse=True):
+            ref = prior_annuals[period]
+            if ref.get("src") == "yahoo" or not ref.get(field):
+                continue
+            yv = yahoo_annuals[period].get(field)
+            if not yv:
+                continue
+            return abs(yv - ref[field]) / abs(ref[field]) <= tol
+    return True
+
+
+def deep_fetch(sb, symbols, now, nse=True):
+    """nse=False = Yahoo-only (statements + chart) — runnable from machines
+    NSE blocks; the NSE pieces (shareholding/results/docs) drain via CI."""
     n = 0
-    nse = nse_session() if symbols else None
+    nse_s = nse_session() if symbols and nse else None
     ratings_feed = []
-    if symbols:
+    if symbols and nse:
         try:
-            ratings_feed = fetch_ratings_feed(nse)
+            ratings_feed = fetch_ratings_feed(nse_s)
         except Exception as e:
             print(f"FUND ratings feed: {e}")
     for sym in symbols:
         try:
-            annuals, quarters = fetch_statements(sym)
-            if not annuals and not quarters:
+            annuals, quarters, stats = fetch_statements(sym)
+            if not annuals and not quarters and not stats:
                 continue
             # merge with what the table already holds (kaggle/older yahoo rows)
             # for the CAGR math — the upsert itself never deletes old periods.
             prior = {r["period"]: r["data"] for r in
                      sb("GET", f"fundamentals?select=period,data&kind=eq.annual&symbol=eq.{sym}")}
-            prior_q = {r["period"] for r in
-                       sb("GET", f"fundamentals?select=period&kind=eq.quarter&symbol=eq.{sym}")}
-            try:  # NSE results XBRL fills quarters neither Yahoo nor the
-                  # backfill covered (the 2023-2025 hole; older ones too),
-                  # 2 doc fetches per pass — the gap drains over passes.
-                quarters.update(fetch_results_quarters(
-                    sym, nse, prior_q | set(quarters)))
-            except Exception as e:
-                print(f"FUND results {sym}: {e}")
-            closes = []
+            if annuals and not basis_ok(annuals, prior):
+                # standalone/mis-defined Yahoo statements: never written; the
+                # NSE consolidated XBRL below is the only statement source.
+                print(f"FUND basis mismatch {sym}: yahoo statements dropped")
+                annuals, quarters = {}, {}
+            shareholding, docs = {}, {}
+            if nse:
+                prior_q = {r["period"] for r in
+                           sb("GET", f"fundamentals?select=period&kind=eq.quarter&symbol=eq.{sym}")}
+                try:  # NSE results XBRL fills quarters neither Yahoo nor the
+                      # backfill covered (the 2023-2025 hole; older ones too),
+                      # 2 doc fetches per pass — the gap drains over passes.
+                    quarters.update(fetch_results_quarters(
+                        sym, nse_s, prior_q | set(quarters)))
+                    # annual filings fill FYs Yahoo couldn't provide (basis
+                    # mismatch) — full-year consolidated P&L, same parser.
+                    missing_fy = fetch_results_quarters(
+                        sym, nse_s, set(prior) | set(annuals),
+                        period="Annual", keyfn=fy_of_nse)
+                    annuals.update(missing_fy)
+                except Exception as e:
+                    print(f"FUND results {sym}: {e}")
+                shareholding, docs = fetch_nse_deep(sym, nse_s, ratings_feed)
+            closes, dps = [], None
             try:
-                closes = fetch_monthly_closes(sym)
+                closes, dps = fetch_chart_deep(sym, now)
             except Exception as e:
-                print(f"FUND closes {sym}: {e}")
-            shareholding, docs = fetch_nse_deep(sym, nse, ratings_feed)
+                print(f"FUND chart {sym}: {e}")
             prior_sh = {r["period"]: r["data"] for r in
                         sb("GET", "fundamentals?select=period,data"
                                   f"&kind=eq.shareholding&symbol=eq.{sym}")}
             summary = compute_summary({**prior, **annuals}, quarters, closes,
                                       shareholding={**prior_sh, **shareholding})
+            if stats.get("shares"):
+                summary["shares"] = stats["shares"]
+            if dps is not None:
+                summary["dps_ttm"] = dps
             n += upsert(sb, fundamentals_rows(sym, annuals, quarters, summary, now,
                                               shareholding=shareholding, docs=docs),
                         table="fundamentals", key="symbol,kind,period")
@@ -691,28 +755,32 @@ def ttm_eps(quarters):
     return round(sum(vals), 2) if len(vals) == 4 else None
 
 
-def screener_metrics_row(sym, name, sector, annuals, quarters, promoter_pct, price, now):
+def screener_metrics_row(sym, name, sector, annuals, quarters, promoter_pct, price, now,
+                         shares=None, dps_ttm=None):
     """One screener_metrics row; every SCREENER_COLS key always present (None
-    where uncomputable) so upsert() lands in one PGRST102 bucket."""
+    where uncomputable) so upsert() lands in one PGRST102 bucket. `shares` is
+    the REPORTED count (defaultKeyStatistics) and `dps_ttm` real trailing
+    dividends — inference is a fallback only."""
     eps_used = ttm_eps(quarters) or _latest(annuals, "eps")
     np_, eps_a = _latest(annuals, "net_profit"), _latest(annuals, "eps")
-    # ponytail: shares inferred as np/eps (eps rounded to 2dp upstream) — mcap
-    # off a few % for low-eps stocks; good enough to screen, not to display.
-    shares = np_ / eps_a if np_ is not None and eps_a else None
+    shares_cr = shares / 1e7 if shares else None
+    if shares_cr is None and np_ is not None and eps_a:
+        # ponytail fallback: np/eps overstates shares when consolidated net
+        # profit includes minority interest (RELIANCE +11%) — reported shares
+        # replace this the first time a deep pass runs.
+        shares_cr = np_ / eps_a
     equity = (_latest(annuals, "reserves") or 0) + (_latest(annuals, "equity_cap") or 0) \
         if _latest(annuals, "reserves") is not None or _latest(annuals, "equity_cap") is not None \
         else None
     borrowings = _latest(annuals, "borrowings")
-    bv = _latest(annuals, "book_value")
-    if bv is None and equity is not None and equity > 0 and shares:
-        bv = equity / shares  # Cr / Cr-shares = ₹/share
-    payout = _latest(annuals, "div_payout")
+    bv = _latest(annuals, "book_value")  # reported ₹/share when a deep pass ran
+    if bv is None and equity is not None and equity > 0 and shares_cr:
+        bv = equity / shares_cr
     r = {"symbol": sym, "name": name, "sector": sector, "price": price,
-         "mcap_cr": round(price * shares, 1) if price and shares and shares > 0 else None,
+         "mcap_cr": round(price * shares_cr, 1) if price and shares_cr and shares_cr > 0 else None,
          "pe": round(price / eps_used, 2) if price and eps_used and eps_used > 0 else None,
          "pb": round(price / bv, 2) if price and bv and bv > 0 else None,
-         "div_yield": round(payout * eps_a / 100 / price * 100, 2)
-             if price and payout is not None and eps_a and eps_a > 0 else None,
+         "div_yield": round(dps_ttm / price * 100, 2) if price and dps_ttm else None,
          # kaggle annuals carry no roe field — np/equity fills it
          "roe": _latest(annuals, "roe") if _latest(annuals, "roe") is not None
              else (round(np_ / equity * 100, 1)
@@ -749,6 +817,9 @@ def refresh_screener(sb, now):
                        "&kind=eq.shareholding&order=symbol,period"):
         if r.get("promoters") is not None:
             sh[r["symbol"]] = r["promoters"]  # ordered asc: last write = newest
+    summ = {r["symbol"]: r for r in
+            sb("GET", "fundamentals?select=symbol,shares:data->shares,"
+                      "dps_ttm:data->dps_ttm&kind=eq.summary&order=symbol")}
     if not annuals:
         return 0
     names = {c["nse_symbol"]: (c.get("name"), c.get("sector")) for c in
@@ -763,7 +834,9 @@ def refresh_screener(sb, now):
         price = p.price if p else prev.get(s)
         name, sector = names.get(s, (None, None))
         rows.append(screener_metrics_row(s, name, sector, annuals[s],
-                                         quarters.get(s, {}), sh.get(s), price, now))
+                                         quarters.get(s, {}), sh.get(s), price, now,
+                                         shares=summ.get(s, {}).get("shares"),
+                                         dps_ttm=summ.get(s, {}).get("dps_ttm")))
     return upsert(sb, rows, table="screener_metrics", key="symbol")
 
 
@@ -812,17 +885,38 @@ def refresh_deep_new(sb, now):
     return deep_fetch(sb, todo, now) if todo else 0
 
 
+WARM_CAP = 150  # deep symbols per daily warm pass; full covered market ~12 days
+
+
+def warm_universe(ages, priority, now, cap):
+    """Symbols to deep-warm today: priority names first, then oldest summary
+    first; anything summarized within DEEP_MAX_AGE_D is skipped. `ages` is
+    {symbol: summary updated_at iso or ''} — iso strings compare fine."""
+    cutoff = (now - timedelta(days=DEEP_MAX_AGE_D)).isoformat()
+    stale = {s for s, at in ages.items() if (at or "") < cutoff}
+    out = [s for s in priority if s in stale]
+    rest = sorted((s for s in stale if s not in set(priority)),
+                  key=lambda s: ages.get(s) or "")
+    return (out + rest)[:cap]
+
+
 def refresh_deep_warm(sb, now):
-    """Daily 17:30 IST: Nifty50 + followed companies, staleness-gated."""
-    syms = [c["nse_symbol"] for c in
-            sb("GET", "companies?select=nse_symbol&is_nifty50=eq.true") if c.get("nse_symbol")]
+    """Daily 17:30 IST: the whole covered market converges — followed and
+    Nifty50 every pass, the long tail oldest-first under WARM_CAP."""
+    ages = {r["symbol"]: r["updated_at"] for r in
+            sb("GET", "fundamentals?select=symbol,updated_at&kind=eq.summary&order=symbol")}
+    for r in sb("GET", "fundamentals?select=symbol&kind=eq.annual&order=symbol"):
+        ages.setdefault(r["symbol"], "")  # rows but no summary yet = most stale
+    priority = [c["nse_symbol"] for c in
+                sb("GET", "companies?select=nse_symbol&is_nifty50=eq.true")
+                if c.get("nse_symbol")]
     followed = [int(f["target_id"]) for f in
                 sb("GET", "follows?select=target_id&target_type=eq.company")
                 if str(f["target_id"]).isdigit()]
     for i in range(0, len(followed), 200):
         chunk = ",".join(str(c) for c in followed[i:i + 200])
-        syms += [c["nse_symbol"] for c in
-                 sb("GET", f"companies?select=nse_symbol&id=in.({chunk})") if c.get("nse_symbol")]
-    syms = list(dict.fromkeys(syms))
-    todo = [s for s in syms if s not in _existing_fresh(sb, syms, now)]
+        priority = [c["nse_symbol"] for c in
+                    sb("GET", f"companies?select=nse_symbol&id=in.({chunk})")
+                    if c.get("nse_symbol")] + priority
+    todo = warm_universe(ages, list(dict.fromkeys(priority)), now, WARM_CAP)
     return deep_fetch(sb, todo, now)

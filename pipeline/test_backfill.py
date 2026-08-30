@@ -52,6 +52,22 @@ def test_parse_transposed_annual_filters_partial_year_and_ttm():
     assert out["FY2023"] == {"sales": 702, "eps": 13.5}  # unmapped label skipped
 
 
+BANK_CSV = """,Mar 2022,Mar 2023
+Revenue,135936.0,170754.0
+Financing Profit,-9447.0,-10851.0
+Financing Margin %,-7.0,-6.0
+ROE %,16.9,17.2
+"""
+
+
+def test_parse_transposed_bank_labels():
+    out = bk.parse_transposed(BANK_CSV, annual=True)
+    a = out["FY2023"]
+    assert a["sales"] == 170754        # banks label the top line "Revenue"
+    assert a["op_profit"] == -10851 and a["opm"] == -6
+    assert a["roe"] == 17.2
+
+
 def test_parse_transposed_quarterly():
     out = bk.parse_transposed(QUARTER_CSV, annual=False)
     assert out == {"2023-06": {"sales": 191, "opm": 13.6},
@@ -91,6 +107,19 @@ def test_resolve_symbol_nse_then_bse_then_name():
              known, by_bse, by_name) == "20MICRONS"
     assert r({"NSE": "", "BSE": "", "Company_name": "Unknown Co"},
              known, by_bse, by_name) is None
+
+
+def test_refresh_symbols_flags_rows_gaining_sales():
+    items = {("HDFCBANK", "annual", "FY2023"): {"sales": 170754, "np": 1},
+             ("TCS", "annual", "FY2023"): {"sales": 225458}}
+    existing = {("HDFCBANK", "annual", "FY2023"): {"np": 1, "src": "kaggle"},  # no sales
+                ("HDFCBANK", "annual", "FY2022"): {"src": "kaggle"},
+                ("TCS", "annual", "FY2023"): {"sales": 225458, "src": "kaggle"}}
+    syms, overwritable = bk.refresh_symbols(items, existing)
+    assert syms == {"HDFCBANK"}
+    # every kaggle annual/quarter row of the flagged symbol becomes writable
+    assert overwritable == {("HDFCBANK", "annual", "FY2023"),
+                            ("HDFCBANK", "annual", "FY2022")}
 
 
 def test_rows_to_write_skips_existing_keys():
