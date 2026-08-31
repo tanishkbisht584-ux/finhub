@@ -22,6 +22,11 @@ def main():
     if len(sys.argv) > 1:
         only = set(sys.argv[1].split(","))
         syms = [s for s in syms if s in only]
+    else:  # resume: reported shares only ever land via this warm — skip done
+        done = {r["symbol"] for r in
+                sb("GET", "fundamentals?select=symbol,shares:data->shares"
+                          "&kind=eq.summary&order=symbol") if r.get("shares")}
+        syms = [s for s in syms if s not in done]
     print(f"warming {len(syms)} symbols (Yahoo only)…")
     done = 0
     for i in range(0, len(syms), 50):

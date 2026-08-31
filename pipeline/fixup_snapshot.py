@@ -152,8 +152,9 @@ def main():
         latest_fy = max(dps) if dps else None
         if latest_fy:
             summary["dps"] = dps[latest_fy]
-        if old_summary.get("shares"):
-            summary["shares"] = old_summary["shares"]
+        for keep in ("shares", "dps_ttm"):  # reported values from the warm
+            if old_summary.get(keep) is not None:
+                summary[keep] = old_summary[keep]
         summary["fixup"] = ts
         # payout rows already carry the split adjustment (computed on merged),
         # so on PK overlap they win — and one upsert batch must not hit the
