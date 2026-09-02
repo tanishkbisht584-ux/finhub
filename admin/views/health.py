@@ -66,7 +66,7 @@ def tri(label, val, fmt=lambda x: x):
 
 # notes routed under the group they explain; the rest under the header
 NOTE_AREA = {"Supabase reports": "platform", "GitHub": "platform", "maintenance": "app",
-             "pipeline switch": "pipeline"}
+             "pipeline switch": "pipeline", "market switch": "market", "market group": "market"}
 notes_for = lambda area: [n for n in v["notes"]  # noqa: E731
                           if next((a for k, a in NOTE_AREA.items() if k in n), None) == area]
 for n in notes_for(None):
@@ -143,11 +143,19 @@ if ec is not None:
 
 # ---------- Market data ----------
 qa_h = f.get("quote_age_h") or {}
-group("Market data", "quotes + list blobs the Markets tab reads", "market",
+gst = (f.get("market_status") or {}).get("groups") or {}
+fund_h = f.get("fund_age_h") or {}
+group("Market data", "quotes, list blobs, fundamentals + the screener", "market",
       [pill(f"{k} {a:.1f}h", a <= ops.MAX_QUOTE_AGE_H.get(k, 999)) for k, a in sorted(qa_h.items())]
+      + [pill(f"{t} {a:.1f}h", a <= ops.FUND_MAX_AGE_H) for t, a in sorted(fund_h.items())]
+      + ([pill(f"{sum(1 for s in gst.values() if not s.get('ok'))}/{len(gst)} groups failing",
+               all(s.get("ok") for s in gst.values()))] if gst else [])
       or [pill("no quote rows / not probed", True, DIM)])
+for n in notes_for("market"):
+    note(n, AMBER)
 if f.get("blob_age_h"):
     kv_rows([(k, f"{a:.1f}h ago") for k, a in sorted(f["blob_age_h"].items())])
+page_link("market", "→ Markets · per-group status, run-now, coverage, symbol inspector")
 
 # ---------- Sources ----------
 group("Sources", "the feeds the pipeline reads", "sources",

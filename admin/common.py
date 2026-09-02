@@ -39,6 +39,7 @@ NAV = {
                 ("sources", "Sources", ":material/rss_feed:")],
     "Operations": [("health", "Health", ":material/monitor_heart:"),
                    ("pipeline", "Pipeline", ":material/conveyor_belt:"),
+                   ("market", "Markets", ":material/candlestick_chart:"),
                    ("alerts", "Alerts", ":material/notifications_active:"),
                    ("ai", "AI", ":material/psychology:"),
                    ("doctor", "Doctor", ":material/stethoscope:")],
@@ -90,7 +91,8 @@ PAGE_FOR = {"logs": ("pipeline", "Pipeline · last run + stdout"),
             "keys": ("ai", "AI · keys + lanes"),
             "review": ("review", "Review · pending + flagged"),
             "switch": ("pipeline", "Pipeline · switches"),
-            "sources": ("sources", "Sources · stale + silent")}
+            "sources": ("sources", "Sources · stale + silent"),
+            "market": ("market", "Markets · per-group status + coverage")}
 
 
 # ---------- Supabase (PostgREST, service_role) ----------

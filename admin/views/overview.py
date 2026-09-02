@@ -2,6 +2,8 @@
 from common import *  # noqa: F401,F403
 
 run = pipeline_mod()
+import ops  # noqa: E402  (pipeline/ on sys.path after pipeline_mod)
+
 t, week = iso_days_ago(1), iso_days_ago(7)
 
 # ---------- one parallel burst for every number on the page ----------
@@ -72,6 +74,18 @@ if stale:
                                     + ", ".join(s["name"] for s in stale[:5]) + (" …" if len(stale) > 5 else ""), "sources"))
 if edge_total >= 5 and edge_bad * 2 > edge_total:
     issues.append(("edge failing", f"{edge_bad}/{edge_total} edge-function lane attempts failed today.", "ai"))
+groups_off = set(pc.get("groups_off") or [])
+mkt_groups = (cfg("market_status").get("groups") or {})
+mkt_bad = [g for g, s in mkt_groups.items() if g not in groups_off and not s.get("ok")
+           and (s.get("fails", 0) >= ops.GROUP_FAILS or s.get("daily"))]
+if mkt_bad and "market" not in off:
+    issues.append(("market group failing", "Market refresh group(s) failing: " + ", ".join(sorted(mkt_bad))
+                   + " — that data goes stale until fixed.", "market"))
+scr_rows = q_try("screener_metrics?select=updated_at&order=updated_at.desc&limit=1")
+if scr_rows and run_age(scr_rows[0], "updated_at") > ops.FUND_MAX_AGE_H * 3600 \
+        and "market" not in off and "screener" not in groups_off:
+    issues.append(("screener stale", f"screener_metrics last rebuilt {ago(scr_rows[0]['updated_at'])} ago "
+                                     "(daily 18:00 IST) — the app is screening on stale numbers.", "market"))
 if off:
     issues.append(("switched off", "Stages paused by a switch: " + ", ".join(off) + ".", "pipeline"))
 if n_pending >= 50:
