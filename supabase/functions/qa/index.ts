@@ -3,6 +3,7 @@
 // FTS. Tier 2: Tavily over whitelisted domains. The model must never answer
 // from its own knowledge.
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { cachedAnswer } from "../_shared/cache.ts";
 
 const sb = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -538,16 +539,12 @@ Deno.serve(async (req) => {
     const term = question.toLowerCase().replace(/\s+/g, " ");
     if (!DEFINE_TERMS.has(term)) return new Response("unknown term", { status: 400 });
     const hash = await questionHash(`define::${term}`);
-    const { data: hit } = await sb.from("qa_cache").select("answer_json")
-      .eq("question_hash", hash).maybeSingle();
-    if (hit) return Response.json(hit.answer_json);
-    const out = await conceptAnswer(
-      `What is ${term} in Indian markets? Explain briefly for a beginner.`, [term]);
-    if (!out) return new Response("all providers busy", { status: 503 });
-    if ("error" in out) return new Response("all providers busy", { status: 503 });
-    await sb.from("qa_cache").upsert({
-      question_hash: hash, answer_json: out, created_at: new Date().toISOString(),
+    const out = await cachedAnswer(sb, hash, null, async () => {
+      const a = await conceptAnswer(
+        `What is ${term} in Indian markets? Explain briefly for a beginner.`, [term]);
+      return !a || "error" in a ? null : a;
     });
+    if (!out) return new Response("all providers busy", { status: 503 });
     return Response.json(out);
   }
 
@@ -561,22 +558,18 @@ Deno.serve(async (req) => {
   if ((count ?? 0) >= (edgeCfg.daily_cap ?? 50)) return new Response("daily limit", { status: 429 });
 
   // Cache: identical question inside 15 min costs zero AI (market panic guard).
+  // cachedAnswer adds the stampede guard: N concurrent misses on a breaking
+  // story cost one model call, not N; a failure answers "busy" for 2 min.
   const norm = question.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ");
   const hash = await questionHash(norm);
-  const fresh = new Date(Date.now() - 15 * 60e3).toISOString();
-  const { data: hit } = await sb.from("qa_cache").select("answer_json, created_at")
-    .eq("question_hash", hash).gte("created_at", fresh).maybeSingle();
 
   // qa_ask logged for cache hits too — the guard counts questions, not AI calls.
   await sb.from("events").insert({ user_id: user.id, type: "qa_ask" });
 
-  if (hit) return Response.json(hit.answer_json);
-
-  const out = await answer(question);
-  if ("error" in out) return new Response("all providers busy", { status: 503 });
-
-  await sb.from("qa_cache").upsert({
-    question_hash: hash, answer_json: out, created_at: new Date().toISOString(),
+  const out = await cachedAnswer(sb, hash, 15 * 60e3, async () => {
+    const a = await answer(question);
+    return "error" in a ? null : a;
   });
+  if (!out) return new Response("all providers busy", { status: 503 });
   return Response.json(out);
 });
