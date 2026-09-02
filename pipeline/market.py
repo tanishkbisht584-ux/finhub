@@ -36,7 +36,8 @@ SPARK_BATCH = 20            # Yahoo's hard cap per call
 EQUITY_CAP = 200            # ~10 spark calls per refresh; raise after a week of clean logs
 TROY_OZ_G = 31.1035
 
-INDICES = {"^NSEI": "NIFTY 50", "^BSESN": "SENSEX", "^NSEBANK": "NIFTY Bank", "^CNXIT": "NIFTY IT"}
+INDICES = {"^NSEI": "NIFTY 50", "^BSESN": "SENSEX", "^NSEBANK": "NIFTY Bank", "^CNXIT": "NIFTY IT",
+           "^INDIAVIX": "India VIX"}  # verified on spark 2026-09-02; feeds fear/greed
 FX = {"USDINR=X": "USD/INR", "EURINR=X": "EUR/INR", "GBPINR=X": "GBP/INR", "JPYINR=X": "JPY/INR"}
 COMMODITIES = {"GC=F": "Gold (USD/oz)", "SI=F": "Silver (USD/oz)", "CL=F": "Crude WTI (USD/bbl)"}
 CRYPTO = {"bitcoin": "Bitcoin", "ethereum": "Ethereum", "solana": "Solana"}
@@ -66,7 +67,8 @@ _status = {}    # group -> last attempt outcome; mirrored to app_config `market_
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
-            "mf_new": 5, "analysis_new": 5, "deep_new": 5, "screener_px": 60}
+            "mf_new": 5, "analysis_new": 5, "deep_new": 5, "screener_px": 60,
+            "sentiment": 60}
 
 
 def market_hours(now):
@@ -972,6 +974,116 @@ def refresh_bonds(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+# ---------- sentiment composites (P2, worldmonitor study) ----------
+# Editorial scales, not empirical. methodology_version is bumped whenever a
+# component, scale, or weighting changes so clients and history can tell
+# versions apart. Equal weights over available components, renormalized when
+# one is missing (an exchange holiday without VIX must not fake a score) —
+# a score needs at least two real components or it is an anecdote.
+
+FG_VERSION = 1
+RISK_VERSION = 1
+
+
+def _scale(x, lo, hi):
+    """x -> 0..100 linearly, clamped; invert by passing lo > hi."""
+    if x is None:
+        return None
+    t = (x - lo) / (hi - lo)
+    return round(max(0.0, min(1.0, t)) * 100)
+
+
+def _blend(comp, labels):
+    comp = {k: v for k, v in comp.items() if v is not None}
+    if len(comp) < 2:
+        return None
+    score = round(sum(comp.values()) / len(comp))
+    label = next(l for cut, l in labels if score <= cut)
+    return {"score": score, "label": label, "components": comp}
+
+
+def compute_fear_greed(q, flows, fno):
+    """q: symbol -> quotes row. 0 = extreme fear, 100 = extreme greed."""
+    b = ((flows or {}).get("breadth") or {}).get("NIFTY 500") or {}
+    adv, dec = b.get("adv"), b.get("dec")
+    hi, lo = (fno or {}).get("hi52"), (fno or {}).get("lo52")
+    n = q.get("^NSEI") or {}
+    closes = [c for c in n.get("closes") or [] if c]
+    mean = sum(closes) / len(closes) if len(closes) >= 10 else None
+    comp = {
+        "vix": _scale((q.get("^INDIAVIX") or {}).get("price"), 26, 10),  # calm=greed
+        "breadth": round(adv / (adv + dec) * 100)
+                   if adv is not None and dec is not None and adv + dec else None,
+        "fii": _scale(((flows or {}).get("fii") or {}).get("net"), -3000, 3000),
+        "hi_lo": round(hi / (hi + lo) * 100) if hi is not None and lo is not None and hi + lo else None,
+        "momentum": _scale((n["price"] - mean) / mean * 100, -3, 3)
+                    if mean and n.get("price") else None,
+    }
+    out = _blend(comp, ((24, "Extreme fear"), (44, "Fear"), (55, "Neutral"),
+                        (75, "Greed"), (100, "Extreme greed")))
+    return {**out, "methodology_version": FG_VERSION} if out else None
+
+
+def compute_risk_index(q, flows, trending):
+    """0 = calm, 100 = stressed: VIX, FII selling, INR weakening, breadth
+    damage, high-confidence news spikes (signals.py trending blob)."""
+    b = ((flows or {}).get("breadth") or {}).get("NIFTY 500") or {}
+    adv, dec = b.get("adv"), b.get("dec")
+    spikes = (trending or {}).get("spikes") or []
+    comp = {
+        "vix": _scale((q.get("^INDIAVIX") or {}).get("price"), 10, 26),
+        "fii_outflow": _scale(((flows or {}).get("fii") or {}).get("net"), 3000, -3000),
+        "inr": _scale((q.get("USDINR=X") or {}).get("change_pct"), -0.6, 0.6),
+        "breadth": round(dec / (adv + dec) * 100)
+                   if adv is not None and dec is not None and adv + dec else None,
+        "news": _scale(sum(1 for s in spikes if s.get("confidence") == "high"), 0, 3),
+    }
+    out = _blend(comp, ((34, "Low"), (60, "Elevated"), (100, "High")))
+    return {**out, "methodology_version": RISK_VERSION} if out else None
+
+
+def market_summary_text(q, flows, fg, move_ctx):
+    """One-line market summary, zero AI — a template over numbers already in
+    the tables, so it survives a total model-lane outage."""
+    bits = []
+    for sym, name in (("^NSEI", "NIFTY"), ("^BSESN", "SENSEX")):
+        r = q.get(sym) or {}
+        if r.get("change_pct") is not None:
+            bits.append(f"{name} {r['change_pct']:+.1f}%")
+    parts = [", ".join(bits)] if bits else []
+    fii = ((flows or {}).get("fii") or {}).get("net")
+    dii = ((flows or {}).get("dii") or {}).get("net")
+    if fii is not None and dii is not None:
+        parts.append(f"FII {fii:+,.0f} cr / DII {dii:+,.0f} cr")
+    ex = (move_ctx or {}).get("explained") or []
+    if ex:
+        m = max(ex, key=lambda e: abs(e.get("chg") or 0))
+        parts.append(f"{m['symbol']} {m['chg']:+.1f}% on “{(m.get('title') or '')[:60]}”")
+    if fg:
+        parts.append(f"Mood: {fg['label'].lower()} ({fg['score']})")
+    return " · ".join(parts)
+
+
+def refresh_sentiment(sb, now):
+    """Fear/greed, risk index, and the no-AI market summary — DB reads only,
+    so it runs anywhere (never RUN_NOW-excluded). No computed_at in these
+    payloads: they are DERIVED blobs whose inputs (flows, trending, quotes)
+    already carry graded freshness, and a stable score must suppress its
+    write (write_blobs) rather than heartbeat a new timestamp every hour."""
+    q = {r["symbol"]: r for r in
+         sb("GET", "quotes?select=symbol,price,change_pct,closes&kind=in.(index,fx)")}
+    blobs = {r["key"]: r["payload"] for r in
+             sb("GET", "market_blobs?select=key,payload&key=in.(flows,fno,trending,move_context)")}
+    fg = compute_fear_greed(q, blobs.get("flows"), blobs.get("fno"))
+    risk = compute_risk_index(q, blobs.get("flows"), blobs.get("trending"))
+    text = market_summary_text(q, blobs.get("flows"), fg, blobs.get("move_context"))
+    ts = now.isoformat()
+    rows = ([{"key": "fear_greed", "payload": fg, "updated_at": ts}] if fg else []) + \
+           ([{"key": "risk_index", "payload": risk, "updated_at": ts}] if risk else []) + \
+           ([{"key": "market_summary", "payload": {"text": text}, "updated_at": ts}] if text else [])
+    return write_blobs(sb, rows)
+
+
 def refresh_nse_blobs(sb, now, session=None):
     known = {c["nse_symbol"] for c in sb("GET", "companies?select=nse_symbol") if c.get("nse_symbol")}
     s = session or nse_session()
@@ -1093,7 +1205,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("analysis_new", refresh_analysis_new),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
-          ("bonds", refresh_bonds),
+          ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),
           ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm),
           ("screener", refresh_screener), ("screener_px", refresh_screener_px))
 

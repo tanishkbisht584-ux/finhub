@@ -267,7 +267,8 @@ def test_market_is_an_admin_switch():
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new",
                                              "analysis_new", "fundamentals", "technicals",
-                                             "macro", "nse", "bonds", "deep_new", "deep_warm",
+                                             "macro", "nse", "bonds", "sentiment",
+                                             "deep_new", "deep_warm",
                                              "screener", "screener_px"]
 
 
@@ -580,3 +581,73 @@ def test_write_blobs_failed_upsert_is_not_suppressed(monkeypatch):
         pass
     # hash was not stamped on failure -> the retry actually writes
     assert market.write_blobs(sb, rows) == 1 and calls["n"] == 2
+
+
+# ---------- sentiment composites (fear/greed, risk, summary) ----------
+
+FLOWS = {"fii": {"buy": 100.0, "sell": 642.71, "net": -542.71},
+         "dii": {"buy": 100.0, "sell": 50.0, "net": 2124.14},
+         "breadth": {"NIFTY 500": {"adv": 217, "dec": 276}}}
+QROWS = {"^NSEI": {"symbol": "^NSEI", "price": 24252.0, "change_pct": 0.4,
+                   "closes": [24000.0 + i * 20 for i in range(12)]},
+         "^BSESN": {"symbol": "^BSESN", "price": 80000.0, "change_pct": 0.3, "closes": []},
+         "^INDIAVIX": {"symbol": "^INDIAVIX", "price": 12.0, "change_pct": -1.0, "closes": []},
+         "USDINR=X": {"symbol": "USDINR=X", "price": 95.7, "change_pct": 0.1, "closes": []}}
+
+
+def test_fear_greed_blends_components_and_renormalizes_missing():
+    fg = market.compute_fear_greed(QROWS, FLOWS, {"hi52": 34, "lo52": 12})
+    assert set(fg["components"]) == {"vix", "breadth", "fii", "hi_lo", "momentum"}
+    assert fg["components"]["vix"] == 88          # 12 on a 26->10 calm scale
+    assert fg["components"]["breadth"] == 44      # 217/(217+276)
+    assert fg["methodology_version"] == market.FG_VERSION
+    assert 0 <= fg["score"] <= 100 and fg["label"]
+    # VIX + hi/lo + momentum missing -> renormalize over what's left, not fake 0s
+    fg2 = market.compute_fear_greed({"^NSEI": {"price": None, "closes": []}}, FLOWS, {})
+    assert set(fg2["components"]) == {"breadth", "fii"}
+    # a single component is an anecdote, not a score
+    assert market.compute_fear_greed({}, {"fii": {"net": 100}}, {}) is None
+
+
+def test_risk_index_points_the_other_way():
+    risk = market.compute_risk_index(QROWS, FLOWS, {"spikes": [
+        {"confidence": "high"}, {"confidence": "low"}]})
+    assert risk["components"]["vix"] == 12        # calm VIX -> low risk
+    assert risk["components"]["breadth"] == 56    # decliners' share
+    assert risk["components"]["news"] == 33       # 1 high-conf spike of 3 saturating
+    assert risk["methodology_version"] == market.RISK_VERSION
+    assert risk["label"] in ("Low", "Elevated", "High")
+
+
+def test_market_summary_is_deterministic_and_no_ai():
+    fg = {"score": 58, "label": "Greed"}
+    move = {"explained": [{"symbol": "TCS", "chg": 4.2, "title": "TCS wins mega deal"},
+                          {"symbol": "INFY", "chg": -1.0, "title": "minor"}]}
+    text = market.market_summary_text(QROWS, FLOWS, fg, move)
+    assert text.startswith("NIFTY +0.4%, SENSEX +0.3%")
+    assert "FII -543 cr / DII +2,124 cr" in text
+    assert "TCS +4.2%" in text and "mega deal" in text
+    assert text.endswith("Mood: greed (58)")
+    # nothing available -> empty string, caller writes no blob
+    assert market.market_summary_text({}, {}, None, {}) == ""
+
+
+def test_refresh_sentiment_reads_db_only_and_writes_derived_blobs(monkeypatch):
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+
+    def sb(method, path, **kw):
+        if path.startswith("quotes"):
+            assert "kind=in.(index,fx)" in path
+            return list(QROWS.values())
+        if path.startswith("market_blobs?select=key,payload"):
+            return [{"key": "flows", "payload": FLOWS}, {"key": "fno", "payload": {"hi52": 3, "lo52": 1}}]
+        written.append((path, kw["json"]))
+
+    n = market.refresh_sentiment(sb, NOW)
+    assert n == 3
+    rows = written[0][1]
+    assert [r["key"] for r in rows] == ["fear_greed", "risk_index", "market_summary"]
+    # derived blobs carry no computed_at: unchanged scores must suppress writes
+    assert "computed_at" not in rows[0]["payload"]
+    assert market.refresh_sentiment(sb, NOW) == 0  # identical inputs -> suppressed
