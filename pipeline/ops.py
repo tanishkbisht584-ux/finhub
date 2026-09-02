@@ -48,7 +48,10 @@ FUND_MAX_AGE_H = 36  # fundamentals/screener_metrics rebuild daily; 36 h absorbs
 # keeps advancing (and with market.write_blobs suppression it stops advancing on
 # identical payloads), so only the payload's own dates reveal the freeze.
 # Budget = widest routine market gap (long weekend + holiday) + one missed run.
-BLOB_CONTENT_MAX_H = {"bonds": 120, "flows": 120}
+BLOB_CONTENT_MAX_H = {"bonds": 120, "flows": 120,
+                      # signal blobs (signals.py) rebuild every lap; 6h absorbs
+                      # GitHub's worst observed cron lag between resident runs
+                      "trending": 6, "move_context": 6}
 GROUP_FAILS = 3      # interval group: consecutive failures before it's a problem
                      # (daily groups alert on a single failure — one miss = a lost day)
 
@@ -96,6 +99,11 @@ def blob_content_age_h(key, payload, now):
         dates = [_parse_obs_date(y.get("date")) for y in (payload or {}).get("yields") or []]
     elif key == "flows":
         dates = [_parse_obs_date((payload or {}).get("date"))]
+    elif key in ("trending", "move_context"):  # our own build clock, full ISO
+        try:
+            dates = [datetime.fromisoformat(str((payload or {}).get("computed_at")))]
+        except ValueError:
+            dates = []
     else:
         dates = []
     dates = [d for d in dates if d]

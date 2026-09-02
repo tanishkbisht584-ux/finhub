@@ -1556,12 +1556,22 @@ def main(cfg=None):
             quotes = sum(market.refresh(sb).values())
         except Exception as e:
             print(f"MARKET FAIL: {e}")
+    signal_counts = {}
+    if on("market"):  # signal blobs ride the market switch: they publish market_blobs
+        try:
+            import signals
+            signal_counts = signals.refresh(
+                sb, recent_stories(), {s["name"]: s["authority"] for s in sources},
+                companies_by_key, lambda n: PUBLISHER.get(n, n), title_tokens)
+        except Exception as e:
+            print(f"SIGNALS FAIL: {e}")
     print(f"done: {processed} pending, {dropped} dropped (not India-relevant), {flagged} flagged"
           + (f", {merged} merged into an existing story" if merged else "")
           + (f", {quota_blocked} awaiting quota (retry next run)" if quota_blocked else "")
           + f" | editor: {releveled} releveled | alerts: {alerted} sent, {personal} personal alerts | "
           f"self-heal: {healed} recovered, {disabled} retired, {revived} revived, {approved} auto-approved"
-          + (f" | market: {quotes} quotes" if quotes else ""))
+          + (f" | market: {quotes} quotes" if quotes else "")
+          + (f" | signals: {signal_counts}" if signal_counts else ""))
     served = usage_report()
     if served:  # which lane actually carried the run — silent failover is visible
         print("AI served by: " + ", ".join(f"{m}={n}" for m, n in
@@ -1572,6 +1582,7 @@ def main(cfg=None):
             "quota_blocked": quota_blocked, "held": held, "releveled": releveled,
             "alerted": alerted, "personal": personal, "healed": healed,
             "disabled": disabled, "revived": revived, "approved": approved, "quotes": quotes,
+            "spikes": signal_counts.get("spikes", 0),
             "switched_off": [k for k, v in switches.items() if not v]}
 
 
