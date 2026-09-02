@@ -30,6 +30,11 @@ STMT_MODULES = ("incomeStatementHistory,balanceSheetHistory,cashflowStatementHis
 DEEP_MAX_AGE_D = 7   # summary row younger than this: skip the symbol
 DEEP_NEW_CAP = 5     # requested-symbol deep fetches per 5-min pass
 
+# process-lifetime failure tallies, mirrored to the app_config `market_status`
+# row by market.refresh — a basis-gate spike is a number, not a stdout grep
+counters = {"basis_drop": 0, "results_fail": 0, "chart_fail": 0,
+            "sym_fail": 0, "shp_fail": 0, "ratings_fail": 0}
+
 
 def fy_label(end):
     """Indian FY the end date falls in: Mar 2024 -> FY2024, Dec 2024 -> FY2025."""
@@ -426,6 +431,7 @@ def enrich_shareholding(sh, master_rows, fetch, cap=4):
         try:
             mapped = parse_shp_xml(fetch(url))
         except Exception as e:
+            counters["shp_fail"] += 1
             print(f"FUND SHP xbrl {period}: {e}")
             continue
         fetched += 1
@@ -684,6 +690,7 @@ def deep_fetch(sb, symbols, now, nse=True):
         try:
             ratings_feed = fetch_ratings_feed(nse_s)
         except Exception as e:
+            counters["ratings_fail"] += 1
             print(f"FUND ratings feed: {e}")
     for sym in symbols:
         try:
@@ -697,6 +704,7 @@ def deep_fetch(sb, symbols, now, nse=True):
             if annuals and not basis_ok(annuals, prior):
                 # standalone/mis-defined Yahoo statements: never written; the
                 # NSE consolidated XBRL below is the only statement source.
+                counters["basis_drop"] += 1
                 print(f"FUND basis mismatch {sym}: yahoo statements dropped")
                 annuals, quarters = {}, {}
             shareholding, docs = {}, {}
@@ -715,12 +723,14 @@ def deep_fetch(sb, symbols, now, nse=True):
                         period="Annual", keyfn=fy_of_nse)
                     annuals.update(missing_fy)
                 except Exception as e:
+                    counters["results_fail"] += 1
                     print(f"FUND results {sym}: {e}")
                 shareholding, docs = fetch_nse_deep(sym, nse_s, ratings_feed)
             closes, dps = [], None
             try:
                 closes, dps = fetch_chart_deep(sym, now)
             except Exception as e:
+                counters["chart_fail"] += 1
                 print(f"FUND chart {sym}: {e}")
             prior_sh = {r["period"]: r["data"] for r in
                         sb("GET", "fundamentals?select=period,data"
@@ -735,6 +745,7 @@ def deep_fetch(sb, symbols, now, nse=True):
                                               shareholding=shareholding, docs=docs),
                         table="fundamentals", key="symbol,kind,period")
         except Exception as e:
+            counters["sym_fail"] += 1
             print(f"FUND {sym}: {e}")
         time.sleep(0.5)
     return n

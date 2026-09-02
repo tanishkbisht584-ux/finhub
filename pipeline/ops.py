@@ -42,6 +42,9 @@ SLOW_MS = 3000       # median empty-read above this => gateway degraded
 # ponytail: flat hours, no market calendar; add trading-day logic only if this false-alarms
 MAX_QUOTE_AGE_H = {"fx": 4, "commodity": 4, "crypto": 4, "equity": 4, "index": 4,
                    "mf": 30, "macro": 30}
+FUND_MAX_AGE_H = 36  # fundamentals/screener_metrics rebuild daily; 36 h absorbs cron lag
+GROUP_FAILS = 3      # interval group: consecutive failures before it's a problem
+                     # (daily groups alert on a single failure — one miss = a lost day)
 
 
 def ops_push(title, body):
@@ -120,9 +123,25 @@ def gather(repo, gh_token, deep=False):
         f["top_age"] = min((_age_h(r["published_at"], now) for r in top), default=999)
         hr = iso(now - timedelta(hours=1))
         f["flagged_hour"] = len(sb("GET", f"stories?select=id&status=eq.flagged&created_at=gte.{hr}&limit={FLAG_SPIKE}"))
-        f["switches"] = load_config().get("switches") or {}
+        c = load_config()
+        f["switches"] = c.get("switches") or {}
+        f["groups_off"] = c.get("groups_off") or []
     except Exception as e:  # noqa: BLE001
         f["errors"]["supabase"] = str(e)
+
+    # market/fundamentals layer: per-group status written by market.refresh,
+    # plus freshness of the two screener tables (absent pre-migration 016/017)
+    try:
+        rows = sb("GET", "app_config?select=value&key=eq.market_status")
+        f["market_status"] = (rows[0]["value"] if rows else {}) or {}
+        ages = {}
+        for t in ("fundamentals", "screener_metrics"):
+            r2 = sb("GET", f"{t}?select=updated_at&order=updated_at.desc&limit=1")
+            if r2:
+                ages[t] = _age_h(r2[0]["updated_at"], now)
+        f["fund_age_h"] = ages
+    except Exception as e:  # noqa: BLE001
+        f["errors"]["fund"] = str(e)
 
     # our own run log (migration 010) — absent pre-migration, that's fine
     try:
@@ -225,7 +244,7 @@ def gather(repo, gh_token, deep=False):
 def evaluate(f):
     """facts -> {"problems": [{name, msg, fix, area}], "notes": [...], "dispatch": bool}.
     fix names the lever: repo | logs | keys | review | supabase | switch | platform |
-    sources | edge | None. area groups problems on the Health page.
+    sources | edge | market | None. area groups problems on the Health page.
     dispatch = restarting the pipeline can actually help right now."""
     p, notes = [], []
 
@@ -299,13 +318,37 @@ def evaluate(f):
         prob("edge failing", f"Edge functions: {f['edge_failed']}/{f['edge_calls']} AI lane attempts failed "
              "in the last hour (qa/deepread). See the AI page's call log.", "keys", "edge")
 
+    # market refresh groups + fundamentals freshness (market_status row, written
+    # by market.refresh each lap). Silent while the market switch is off — an
+    # intentional pause must not page anyone.
+    market_off = paused or switches.get("market") is False
+    if switches.get("market") is False:
+        notes.append("market switch is OFF (admin) — market/fundamentals checks below stay silent")
+    off = set(f.get("groups_off") or [])
+    if off:
+        notes.append(f"market group(s) disabled from admin: {', '.join(sorted(off))}")
+    if not market_off:
+        groups = (f.get("market_status") or {}).get("groups") or {}
+        bad = {g: s for g, s in groups.items() if g not in off and not s.get("ok")
+               and (s.get("fails", 0) >= GROUP_FAILS or s.get("daily"))}
+        if bad:
+            lst = "; ".join(f"{g} x{s.get('fails', 1)} ({(s.get('err') or '')[:80]})"
+                            for g, s in bad.items())
+            prob("market group failing", f"Market refresh group(s) failing: {lst} — the rest of the "
+                 "market layer keeps running; this data goes stale until fixed.", "market", "market")
+        for t, age in (f.get("fund_age_h") or {}).items():
+            if age > FUND_MAX_AGE_H and not ({"deep_warm", "deep_new"} if t == "fundamentals"
+                                             else {"screener"}) & off:
+                prob(f"{t} stale", f"Newest {t} row is {age:.0f}h old (rebuilds daily) — the screener "
+                     "and stock pages are serving stale numbers.", "market", "market")
+
     # deep-only facts (Health page); absent in the hourly watchdog, so silent there
     stale_kinds = [(k, a) for k, a in (f.get("quote_age_h") or {}).items()
                    if a > MAX_QUOTE_AGE_H.get(k, 999)]
     if stale_kinds:
         lst = ", ".join(f"{k} {a:.0f}h" for k, a in stale_kinds)
         prob("market stale", f"Stale market data: {lst} — the market refresh lane is stalled while the "
-             "rest of the pipeline runs; search the last run's stdout for 'MARKET FAIL'.", "logs", "market")
+             "rest of the pipeline runs; the Markets page shows per-group status.", "market", "market")
     if f.get("src_active") and f.get("src_stale", 0) * 2 > f["src_active"]:
         prob("sources stalled", f"{f['src_stale']}/{f['src_active']} active sources not fetched in 3 h — "
              "fetching itself is stalled, not individual feeds; check whether pipeline runs are alive.",

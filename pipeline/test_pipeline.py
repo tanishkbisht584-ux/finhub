@@ -1172,9 +1172,9 @@ def test_ops_evaluate_platform_and_deep_checks():
     # slow gateway with no incident listed -> its own platform problem; fast -> nothing
     assert [p["name"] for p in ops.evaluate({**healthy, "sb_latency_ms": 5000})["problems"]] == ["gateway slow"]
     assert ops.evaluate({**healthy, "sb_latency_ms": 400})["problems"] == []
-    # stale fx quotes -> market problem pointing at run logs; fresh equity -> nothing
+    # stale fx quotes -> market problem pointing at the Markets page; fresh equity -> nothing
     v = ops.evaluate({**healthy, "quote_age_h": {"fx": 6.0, "equity": 1.0}})
-    assert [(p["fix"], p["area"]) for p in v["problems"]] == [("logs", "market")] and "fx" in v["problems"][0]["msg"]
+    assert [(p["fix"], p["area"]) for p in v["problems"]] == [("market", "market")] and "fx" in v["problems"][0]["msg"]
     assert ops.evaluate({**healthy, "quote_age_h": {"mf": 20.0}})["problems"] == []
     # majority of sources stale -> stalled; minority -> fine
     assert [p["area"] for p in ops.evaluate({**healthy, "src_active": 10, "src_stale": 6})["problems"]] == ["sources"]
@@ -1188,3 +1188,34 @@ def test_ops_evaluate_platform_and_deep_checks():
     # every problem now carries an area for the Health page's grouping
     v = ops.evaluate({**healthy, "flagged_hour": 20, "quote_age_h": {"crypto": 9.0}})
     assert all(p["area"] for p in v["problems"]) and {p["area"] for p in v["problems"]} == {"ai", "market"}
+
+
+def test_ops_evaluate_market_groups_and_fund_freshness():
+    import ops
+    healthy = {"errors": {}, "private": False, "crash_loop": False, "gh_active": False,
+               "approved_age": 0.5, "ingested_age": 0.2, "top_age": 1.0, "flagged_hour": 0,
+               "switches": {}, "last_run_ok": True, "edge_calls": 10, "edge_failed": 1}
+    fail = {"ok": False, "err": "boom", "fails": 1, "daily": False}
+    # interval group below the consecutive-failure bar -> silent; at the bar -> problem
+    v = ops.evaluate({**healthy, "market_status": {"groups": {"fxcom": fail}}})
+    assert v["problems"] == []
+    v = ops.evaluate({**healthy, "market_status": {"groups": {"fxcom": {**fail, "fails": 3}}}})
+    assert [(p["fix"], p["area"]) for p in v["problems"]] == [("market", "market")]
+    assert "fxcom" in v["problems"][0]["msg"] and "boom" in v["problems"][0]["msg"]
+    # a daily group alerts on its first failure — one miss is a lost day
+    v = ops.evaluate({**healthy, "market_status": {"groups": {"screener": {**fail, "daily": True}}}})
+    assert [p["name"] for p in v["problems"]] == ["market group failing"]
+    # admin-disabled group: never a problem, only a note
+    v = ops.evaluate({**healthy, "groups_off": ["screener"],
+                      "market_status": {"groups": {"screener": {**fail, "daily": True}}}})
+    assert v["problems"] == [] and any("disabled" in n for n in v["notes"])
+    # market switch off silences the whole layer
+    v = ops.evaluate({**healthy, "switches": {"market": False}, "fund_age_h": {"screener_metrics": 99},
+                      "market_status": {"groups": {"screener": {**fail, "daily": True}}}})
+    assert v["problems"] == [] and any("market switch" in n for n in v["notes"])
+    # stale screener/fundamentals tables -> problem; fresh -> silent
+    v = ops.evaluate({**healthy, "fund_age_h": {"screener_metrics": 40.0, "fundamentals": 10.0}})
+    assert [p["name"] for p in v["problems"]] == ["screener_metrics stale"]
+    # but not when its own refresh group is deliberately off
+    v = ops.evaluate({**healthy, "groups_off": ["screener"], "fund_age_h": {"screener_metrics": 40.0}})
+    assert v["problems"] == []

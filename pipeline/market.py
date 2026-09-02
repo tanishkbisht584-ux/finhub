@@ -60,6 +60,7 @@ Parsed = namedtuple("Parsed", "price prev change_pct as_of closes")
 # ---------- cadence ----------
 
 _last_run = {}  # group -> utc datetime of the last attempt (success or not)
+_status = {}    # group -> last attempt outcome; mirrored to app_config `market_status`
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
@@ -1072,15 +1073,41 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
 
 def refresh(sb, now=None):
     """Run every due group; one failing group never blocks another, and a
-    failure waits out its interval like a success (no 45-second hammering)."""
+    failure waits out its interval like a success (no 45-second hammering).
+    Every attempt lands in the app_config `market_status` row so the admin
+    and the watchdog see per-group state instead of grepping stdout; a
+    `groups_off` list on the pipeline config row disables single groups."""
     now = now or datetime.now(timezone.utc)
+    todo = [(g, fn) for g, fn in GROUPS if due(g, now)]
+    if not todo:
+        return {}
+    off = set()
+    try:
+        rows = sb("GET", "app_config?select=value&key=eq.pipeline")
+        off = set(((rows[0]["value"] if rows else {}) or {}).get("groups_off") or [])
+    except Exception:
+        pass  # config unreadable -> run everything, as before
     counts = {}
-    for group, fn in GROUPS:
-        if not due(group, now):
+    for group, fn in todo:
+        if group in off:  # _last_run untouched: re-enabling runs it promptly
             continue
         _last_run[group] = now
+        prev = _status.get(group) or {}
+        daily = group in DAILY_SLOT or group == "macro"
         try:
             counts[group] = fn(sb, now)
+            _status[group] = {"ok": True, "ts": now.isoformat(), "ok_ts": now.isoformat(),
+                              "err": None, "fails": 0, "daily": daily}
         except Exception as e:
             print(f"MARKET FAIL {group}: {e}")
+            _status[group] = {"ok": False, "ts": now.isoformat(), "ok_ts": prev.get("ok_ts"),
+                              "err": str(e)[:300], "fails": (prev.get("fails") or 0) + 1,
+                              "daily": daily}
+    try:
+        import fundamentals  # local: it imports us
+        upsert(sb, [{"key": "market_status",
+                     "value": {"groups": _status, "fund": fundamentals.counters},
+                     "updated_at": now.isoformat()}], table="app_config", key="key")
+    except Exception as e:
+        print(f"MARKET status write: {e}")
     return counts

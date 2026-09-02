@@ -210,6 +210,55 @@ def test_refresh_isolates_a_failing_group(monkeypatch):
     assert set(market._last_run) == {"index", "fxcom", "crypto"}  # a failure waits its interval too
 
 
+def test_refresh_records_status_and_honours_groups_off(monkeypatch):
+    monkeypatch.setattr(market, "_last_run", {})
+    monkeypatch.setattr(market, "_status", {})
+    writes = []
+
+    def sb(method, path, **kw):
+        if method == "GET":
+            return [{"value": {"groups_off": ["crypto"]}}]
+        writes.append((path, kw["json"]))
+
+    def bad(sb_, now):
+        raise RuntimeError("yahoo down")
+
+    monkeypatch.setattr(market, "GROUPS", (("index", bad), ("crypto", lambda s, n: 1),
+                                           ("screener", lambda s, n: 2)))
+    now = datetime(2026, 9, 2, 13, 0, tzinfo=UTC)
+    counts = market.refresh(sb, now)
+    assert counts == {"screener": 2}                 # crypto disabled, index failed
+    assert "crypto" not in market._last_run          # off group runs promptly when re-enabled
+    st = market._status
+    assert st["index"] == {"ok": False, "ts": now.isoformat(), "ok_ts": None,
+                           "err": "yahoo down", "fails": 1, "daily": False}
+    assert st["screener"]["ok"] is True and st["screener"]["daily"] is True
+    (path, rows), = [w for w in writes if w[0].startswith("app_config")]
+    assert rows[0]["key"] == "market_status"
+    assert rows[0]["value"]["groups"]["index"]["ok"] is False and "fund" in rows[0]["value"]
+
+
+def test_refresh_status_fail_streak_and_recovery(monkeypatch):
+    monkeypatch.setattr(market, "_status", {})
+    flaky = {"n": 0}
+
+    def fn(sb_, now):
+        flaky["n"] += 1
+        if flaky["n"] < 3:
+            raise RuntimeError(f"fail {flaky['n']}")
+        return 1
+
+    monkeypatch.setattr(market, "GROUPS", (("fxcom", fn),))
+    sb = lambda *a, **k: []  # noqa: E731  config read -> nothing off; writes swallowed
+    t0 = datetime(2026, 9, 2, 13, 0, tzinfo=UTC)
+    for lap in range(3):
+        monkeypatch.setattr(market, "_last_run", {})
+        market.refresh(sb, t0 + timedelta(minutes=20 * lap))
+    st = market._status["fxcom"]
+    assert st["ok"] is True and st["fails"] == 0 and st["err"] is None
+    assert st["ok_ts"] == (t0 + timedelta(minutes=40)).isoformat()
+
+
 def test_market_is_an_admin_switch():
     from run import SWITCHES
     assert "market" in SWITCHES
