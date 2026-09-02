@@ -455,6 +455,7 @@ def test_refresh_nse_blobs_isolates_one_dead_endpoint(monkeypatch):
             raise AssertionError(url)
 
     written = []
+    monkeypatch.setattr(market, "_blob_sent", {})
 
     def sb(method, path, **kw):
         if method == "GET":
@@ -522,6 +523,7 @@ def test_parse_stooq_csv_and_refresh_bonds(monkeypatch):
             pass
 
     monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    monkeypatch.setattr(market, "_blob_sent", {})
     written = []
 
     def sb(method, path, **kw):
@@ -537,3 +539,44 @@ def test_parse_stooq_csv_and_refresh_bonds(monkeypatch):
 
     monkeypatch.setattr(market.requests, "get", dead)
     assert market.refresh_bonds(sb, NOW) == 0  # no data -> old blob stays
+
+
+# ---------- write_blobs: egress suppression ----------
+
+def test_write_blobs_skips_unchanged_payloads_and_retries_failures(monkeypatch):
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+
+    def sb(method, path, **kw):
+        written.append(kw["json"])
+
+    rows = [{"key": "flows", "payload": {"fii": 1}, "updated_at": NOW.isoformat()},
+            {"key": "fno", "payload": {"hi52": 9}, "updated_at": NOW.isoformat()}]
+    assert market.write_blobs(sb, rows) == 2
+    # identical payloads again (off-hours lap): nothing written, updated_at untouched
+    assert market.write_blobs(sb, rows) == 0
+    assert len(written) == 1
+    # one payload changes: only that row goes out
+    rows2 = [{"key": "flows", "payload": {"fii": 2}, "updated_at": NOW.isoformat()},
+             {"key": "fno", "payload": {"hi52": 9}, "updated_at": NOW.isoformat()}]
+    assert market.write_blobs(sb, rows2) == 1
+    assert [r["key"] for r in written[1]] == ["flows"]
+
+
+def test_write_blobs_failed_upsert_is_not_suppressed(monkeypatch):
+    monkeypatch.setattr(market, "_blob_sent", {})
+    calls = {"n": 0}
+
+    def sb(method, path, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise market.requests.RequestException("supabase blip")
+
+    rows = [{"key": "bonds", "payload": {"yields": []}, "updated_at": NOW.isoformat()}]
+    try:
+        market.write_blobs(sb, rows)
+        raise AssertionError("first write should have raised")
+    except market.requests.RequestException:
+        pass
+    # hash was not stamped on failure -> the retry actually writes
+    assert market.write_blobs(sb, rows) == 1 and calls["n"] == 2

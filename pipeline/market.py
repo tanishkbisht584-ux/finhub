@@ -13,6 +13,8 @@ PostgREST helper `sb` is passed in.
 ponytail: Yahoo spark is the single equity source. Trigger to add Twelve Data
 (800/day, keyed): runner 403/429 on >5% of spark calls for a day.
 """
+import hashlib
+import json
 import os
 import re
 import time
@@ -171,6 +173,31 @@ def upsert(sb, rows, table="quotes", key="symbol"):
             sb("POST", f"{table}?on_conflict={key}", json=batch[i:i + 100],
                headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
     return len(rows)
+
+
+_blob_sent = {}  # key -> sha256 of last payload this process wrote
+
+
+def write_blobs(sb, rows):
+    """market_blobs upsert that skips payloads identical to this process's last
+    write. Keeps updated_at meaning "content changed", so the app's delta reads
+    (updated_at=gt.since) refetch a blob only when it actually moved — an
+    off-hours lap rewriting identical NSE lists must not bump every client.
+    Hashes are stamped only after the upsert succeeds, so a transient write
+    failure retries instead of being suppressed until the payload changes.
+    ponytail: in-process memory only — the first lap after a restart rewrites
+    everything once, which is fine."""
+    fresh = [r for r in rows if _blob_sent.get(r["key"]) != _blob_hash(r["payload"])]
+    if not fresh:
+        return 0
+    n = upsert(sb, fresh, table="market_blobs", key="key")
+    for r in fresh:
+        _blob_sent[r["key"]] = _blob_hash(r["payload"])
+    return n
+
+
+def _blob_hash(payload):
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 # ---------- phase 1 groups ----------
@@ -941,8 +968,8 @@ def refresh_bonds(sb, now):
                        "chg_bp": round((y - prev) * 100, 1) if prev is not None else None})
     if not yields:
         return 0  # old blob stays; never had one -> no BONDS section
-    return upsert(sb, [{"key": "bonds", "payload": {"yields": yields},
-                        "updated_at": now.isoformat()}], table="market_blobs", key="key")
+    return write_blobs(sb, [{"key": "bonds", "payload": {"yields": yields},
+                             "updated_at": now.isoformat()}])
 
 
 def refresh_nse_blobs(sb, now, session=None):
@@ -1037,7 +1064,7 @@ def refresh_nse_blobs(sb, now, session=None):
             rows.append({"key": key, "payload": fn(), "updated_at": now.isoformat()})
         except Exception as e:  # the old blob stays; the app shows its age
             print(f"MARKET NSE {key}: {e}")
-    return upsert(sb, rows, table="market_blobs", key="key")
+    return write_blobs(sb, rows)
 
 
 def refresh_deep_new(sb, now):

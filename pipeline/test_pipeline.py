@@ -1219,3 +1219,27 @@ def test_ops_evaluate_market_groups_and_fund_freshness():
     # but not when its own refresh group is deliberately off
     v = ops.evaluate({**healthy, "groups_off": ["screener"], "fund_age_h": {"screener_metrics": 40.0}})
     assert v["problems"] == []
+
+
+def test_ops_blob_content_age_grades_frozen_upstreams():
+    import ops
+    from datetime import datetime, timezone
+    now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    # bonds: newest yield date wins; flows: NSE's DD-MMM-YYYY parses too
+    bonds = {"yields": [{"tenor": "10Y", "date": "2026-09-01"}, {"tenor": "5Y", "date": "2026-08-28"}]}
+    assert ops.blob_content_age_h("bonds", bonds, now) == 36.0
+    assert ops.blob_content_age_h("flows", {"date": "01-Sep-2026", "fii": {}}, now) == 36.0
+    # no parseable date -> None (unknown), never a fabricated clock
+    assert ops.blob_content_age_h("flows", {"fii": {}}, now) is None
+    assert ops.blob_content_age_h("bonds", {"yields": []}, now) is None
+    assert ops.blob_content_age_h("other", {"date": "2026-09-01"}, now) is None
+
+    healthy = {"errors": {}, "private": False, "crash_loop": False, "gh_active": False,
+               "approved_age": 0.5, "ingested_age": 0.2, "top_age": 1.0, "flagged_hour": 0,
+               "switches": {}, "last_run_ok": True, "edge_calls": 10, "edge_failed": 1}
+    # inside the long-weekend budget -> silent; past it -> market problem
+    assert ops.evaluate({**healthy, "blob_content_age_h": {"bonds": 100.0}})["problems"] == []
+    v = ops.evaluate({**healthy, "blob_content_age_h": {"bonds": 200.0, "flows": 50.0}})
+    assert [(p["name"], p["fix"], p["area"]) for p in v["problems"]] == \
+        [("blob content frozen", "market", "market")]
+    assert "bonds" in v["problems"][0]["msg"] and "flows" not in v["problems"][0]["msg"]

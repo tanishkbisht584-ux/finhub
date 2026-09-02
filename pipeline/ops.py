@@ -43,6 +43,12 @@ SLOW_MS = 3000       # median empty-read above this => gateway degraded
 MAX_QUOTE_AGE_H = {"fx": 4, "commodity": 4, "crypto": 4, "equity": 4, "index": 4,
                    "mf": 30, "macro": 30}
 FUND_MAX_AGE_H = 36  # fundamentals/screener_metrics rebuild daily; 36 h absorbs cron lag
+# Blob content-age: the date the data INSIDE the blob claims, not when we wrote
+# the row. A frozen upstream keeps answering 200 with old data — row updated_at
+# keeps advancing (and with market.write_blobs suppression it stops advancing on
+# identical payloads), so only the payload's own dates reveal the freeze.
+# Budget = widest routine market gap (long weekend + holiday) + one missed run.
+BLOB_CONTENT_MAX_H = {"bonds": 120, "flows": 120}
 GROUP_FAILS = 3      # interval group: consecutive failures before it's a problem
                      # (daily groups alert on a single failure — one miss = a lost day)
 
@@ -70,6 +76,30 @@ def ops_push(title, body):
 def _age_h(ts, now):
     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     return (now - dt).total_seconds() / 3600
+
+
+def _parse_obs_date(s):
+    """Stooq '2026-09-01' or NSE '01-Sep-2026' -> aware UTC datetime, else None."""
+    for fmt in ("%Y-%m-%d", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def blob_content_age_h(key, payload, now):
+    """Hours since the newest observation date inside a blob payload, or None
+    when the payload carries no parseable date — unknown must never grade as
+    stale (a fabricated clock would hide the very freeze this exists to catch)."""
+    if key == "bonds":
+        dates = [_parse_obs_date(y.get("date")) for y in (payload or {}).get("yields") or []]
+    elif key == "flows":
+        dates = [_parse_obs_date((payload or {}).get("date"))]
+    else:
+        dates = []
+    dates = [d for d in dates if d]
+    return (now - max(dates)).total_seconds() / 3600 if dates else None
 
 
 def gather(repo, gh_token, deep=False):
@@ -204,6 +234,10 @@ def gather(repo, gh_token, deep=False):
             f["quote_age_h"] = ages
             f["blob_age_h"] = {r["key"]: _age_h(r["updated_at"], now)
                                for r in sb("GET", "market_blobs?select=key,updated_at")}
+            keys = ",".join(BLOB_CONTENT_MAX_H)
+            f["blob_content_age_h"] = {
+                r["key"]: a for r in sb("GET", f"market_blobs?select=key,payload&key=in.({keys})")
+                if (a := blob_content_age_h(r["key"], r.get("payload"), now)) is not None}
         except Exception as e:  # noqa: BLE001
             f["errors"]["market"] = str(e)
         try:  # sources: bulk-stale means fetching itself stalled, not one bad feed
@@ -349,6 +383,13 @@ def evaluate(f):
         lst = ", ".join(f"{k} {a:.0f}h" for k, a in stale_kinds)
         prob("market stale", f"Stale market data: {lst} — the market refresh lane is stalled while the "
              "rest of the pipeline runs; the Markets page shows per-group status.", "market", "market")
+    frozen = [(k, a) for k, a in (f.get("blob_content_age_h") or {}).items()
+              if a > BLOB_CONTENT_MAX_H.get(k, 999)]
+    if frozen:
+        lst = ", ".join(f"{k} (data dated {a / 24:.0f}d ago)" for k, a in frozen)
+        prob("blob content frozen", f"Upstream content frozen: {lst} — the fetch still succeeds but "
+             "the dates inside the payload stopped moving past a long-weekend budget; the upstream "
+             "has likely stalled silently.", "market", "market")
     if f.get("src_active") and f.get("src_stale", 0) * 2 > f["src_active"]:
         prob("sources stalled", f"{f['src_stale']}/{f['src_active']} active sources not fetched in 3 h — "
              "fetching itself is stalled, not individual feeds; check whether pipeline runs are alive.",
