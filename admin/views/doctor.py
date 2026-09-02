@@ -13,7 +13,16 @@ MARKERS = {"001": "stories?select=id", "003": "profiles?select=id", "004": "stor
            "007": "stories?select=video_url", "008": "stories?select=deep_read",
            "010": "app_config?select=key", "011": "quotes?select=symbol",
            "012": "stories?select=updated_at", "013": "analysis_requests?select=symbol",
-           "014": "stories?select=claim_status"}
+           "014": "stories?select=claim_status", "016": "fundamentals?select=symbol",
+           "017": "screener_metrics?select=symbol"}
+# constraint-only migrations are invisible to PostgREST — probe pg_constraint
+# through the Management API instead (no token -> status stays unknown)
+SQL_MARKERS = {
+    "015": "select 1 from pg_constraint where conname='follows_target_type_check'"
+           " and pg_get_constraintdef(oid) like '%cluster%'",
+    "018": "select 1 from pg_constraint where conname='fundamentals_symbol_check'"
+           " and pg_get_constraintdef(oid) like '%[A-Z0-9][A-Z0-9&-]%'",
+}
 MIG_DIR = REPO / "pipeline" / "migrations"
 
 
@@ -25,6 +34,12 @@ migs = sorted(MIG_DIR.glob("*.sql"))
 with ThreadPoolExecutor(8) as _ex:
     status = dict(zip([m.name for m in migs],
                       _ex.map(lambda m: probe(MARKERS[m.name[:3]]) if m.name[:3] in MARKERS else None, migs)))
+for _m in migs:  # main thread: run_sql -> mgmt_token touches st.secrets/cache_resource
+    if _m.name[:3] in SQL_MARKERS and mgmt_token():
+        try:
+            status[_m.name] = bool(run_sql(SQL_MARKERS[_m.name[:3]]))
+        except Exception:  # noqa: BLE001  probe failure = unknown, never a false PENDING
+            status[_m.name] = None
 pending = [m for m in migs if status[m.name] is False]
 
 header("Doctor", "Diagnose anything: the watchdog's checks with a fix beside each, schema, logs, environment.",

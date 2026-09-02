@@ -148,9 +148,10 @@ def q_try(path):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def schema_ok():
-    """True when every table the cockpit reads exists (010 + 011 applied)."""
-    with ThreadPoolExecutor(4) as ex:
-        return all(ex.map(table_exists, ("app_config", "pipeline_runs", "edge_log", "quotes")))
+    """True when every table the cockpit reads exists (010 + 011 + 016 + 017 applied)."""
+    with ThreadPoolExecutor(6) as ex:
+        return all(ex.map(table_exists, ("app_config", "pipeline_runs", "edge_log", "quotes",
+                                         "fundamentals", "screener_metrics")))
 
 
 def sb_all(path, page=1000):
