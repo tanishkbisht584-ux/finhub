@@ -20,6 +20,7 @@ class RemoteConfig {
     this.liveDefault = true,
     this.livePollSeconds = 15,
     this.ambientPollSeconds = 90,
+    this.marketsPollSeconds = 60,
   });
 
   final String minVersion;
@@ -33,6 +34,7 @@ class RemoteConfig {
   final bool liveDefault;
   final int livePollSeconds;
   final int ambientPollSeconds;
+  final int marketsPollSeconds;
 
   static const defaults = RemoteConfig();
 
@@ -58,6 +60,7 @@ class RemoteConfig {
       liveDefault: flag('live_default', defaults.liveDefault),
       livePollSeconds: secs('live_poll_seconds', defaults.livePollSeconds, 5),
       ambientPollSeconds: secs('ambient_poll_seconds', defaults.ambientPollSeconds, 15),
+      marketsPollSeconds: secs('markets_poll_seconds', defaults.marketsPollSeconds, 15),
     );
   }
 }

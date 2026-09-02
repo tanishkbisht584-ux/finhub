@@ -101,6 +101,7 @@ Future<void> _toEnd(WidgetTester tester) async {
 }
 
 void main() {
+  mergeMarketsTests();
   testWidgets('Markets body renders every section with formatted numbers',
       (tester) async {
     await tester.pumpWidget(_app(_data));
@@ -285,5 +286,44 @@ void main() {
   test('Markets is the second tab', () {
     expect(homeTabLabels, ['News', 'Markets', 'Ask', 'Profile']);
     expect(homeTabLabels[marketsTab], 'Markets');
+  });
+}
+
+// ---------- mergeMarkets: the 60s delta poll ----------
+
+void mergeMarketsTests() {
+  test('mergeMarkets overrides changed rows and keeps the rest', () {
+    final prev = MarketsData(
+      ticks: [_t('^NSEI', 'index', 'NIFTY 50', 24252, 0.08), _t('bitcoin', 'crypto', 'Bitcoin', 7395017, -0.19)],
+      watchlist: const [],
+      blobs: const {'flows': {'pcr': 1.08}, 'fno': {'hi52': 34}},
+      blobUpdated: {'flows': DateTime.utc(2026, 9, 2, 9), 'fno': DateTime.utc(2026, 9, 2, 9)},
+    );
+    final merged = mergeMarkets(
+      prev,
+      [_t('^NSEI', 'index', 'NIFTY 50', 24300, 0.28)],
+      {'flows': {'pcr': 1.11}},
+      {'flows': DateTime.utc(2026, 9, 2, 10)},
+      const [],
+      const {},
+    );
+    expect(merged.ticks.length, 2);
+    expect(merged.kind('index').single.price, 24300); // fresh row won
+    expect(merged.kind('crypto').single.price, 7395017); // untouched row kept
+    expect((merged.blobs['flows'] as Map)['pcr'], 1.11);
+    expect((merged.blobs['fno'] as Map)['hi52'], 34);
+    expect(merged.blobUpdated['flows'], DateTime.utc(2026, 9, 2, 10));
+    expect(merged.blobUpdated['fno'], DateTime.utc(2026, 9, 2, 9));
+  });
+
+  test('mergeMarkets with nothing fresh keeps the previous picture', () {
+    final prev = MarketsData(
+        ticks: [_t('^NSEI', 'index', 'NIFTY 50', 24252, 0.08)],
+        watchlist: const [],
+        blobs: const {'bonds': {'yields': []}},
+        blobUpdated: const {});
+    final merged = mergeMarkets(prev, const [], const {}, const {}, const [], const {});
+    expect(merged.ticks.single.price, 24252);
+    expect(merged.blobs['bonds'], isNotNull);
   });
 }

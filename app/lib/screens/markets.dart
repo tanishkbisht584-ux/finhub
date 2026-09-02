@@ -54,19 +54,67 @@ class MarketsData {
       .fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
 }
 
+/// Last full picture + the newest updated_at seen, kept at module level (like
+/// [ticks]) so the 60s poll and tab switches pay only for rows that changed
+/// since. The pipeline suppresses no-change blob writes (write_blobs), so an
+/// off-hours poll transfers nothing instead of every blob every minute.
+MarketsData? _lastMarkets;
+DateTime? _marketsSince;
+
+/// Pull-to-refresh escape hatch: forget the delta state so the next provider
+/// run is a full fetch.
+void resetMarketsDelta() {
+  _lastMarkets = null;
+  _marketsSince = null;
+}
+
+/// Pure merge for the delta path: fresh rows override by symbol/key, the rest
+/// carry over. watch/followedMf are always re-read (tiny per-user queries).
+MarketsData mergeMarkets(MarketsData prev, List<Tick> freshTicks,
+    Map<String, dynamic> freshBlobs, Map<String, DateTime> freshBlobUpdated,
+    List<Company> watch, Set<int> followedMf) {
+  final bySym = {for (final t in prev.ticks) t.symbol: t};
+  for (final t in freshTicks) {
+    bySym[t.symbol] = t;
+  }
+  return MarketsData(
+    ticks: bySym.values.toList()..sort((a, b) => a.symbol.compareTo(b.symbol)),
+    watchlist: watch,
+    followedMf: followedMf,
+    blobs: {...prev.blobs, ...freshBlobs},
+    blobUpdated: {...prev.blobUpdated, ...freshBlobUpdated},
+  );
+}
+
 final marketsProvider = FutureProvider.autoDispose<MarketsData>((ref) async {
   final sb = Supabase.instance.client;
-  final rows = await sb
+  final prev = _lastMarkets;
+  // Strictly-greater misses a same-instant write; the pipeline stamps
+  // microseconds and quotes rewrite within 15 min anyway — accepted.
+  final since = prev == null ? null : _marketsSince?.toIso8601String();
+  var q = sb
       .from('quotes')
       .select(tickColsWithCloses)
-      .inFilter('kind', ['index', 'fx', 'crypto', 'commodity', 'mf', 'macro']).order('symbol');
+      .inFilter('kind', ['index', 'fx', 'crypto', 'commodity', 'mf', 'macro']);
+  if (since != null) q = q.gt('updated_at', since);
+  final List<dynamic> rows;
+  try {
+    rows = await q.order('symbol');
+  } catch (_) {
+    // Offline or Supabase having a moment: yesterday's numbers beat an error
+    // screen — but only once we have numbers at all.
+    if (prev != null) return prev;
+    rethrow;
+  }
   final all = [
     for (final r in rows) Tick.fromJson(Map<String, dynamic>.from(r))
   ];
   var blobs = <String, dynamic>{};
   var blobUpdated = <String, DateTime>{};
   try {
-    final bs = await sb.from('market_blobs').select('key,payload,updated_at');
+    var bq = sb.from('market_blobs').select('key,payload,updated_at');
+    if (since != null) bq = bq.gt('updated_at', since);
+    final bs = await bq;
     for (final b in bs) {
       blobs[b['key'] as String] = b['payload'];
       final u = DateTime.tryParse(b['updated_at'] ?? '');
@@ -111,12 +159,25 @@ final marketsProvider = FutureProvider.autoDispose<MarketsData>((ref) async {
     }
   }
   mergeTicks(all);
-  return MarketsData(
-      ticks: all,
-      watchlist: watch,
-      followedMf: followedMf,
-      blobs: blobs,
-      blobUpdated: blobUpdated);
+  final data = prev == null
+      ? MarketsData(
+          ticks: all,
+          watchlist: watch,
+          followedMf: followedMf,
+          blobs: blobs,
+          blobUpdated: blobUpdated)
+      : mergeMarkets(prev, all, blobs, blobUpdated, watch, followedMf);
+  var mx = _marketsSince;
+  for (final t in all) {
+    final u = t.updatedAt;
+    if (u != null && (mx == null || u.isAfter(mx))) mx = u;
+  }
+  for (final u in blobUpdated.values) {
+    if (mx == null || u.isAfter(mx)) mx = u;
+  }
+  _marketsSince = mx;
+  _lastMarkets = data;
+  return data;
 });
 
 /// Spec add-on (2026-08-22): "what is the market doing" next to "what
@@ -147,7 +208,8 @@ class _MarketsScreenState extends ConsumerState<MarketsScreen> {
     if (homeTab.value != marketsTab) return;
     ref.invalidate(marketsProvider);
     _timer = Timer.periodic(
-        const Duration(seconds: 60), (_) => ref.invalidate(marketsProvider));
+        Duration(seconds: remoteConfig.marketsPollSeconds),
+        (_) => ref.invalidate(marketsProvider));
   }
 
   @override
@@ -216,7 +278,10 @@ class _MarketsScreenState extends ConsumerState<MarketsScreen> {
         data: (d) => RefreshIndicator(
           color: green,
           backgroundColor: surface,
-          onRefresh: () => ref.refresh(marketsProvider.future),
+          onRefresh: () {
+            resetMarketsDelta(); // user asked: full fetch, not a delta
+            return ref.refresh(marketsProvider.future);
+          },
           child: MarketsBody(d, onFollowMf: _followMf, onAddMf: _addMf),
         ),
       ),
