@@ -20,3 +20,6 @@ jobs:
       - run: pip install requests
       - run: python probe_nse.py
         working-directory: pipeline
+        continue-on-error: true
+      - run: python probe_global.py
+        working-directory: pipeline
