@@ -22,6 +22,7 @@ SPIKE_MIN_OUTLETS = 3  # independent newsrooms — one prolific feed can't fake 
 SPIKE_CAP = 8          # blob keeps the strongest few, not a tag cloud
 UNUSUAL_MIN_OUTLETS = 4
 MOVER_MIN_PCT = 3.0    # an equity move worth explaining
+EXPLAIN_MIN_SCORE = 4  # bake tune 4 Sep: an AGM notice (score 1-3) does not explain a 4% move
 COUNT_STATUSES = ("approved", "pending", "duplicate")  # dupes ARE corroboration
 
 # Provenance class per NEWSROOM (post-PUBLISHER collapse). Everything absent is
@@ -65,6 +66,11 @@ def detect_spikes(window, now, publisher, tokens_of, authority):
         ts = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
         toks = tokens_of(r.get("headline") or "")
         for t in toks:
+            # bake tune 4 Sep: "384"/"56"/"won" spiked. Digits and 1-3 letter
+            # words are cluster identity, not topics — skip HERE, never in
+            # run.title_tokens (clustering owns that).
+            if t.isdigit() or len(t) < 4:
+                continue
             if ts >= cut:
                 six[t] = six.get(t, 0) + 1
                 sources6.setdefault(t, set()).add(r.get("source_name") or "")
@@ -117,17 +123,19 @@ def unusual_story_ids(window, publisher):
 
 
 def move_context(movers, links, window):
-    """movers: [(symbol, chg_pct)]; links: [(company_symbol, story_id)] for the
-    last 24h. Each big mover is 'explained' (a tagged story exists) or
+    """movers: [(symbol, chg_pct)]; links: [(company_symbol, story_id, impact_score)]
+    for the last 24h. Each big mover is 'explained' (a tagged story of at least
+    EXPLAIN_MIN_SCORE exists — highest score wins, newest breaks ties) or
     'unexplained' (silent divergence — price moved, no news we carry)."""
     by_id = {r["id"]: r for r in window}
     story_for = {}
-    for sym, sid in links:
+    for sym, sid, score in links:
         r = by_id.get(sid)
-        if r and r.get("status") == "approved":
+        if r and r.get("status") == "approved" and (score or 0) >= EXPLAIN_MIN_SCORE:
             cur = story_for.get(sym)
-            if cur is None or r["created_at"] > cur["created_at"]:
-                story_for[sym] = r
+            if cur is None or (score, r["created_at"]) > cur[0]:
+                story_for[sym] = ((score, r["created_at"]), r)
+    story_for = {sym: v[1] for sym, v in story_for.items()}
     explained, unexplained = [], []
     for sym, chg in movers:
         r = story_for.get(sym)
@@ -181,9 +189,10 @@ def refresh(sb, window, authority, companies_by_key, publisher, tokens_of, now=N
                     since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
                     cids = ",".join(str(c) for c in sym_by_cid)
                     for l in sb("GET", "story_companies?select=story_id,company_id,"
-                                       "stories!inner(created_at)"
+                                       "stories!inner(created_at,impact_score)"
                                        f"&stories.created_at=gte.{since}&company_id=in.({cids})"):
-                        links.append((sym_by_cid[l["company_id"]], l["story_id"]))
+                        links.append((sym_by_cid[l["company_id"]], l["story_id"],
+                                      (l.get("stories") or {}).get("impact_score") or 0))
             payload = {**move_context(movers, links, window), "computed_at": now.isoformat()}
             market.write_blobs(sb, [{"key": "move_context", "payload": payload,
                                      "updated_at": now.isoformat()}])

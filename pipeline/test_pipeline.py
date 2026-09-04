@@ -14,10 +14,13 @@ def _fresh_process_caches():
     """run.py memoizes per process (egress fix, 2026-08-23); tests must not
     see each other's cached windows, hashes or companies."""
     import run
-    run._recent_cache.update(at=0.0, since=None, start=None, rows={}, col="updated_at")
+    # at=None is each cache's own "never fetched" sentinel. at=0.0 looked the
+    # same until a machine with <1h uptime made monotonic()-0.0 < REFRESH_SECONDS
+    # and the empty cache read as fresh (4 Sep, PC booted 26 min earlier).
+    run._recent_cache.update(at=None, since=None, start=None, rows={}, col="updated_at")
     run._known_hashes.clear()
-    run._companies_cache.update(at=0.0, by_key={})
-    run._seen_images_cache.update(at=0.0, counts={})
+    run._companies_cache.update(at=None, by_key={})
+    run._seen_images_cache.update(at=None, counts={})
 
 
 def test_url_hash_strips_tracking_and_normalizes():

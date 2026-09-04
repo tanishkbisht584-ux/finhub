@@ -54,6 +54,19 @@ def test_detect_spikes_gates_on_floor_ratio_and_outlets():
     assert out[0]["confidence"] in ("med", "high")
 
 
+def test_detect_spikes_skips_numeric_and_short_tokens():
+    # bake tune 4 Sep: "384" and "won" topped prod trending. Same 4x3-newsroom
+    # shape that makes "adani" spike must NOT make a number or a 3-letter word spike.
+    window = [row(100 + i, "384 won big", 1 + i * 0.5, source=src)
+              for i, src in enumerate(["Reuters", "Mint", "Blog", "Reuters"])]
+    toks_all = lambda t: set(t.lower().split())  # noqa: E731  (no length filter)
+    assert signals.detect_spikes(window, NOW, pub, toks_all, AUTH) == []
+    out = signals.detect_spikes(window + [row(200 + i, "384 won hugely", 1, source=s)
+                                          for i, s in enumerate(["Reuters", "Mint", "Blog", "SEBI"])],
+                                NOW, pub, toks_all, AUTH)
+    assert [s["term"] for s in out] == ["hugely"]
+
+
 def test_detect_spikes_excludes_rejected_and_needs_a_publishable_story():
     window = [row(1, "junk term flood", 1, status="rejected", cluster=f"j{i}") for i in range(6)]
     assert signals.detect_spikes(window, NOW, pub, toks, AUTH) == []
@@ -86,7 +99,7 @@ def test_unusual_story_ids_counts_independent_newsrooms_per_cluster():
 def test_move_context_splits_explained_and_unexplained():
     window = [row(50, "TCS wins mega deal", 3), row(51, "TCS follow-up", 30)]
     movers = [("TCS", 4.2), ("INFY", -3.5)]
-    links = [("TCS", 50), ("TCS", 51)]
+    links = [("TCS", 50, 7), ("TCS", 51, 7)]
     out = signals.move_context(movers, links, window)
     assert out["explained"] == [{"symbol": "TCS", "chg": 4.2, "story_id": 50,
                                  "title": "TCS wins mega deal"}]
@@ -95,8 +108,19 @@ def test_move_context_splits_explained_and_unexplained():
 
 def test_move_context_ignores_links_to_unapproved_stories():
     window = [row(60, "rumour piece", 2, status="pending")]
-    out = signals.move_context([("TCS", 5.0)], [("TCS", 60)], window)
+    out = signals.move_context([("TCS", 5.0)], [("TCS", 60, 8)], window)
     assert out["explained"] == [] and out["unexplained"] == [{"symbol": "TCS", "chg": 5.0}]
+
+
+def test_move_context_prefers_impact_and_demotes_filings():
+    # bake tune 4 Sep: prod explained JKPAPER +4.2% with an AGM voting notice.
+    window = [row(70, "JK Paper submits AGM report and voting results", 1),   # newest, score 2
+              row(71, "JK Paper bags 400 cr export order", 5)]                # older, score 7
+    out = signals.move_context([("JKPAPER", 4.2)], [("JKPAPER", 70, 2), ("JKPAPER", 71, 7)], window)
+    assert out["explained"][0]["story_id"] == 71
+    # a symbol whose only news is a routine filing is honestly unexplained
+    out = signals.move_context([("JKPAPER", 4.2)], [("JKPAPER", 70, 2)], window)
+    assert out["explained"] == [] and out["unexplained"] == [{"symbol": "JKPAPER", "chg": 4.2}]
 
 
 # ---------- refresh orchestration ----------
@@ -110,7 +134,7 @@ def test_refresh_throttles_and_isolates_failures(monkeypatch):
         if path.startswith("quotes"):
             return [{"symbol": "TCS", "change_pct": 4.0}, {"symbol": "INFY", "change_pct": 0.2}]
         if path.startswith("story_companies"):
-            return [{"story_id": 50, "company_id": 7}]
+            return [{"story_id": 50, "company_id": 7, "stories": {"impact_score": 7}}]
         raise AssertionError(path)
 
     window = [row(50, "TCS wins mega deal", 3)]
