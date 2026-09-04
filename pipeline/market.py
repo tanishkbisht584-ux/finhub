@@ -1364,7 +1364,9 @@ def refresh(sb, now=None):
     try:
         import fundamentals  # local: it imports us
         upsert(sb, [{"key": "market_status",
-                     "value": {"groups": _status, "fund": fundamentals.counters},
+                     "value": {"groups": _status, "fund": fundamentals.counters,
+                               # deploy-drift: which commit this process runs (ops compares vs HEAD)
+                               "sha": os.environ.get("GITHUB_SHA", "")[:12]},
                      "updated_at": now.isoformat()}], table="app_config", key="key")
     except Exception as e:
         print(f"MARKET status write: {e}")

@@ -150,6 +150,9 @@ def gather(repo, gh_token, deep=False):
         done = [r for r in runs if r["status"] == "completed" and r["conclusion"] != "cancelled"]
         f["crash_loop"] = len(done) >= 3 and all(r["conclusion"] == "failure" for r in done[:3])
         f["last_gh_url"] = done[0]["html_url"] if done else None
+        head = call(gh + "/commits?per_page=1")[0]
+        f["head_sha"] = head["sha"][:12]
+        f["head_at"] = head["commit"]["committer"]["date"]
     except Exception as e:  # noqa: BLE001
         f["errors"]["github"] = str(e)
 
@@ -176,6 +179,9 @@ def gather(repo, gh_token, deep=False):
     try:
         rows = sb("GET", "app_config?select=value&key=eq.market_status")
         f["market_status"] = (rows[0]["value"] if rows else {}) or {}
+        f["run_sha"] = f["market_status"].get("sha") or None
+        ts = [g.get("ts") for g in (f["market_status"].get("groups") or {}).values() if g.get("ts")]
+        f["status_age_h"] = _age_h(max(ts), now) if ts else None
         ages = {}
         for t in ("fundamentals", "screener_metrics"):
             r2 = sb("GET", f"{t}?select=updated_at&order=updated_at.desc&limit=1")
@@ -326,6 +332,17 @@ def evaluate(f):
              "Not your code; recheck in a while.", "platform", "platform")
     if incidents and not sb_broken:
         notes.append(f"Supabase reports an incident ({incidents[0]}) but your project responded normally")
+    # deploy drift (worldmonitor pattern): prod stamps its GITHUB_SHA into
+    # market_status; compare against HEAD. A CI process lives ~5.5h, so a
+    # young HEAD is normal rollout lag — only a 7h-old HEAD still not running,
+    # while the pipeline actively writes status, means the rollout is stuck.
+    if (f.get("run_sha") and f.get("head_sha") and f["run_sha"] != f["head_sha"]
+            and (f.get("status_age_h") or 99) < 0.5
+            and _age_h(f.get("head_at") or f["now"], datetime.fromisoformat(f["now"])) > 7):
+        prob("deploy drift", f"Prod is running commit {f['run_sha']} but main's HEAD "
+             f"({f['head_sha']}) is over 7h old — the pipeline never picked it up. A run is "
+             "stuck on old code past its 5.5h deadline, or the workflow stopped scheduling; "
+             "cancel the active run or dispatch a fresh one.", "repo", "platform")
     if f.get("gh_status") not in (None, "none"):
         notes.append(f"GitHub itself reports degraded status ({f['gh_status']}) — Actions may lag")
     if "github" in f["errors"]:

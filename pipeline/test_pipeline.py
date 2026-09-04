@@ -1188,6 +1188,29 @@ def test_ops_evaluate_maps_facts_to_fixes():
     assert [p["fix"] for p in v["problems"]] == ["supabase"] and v["notes"]
 
 
+def test_ops_evaluate_deploy_drift():
+    """Prod stamps its GITHUB_SHA; a 7h-old HEAD that prod still isn't running,
+    while the pipeline actively writes status, is a stuck rollout. A young HEAD
+    or absent facts stay silent (a process legitimately runs ~5.5h-old code)."""
+    import ops
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    base = {"errors": {}, "switches": {}, "now": now.isoformat(),
+            "run_sha": "aaaaaaaaaaaa", "head_sha": "bbbbbbbbbbbb",
+            "head_at": (now - timedelta(hours=8)).isoformat(), "status_age_h": 0.1}
+    v = ops.evaluate(base)
+    assert [(p["name"], p["fix"], p["area"]) for p in v["problems"]] ==         [("deploy drift", "repo", "platform")]
+    # young HEAD = rollout lag, not drift
+    assert ops.evaluate({**base, "head_at": (now - timedelta(hours=2)).isoformat()})["problems"] == []
+    # same sha, silent
+    assert ops.evaluate({**base, "run_sha": "bbbbbbbbbbbb"})["problems"] == []
+    # pipeline not writing status (dead/paused) -> other checks own that story
+    assert ops.evaluate({**base, "status_age_h": 3.0})["problems"] == []
+    # absent facts (old status row without sha, github probe failed) stay silent
+    assert ops.evaluate({**base, "run_sha": None})["problems"] == []
+    assert ops.evaluate({k: v for k, v in base.items() if k != "head_sha"})["problems"] == []
+
+
 def test_ops_evaluate_platform_and_deep_checks():
     import ops
     healthy = {"errors": {}, "private": False, "crash_loop": False, "gh_active": False,
