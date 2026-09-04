@@ -77,7 +77,11 @@ MACRO_SERIES = {"FEDFUNDS": ("US Fed funds rate", "%"),
                 "INDIRLTLT01STM": ("India 10Y G-Sec yield (monthly)", "%"),
                 "TRESEGINM052N": ("India forex reserves ex-gold", "USD mn"),
                 "CCRETT01INM661N": ("India real effective exchange rate (2015=100)", "index"),
-                "INDEPUINDXM": ("India policy uncertainty index", "index")}
+                "INDEPUINDXM": ("India policy uncertainty index", "index"),
+                # Trade (G4): FRED serves raw USD (~4e10) — third tuple slot
+                # scales to bn so the app's macro row reads like a headline.
+                "XTEXVA01INM667S": ("India exports, goods", "USD bn", 1e-9),
+                "XTIMVA01INM667S": ("India imports, goods", "USD bn", 1e-9)}
 
 KINDS = {"equity", "index", "fx", "crypto", "commodity", "mf", "macro"}  # mirrors 011 CHECK
 
@@ -435,7 +439,8 @@ def refresh_macro(sb, now):
     if not key:
         return 0  # optional: no key, no Economy section, nothing else changes
     rows = []
-    for sid, (name, units) in MACRO_SERIES.items():
+    for sid, spec in MACRO_SERIES.items():
+        name, units, scale = (*spec, 1)[:3]
         try:
             r = requests.get("https://api.stlouisfed.org/fred/series/observations",
                              params={"series_id": sid, "api_key": key, "file_type": "json",
@@ -449,6 +454,12 @@ def refresh_macro(sb, now):
         if not parsed:
             continue
         p, meta = parsed
+        if scale != 1:
+            p = p._replace(price=round(p.price * scale, 2),
+                           prev=round(p.prev * scale, 2) if p.prev is not None else None,
+                           closes=[round(c * scale, 2) for c in p.closes])
+            if meta.get("delta") is not None:
+                meta["delta"] = round(p.price - p.prev, 2) if p.prev is not None else None
         rows.append(row(f"MACRO:{sid}", "macro", name, p, now, currency="", closes=True,
                         meta={**meta, "units": units, "series": sid}))
     return upsert(sb, rows)

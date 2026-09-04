@@ -961,3 +961,25 @@ def test_refresh_global_prefixes_adrs_and_marks_meta_global(monkeypatch):
     # bare "INFY" is the NSE equity row (quotes PK) - the ADR must never use it
     assert "INFY" not in by and by["ADR:INFY"]["meta"] == {"global": True, "adr": True}
     assert by["ADR:INFY"]["kind"] == "index" and by["ADR:INFY"]["currency"] == "USD"
+
+
+def test_refresh_macro_scales_trade_series(monkeypatch):
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"observations": [{"date": "2026-06-01", "value": "38000000000"},
+                                     {"date": "2026-05-01", "value": "36500000000"}]}
+
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    monkeypatch.setenv("FRED_API_KEY", "k")
+    monkeypatch.setattr(market, "MACRO_SERIES",
+                        {"XTEXVA01INM667S": ("India exports, goods", "USD bn", 1e-9)})
+    rows = []
+    monkeypatch.setattr(market, "upsert", lambda sb, r: rows.extend(r) or len(r))
+    assert market.refresh_macro(None, NOW) == 1
+    r = rows[0]
+    assert r["price"] == 38.0 and r["prev_close"] == 36.5
+    assert r["closes"] == [36.5, 38.0] and r["meta"]["delta"] == 1.5
+    assert r["meta"]["units"] == "USD bn"
