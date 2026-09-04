@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../analysis.dart';
+import '../charts.dart';
 import '../follows.dart';
 import '../fundamentals.dart';
 import '../models.dart';
@@ -16,6 +17,9 @@ import '../ticks.dart';
 import 'feed.dart' show filterPill;
 import 'stock_sections.dart';
 import 'story_detail.dart';
+
+// Sparkline lived here before charts.dart; tests and markets.dart still find it.
+export '../charts.dart' show Sparkline;
 
 /// Spec §8 screen 4: delayed price + light line chart + 52-wk range + related
 /// story cards. "Nothing more, by design."
@@ -657,76 +661,3 @@ Widget _kv(String k, String v) => Padding(
       ]),
     );
 
-/// One polyline, no chart package: the spec asks for a "light line chart" and
-/// a painter is 20 lines against a dependency.
-class Sparkline extends StatelessWidget {
-  const Sparkline(this.values, this.color, {super.key, this.secondary});
-  final List<double> values;
-  final Color color;
-
-  /// Optional overlay (the P/E line): aligned with [values], nulls break the
-  /// line, normalized on its own scale, drawn thin in amber.
-  final List<double?>? secondary;
-
-  @override
-  Widget build(BuildContext context) => CustomPaint(
-      size: Size.infinite, painter: _SparkPainter(values, color, secondary));
-}
-
-class _SparkPainter extends CustomPainter {
-  _SparkPainter(this.values, this.color, [this.secondary]);
-  final List<double> values;
-  final Color color;
-  final List<double?>? secondary;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (values.length < 2) return;
-    final lo = values.reduce((a, b) => a < b ? a : b);
-    final hi = values.reduce((a, b) => a > b ? a : b);
-    final span = (hi - lo) == 0 ? 1.0 : hi - lo;
-    final path = Path();
-    for (var i = 0; i < values.length; i++) {
-      final x = i / (values.length - 1) * size.width;
-      final y = size.height - (values[i] - lo) / span * size.height;
-      i == 0 ? path.moveTo(x, y) : path.lineTo(x, y);
-    }
-    canvas.drawPath(
-        path,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5
-          ..color = color);
-    final sec = secondary;
-    if (sec == null) return;
-    final vals = [for (final v in sec) if (v != null) v];
-    if (vals.length < 2) return;
-    final slo = vals.reduce((a, b) => a < b ? a : b);
-    final shi = vals.reduce((a, b) => a > b ? a : b);
-    final sspan = (shi - slo) == 0 ? 1.0 : shi - slo;
-    final spath = Path();
-    var pen = false;
-    final n = sec.length < values.length ? sec.length : values.length;
-    for (var i = 0; i < n; i++) {
-      final v = sec[i];
-      if (v == null) {
-        pen = false;
-        continue;
-      }
-      final x = i / (values.length - 1) * size.width;
-      final y = size.height - (v - slo) / sspan * size.height;
-      pen ? spath.lineTo(x, y) : spath.moveTo(x, y);
-      pen = true;
-    }
-    canvas.drawPath(
-        spath,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0
-          ..color = amber);
-  }
-
-  @override
-  bool shouldRepaint(_SparkPainter old) =>
-      old.values != values || old.color != color || old.secondary != secondary;
-}
