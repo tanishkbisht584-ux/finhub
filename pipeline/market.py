@@ -40,7 +40,11 @@ INDICES = {"^NSEI": "NIFTY 50", "^BSESN": "SENSEX", "^NSEBANK": "NIFTY Bank", "^
            "^INDIAVIX": "India VIX"}  # verified on spark 2026-09-02; feeds fear/greed
 FX = {"USDINR=X": "USD/INR", "EURINR=X": "EUR/INR", "GBPINR=X": "GBP/INR", "JPYINR=X": "JPY/INR"}
 COMMODITIES = {"GC=F": "Gold (USD/oz)", "SI=F": "Silver (USD/oz)", "CL=F": "Crude WTI (USD/bbl)"}
-CRYPTO = {"bitcoin": "Bitcoin", "ethereum": "Ethereum", "solana": "Solana"}
+# Stablecoins ride the same call (P3, 4 Sep): USDT/INR vs USDINR is the
+# on-ramp premium Indian crypto users actually watch; peg drift + mcap in meta.
+CRYPTO = {"bitcoin": "Bitcoin", "ethereum": "Ethereum", "solana": "Solana",
+          "tether": "Tether (USDT)", "usd-coin": "USD Coin (USDC)"}
+STABLE = ("tether", "usd-coin")
 
 # Direct-Growth scheme codes verified against mfapi.in/mf/search on 2026-08-22.
 # Names come from the API (shortened); these are the board everyone sees,
@@ -53,7 +57,16 @@ DEFAULT_MF = (120716, 119063, 143341, 122639, 118955, 118825, 120586, 125497,
 MACRO_SERIES = {"FEDFUNDS": ("US Fed funds rate", "%"),
                 "DGS10": ("US 10Y Treasury yield", "%"),
                 "INDCPIALLMINMEI": ("India CPI (OECD, 2015=100)", "index"),
-                "DEXINUS": ("USD/INR (Fed H.10)", "INR")}
+                "DEXINUS": ("USD/INR (Fed H.10)", "INR"),
+                # P3 (4 Sep): every India series FRED keeps within ~3 months.
+                # Monthly OECD rates are the honest yield curve we can get —
+                # Stooq's daily G-Sec CSVs sit behind a JS proof-of-work now.
+                "IRSTCI01INM156N": ("India call money rate", "%"),
+                "INDIR3TIB01STM": ("India 3M T-bill yield", "%"),
+                "INDIRLTLT01STM": ("India 10Y G-Sec yield (monthly)", "%"),
+                "TRESEGINM052N": ("India forex reserves ex-gold", "USD mn"),
+                "CCRETT01INM661N": ("India real effective exchange rate (2015=100)", "index"),
+                "INDEPUINDXM": ("India policy uncertainty index", "index")}
 
 KINDS = {"equity", "index", "fx", "crypto", "commodity", "mf", "macro"}  # mirrors 011 CHECK
 
@@ -276,7 +289,7 @@ def refresh_fxcom(sb, now):
 def refresh_crypto(sb, now):
     r = requests.get("https://api.coingecko.com/api/v3/simple/price",
                      params={"ids": ",".join(CRYPTO), "vs_currencies": "inr,usd",
-                             "include_24hr_change": "true"},
+                             "include_24hr_change": "true", "include_market_cap": "true"},
                      headers=BROWSER_UA, timeout=TIMEOUT)
     r.raise_for_status()
     rows = []
@@ -287,7 +300,11 @@ def refresh_crypto(sb, now):
         pct = d.get("inr_24h_change")
         prev = round(d["inr"] / (1 + pct / 100), 2) if pct is not None else None
         p = Parsed(d["inr"], prev, round(pct, 2) if pct is not None else None, now.isoformat(), None)
-        rows.append(row(cid, "crypto", name, p, now, meta={"usd": d.get("usd")}))
+        meta = {"usd": d.get("usd")}
+        if cid in STABLE and d.get("usd") is not None:
+            meta["peg_pct"] = round((d["usd"] - 1) * 100, 3)   # drift from $1
+            meta["usd_mcap"] = d.get("usd_market_cap")
+        rows.append(row(cid, "crypto", name, p, now, meta=meta))
     return upsert(sb, rows)
 
 
@@ -969,7 +986,10 @@ def refresh_bonds(sb, now):
         yields.append({"tenor": tenor, "yield": y, "prev": prev, "date": date,
                        "chg_bp": round((y - prev) * 100, 1) if prev is not None else None})
     if not yields:
-        return 0  # old blob stays; never had one -> no BONDS section
+        # Old blob stays, but the group must go RED: Stooq answered every
+        # symbol with an HTML proof-of-work page for weeks (4 Sep) while a
+        # silent 0 kept this group green and the prod blob never existed.
+        raise RuntimeError("no yields parsed — Stooq blocked or challenge page?")
     return write_blobs(sb, [{"key": "bonds", "payload": {"yields": yields},
                              "updated_at": now.isoformat()}])
 
