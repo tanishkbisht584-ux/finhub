@@ -112,3 +112,21 @@ insert into sources (name, type, feed_url, authority) values
   ('NewsData Markets IN',  'newsdata',  'stock market', 5),
   ('MarketAux India',      'marketaux', '', 6)
 on conflict do nothing;
+
+-- 2026-09-04: Global layer (worldmonitor follow-up). World markets +
+-- geopolitics coverage; every RSS URL probed live same day (WSJ dropped -
+-- its public feed froze Jan 2025). Reuters/Bloomberg ride google_news_query
+-- (their own feeds are dead/paywalled). Authority 6: the round-robin in
+-- prioritized() gives them a seat without starving India sources.
+insert into sources (name, type, feed_url, authority) values
+  ('BBC Business',        'rss', 'https://feeds.bbci.co.uk/news/business/rss.xml', 6),
+  ('BBC World',           'rss', 'https://feeds.bbci.co.uk/news/world/rss.xml', 6),
+  ('Al Jazeera',          'rss', 'https://www.aljazeera.com/xml/rss/all.xml', 6),
+  ('Guardian World',      'rss', 'https://www.theguardian.com/world/rss', 6),
+  ('Guardian Business',   'rss', 'https://www.theguardian.com/uk/business/rss', 6),
+  ('CNBC World',          'rss', 'https://www.cnbc.com/id/100727362/device/rss/rss.html', 6),
+  ('MarketWatch Top',     'rss', 'https://feeds.content.dowjones.io/public/rss/mw_topstories', 6),
+  ('FT World',            'rss', 'https://www.ft.com/world?format=rss', 6),
+  ('GNews Reuters',       'google_news_query', 'site:reuters.com', 6),
+  ('GNews Bloomberg',     'google_news_query', 'site:bloomberg.com', 6)
+on conflict do nothing;

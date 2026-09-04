@@ -1160,7 +1160,8 @@ def retry_flagged(process_story, AIError, QuotaExhausted, companies_by_key):
             sb("PATCH", f"stories?id=eq.{row['id']}", json={"raw_ai_error": str(e)})
             continue
         imp = card["impact"]
-        keep = card["is_india_relevant"] or (card["category"] == "Geopolitics" and imp["score"] >= 6)
+        keep = card["is_india_relevant"] or (
+            card["category"] in ("Geopolitics", "Global") and imp["score"] >= 5)
         sb("PATCH", f"stories?id=eq.{row['id']}", json={
             "hook": card["hook"], "headline": card["headline_rewrite"],
             "summary": card["summary"],
@@ -1453,7 +1454,10 @@ def main(cfg=None):
                 continue
             imp = card["impact"]
             keep = card["is_india_relevant"] or (
-                card["category"] == "Geopolitics" and imp["score"] >= 6)
+                # Global layer (4 Sep): world sources are in the mix now — a
+                # market-moving world story earns its card even with no direct
+                # India hook; below 5 it sinks like any minor story.
+                card["category"] in ("Geopolitics", "Global") and imp["score"] >= 5)
             # Fast lane (owner's latency spec, 2026-08-08): a major story is
             # visible the moment it is understood — no approval wait — because
             # the cost of being 5 min late on a market-mover is worse than the

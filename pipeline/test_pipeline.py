@@ -475,6 +475,19 @@ def test_personal_alert_engine_pushes_high_confidence_spikes_unless_opted_out(mo
     assert pushed == [("t1", 31)]
 
 
+def test_keep_gate_passes_market_moving_world_stories():
+    """Global layer: a Global/Geopolitics card scoring >=5 survives without an
+    India hook; below 5, or any other category, still needs is_india_relevant."""
+    def keep(card, score):
+        return card["is_india_relevant"] or (
+            card["category"] in ("Geopolitics", "Global") and score >= 5)
+    assert keep({"is_india_relevant": False, "category": "Global"}, 5)
+    assert keep({"is_india_relevant": False, "category": "Geopolitics"}, 6)
+    assert not keep({"is_india_relevant": False, "category": "Global"}, 4)
+    assert not keep({"is_india_relevant": False, "category": "Markets"}, 9)
+    assert keep({"is_india_relevant": True, "category": "Markets"}, 1)
+
+
 def test_personal_matches_empty_follows():
     from run import personal_matches
     assert personal_matches({"id": 1, "category": None, "sectors": None},

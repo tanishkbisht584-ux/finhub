@@ -55,6 +55,10 @@ Rules:
   Do NOT hug the middle: a story that fits the 7-8 anchors IS a 7-8. The
   daily fast lane and alerts depend on honest highs.
 - is_india_relevant: false for stories with no plausible effect on Indian markets or economy.
+- World coverage: global macro and geopolitics that move ANY major market (a
+  Fed decision, China stimulus, an oil shock, a war, sanctions) belong here as
+  category Global or Geopolitics with honest scores — is_india_relevant may
+  still be false; the score decides whether the story surfaces.
 - Entertainment, celebrity, sport, lifestyle content with NO market or economy
   angle (a film release, a cricket score, a celebrity story) is junk here:
   is_india_relevant: false. The business OF those industries (Zee Entertainment
