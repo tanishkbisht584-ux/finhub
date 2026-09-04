@@ -512,15 +512,40 @@ def test_shape_variations_handles_flat_and_nested_payloads():
     assert market.shape_variations(nested)[0]["pct"] == -3.1
 
 
-def test_parse_stooq_csv_and_refresh_bonds(monkeypatch):
-    csv = ("Date,Open,High,Low,Close,Volume\n"
-           "2026-08-27,6.80,6.90,6.79,6.85,0\n"
-           "2026-08-28,6.85,6.86,6.80,6.82,0\n")
-    assert market.parse_stooq_csv(csv) == (6.82, 6.85, "2026-08-28")
-    assert market.parse_stooq_csv("Date,Open,High,Low,Close\n") is None
+RBI_HOME = """<html><body><!-- CURRENT RATES START--><div class="grid_3">
+<h3 class="accordionButton"><a role="button">Policy&nbsp; Rates</a></h3>
+<table><tr><th> Policy Repo Rate </th><td> : 5.25% </td></tr>
+<tr><th> Standing Deposit Facility Rate </th><td> : 5.00% </td></tr>
+<tr><th style="width:50%"> Bank Rate </th><td style="width:50%"> : 5.50% </td></tr></table>
+<table><tr><th style="width:50%"> CRR </th><td> : 3.00% </td></tr><tr><th> SLR </th><td> : 18.00% </td></tr></table>
+<table><tr><th style="width:65%"> INR / 1 USD </th><td> : 94.4688 </td></tr></table>
+<h3>Money Market</h3><table><tr><th style="width:45%">Call Rates</th><td> : 4.20% - 5.10% * </td></tr></table>
+<div><span class="red">*</span><span class="subText"> as on <!--January 27, 2026--> September 03, 2026</span></div>
+<h3>Government Securities Market</h3><table><tbody>
+<tr><th> 6.20% GS 2029 </th><td>: 6.3784% #</td></tr>
+<tr><th> 6.36% GS 2031 </th><td>: 6.5324% #</td></tr>
+<tr><th> 6.94% GS 2036 </th><td>: 6.9682% #</td></tr>
+<tr><th> 7.24% GS 2055 </th><td>: 7.5759% #</td></tr>
+<tr><th> 91 day T-bills </th><td> : 5.2599%* </td></tr>
+<tr><th> 364 day T-bills </th><td> : 5.9090%* </td></tr></tbody></table>
+<div><span class="red">#</span><span class="subText"> as on <!--January 27, 2026--> September 03, 2026 </span></div>
+</div><!-- CURRENT RATES END--></body></html>"""
 
+
+def test_parse_rbi_home_reads_gsecs_rates_and_date():
+    gsecs, rates, asof = market.parse_rbi_home(RBI_HOME, 2026)
+    assert asof == "2026-09-03"
+    assert [(g["tenor"], g["yield"]) for g in gsecs] == \
+        [("3Y", 6.3784), ("5Y", 6.5324), ("10Y", 6.9682), ("29Y", 7.5759)]
+    assert gsecs[0]["name"] == "6.20% GS 2029" and gsecs[0]["date"] == "2026-09-03"
+    assert rates == {"repo": 5.25, "sdf": 5.0, "bank_rate": 5.5, "crr": 3.0, "slr": 18.0,
+                     "tbill_91d": 5.2599, "tbill_364d": 5.909}
+    assert market.parse_rbi_home("<html>maintenance</html>", 2026) == ([], {}, None)
+
+
+def test_refresh_bonds_writes_gsec_curve_and_rbi_rates_with_day_over_day(monkeypatch):
     class R:
-        text = csv
+        text = RBI_HOME
 
         def raise_for_status(self):
             pass
@@ -528,30 +553,33 @@ def test_parse_stooq_csv_and_refresh_bonds(monkeypatch):
     monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
     monkeypatch.setattr(market, "_blob_sent", {})
     written = []
+    old = [{"payload": {"yields": [
+        {"name": "6.94% GS 2036", "tenor": "10Y", "yield": 6.9, "date": "2026-09-02",
+         "prev": 6.88, "chg_bp": 2.0},
+        {"name": "6.36% GS 2031", "tenor": "5Y", "yield": 6.5, "date": "2026-09-03",
+         "prev": 6.45, "chg_bp": 5.0}]}}]
 
     def sb(method, path, **kw):
+        if method == "GET":
+            return old
         written.append((path, kw["json"]))
 
-    assert market.refresh_bonds(sb, NOW) == 1
-    ys = written[0][1][0]["payload"]["yields"]
-    assert [y["tenor"] for y in ys] == ["10Y", "5Y", "2Y"]
-    assert ys[0]["yield"] == 6.82 and ys[0]["chg_bp"] == -3.0
+    assert market.refresh_bonds(sb, NOW) == 2
+    blobs = {r["key"]: r["payload"] for _, rows in written for r in rows}
+    ys = {y["tenor"]: y for y in blobs["bonds"]["yields"]}
+    assert ys["10Y"]["prev"] == 6.9 and ys["10Y"]["chg_bp"] == 6.8    # new day vs last blob
+    assert ys["5Y"]["prev"] == 6.45 and ys["5Y"]["chg_bp"] == 5.0     # same day: keep yesterday's
+    assert ys["3Y"]["prev"] is None and ys["3Y"]["chg_bp"] is None    # first sight
+    assert blobs["rbi_rates"]["repo"] == 5.25 and blobs["rbi_rates"]["asof"] == "2026-09-03"
 
-    def dead(*a, **k):
-        raise market.requests.RequestException("down")
-
-    monkeypatch.setattr(market.requests, "get", dead)
-    with pytest.raises(RuntimeError):  # no data -> old blob stays, group goes red
-        market.refresh_bonds(sb, NOW)
-
-    class Challenge:  # Stooq's JS proof-of-work page: 200, HTML, zero rows
-        text = "<html><script>(async()=>{...})()</script></html>"
+    class Blocked:
+        text = "<html>Access Denied</html>"
 
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr(market.requests, "get", lambda *a, **k: Challenge())
-    with pytest.raises(RuntimeError):
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: Blocked())
+    with pytest.raises(RuntimeError):  # old blob stays, group goes red
         market.refresh_bonds(sb, NOW)
 
 

@@ -59,8 +59,8 @@ MACRO_SERIES = {"FEDFUNDS": ("US Fed funds rate", "%"),
                 "INDCPIALLMINMEI": ("India CPI (OECD, 2015=100)", "index"),
                 "DEXINUS": ("USD/INR (Fed H.10)", "INR"),
                 # P3 (4 Sep): every India series FRED keeps within ~3 months.
-                # Monthly OECD rates are the honest yield curve we can get —
-                # Stooq's daily G-Sec CSVs sit behind a JS proof-of-work now.
+                # Monthly OECD rates; the daily curve comes from the RBI
+                # homepage (refresh_bonds).
                 "IRSTCI01INM156N": ("India call money rate", "%"),
                 "INDIR3TIB01STM": ("India 3M T-bill yield", "%"),
                 "INDIRLTLT01STM": ("India 10Y G-Sec yield (monthly)", "%"),
@@ -947,51 +947,73 @@ def shape_variations(j, cap=8):
     return out[:cap]
 
 
-# India G-Sec yields off Stooq's keyless daily-history CSV.
-# ponytail: Stooq only; if it drops these symbols, FRED INDIRLTLT01STM exists
-# but is monthly — decide then whether stale beats absent.
-STOOQ_BONDS = (("10Y", "10yiny.b"), ("5Y", "5yiny.b"), ("2Y", "2yiny.b"))
+# ---------- RBI homepage "Current Rates": benchmark G-Secs + policy rates ----------
+# rbi.org.in's rates box is plain <th>name</th><td>: value</td> tables with an
+# "as on <date>" footnote. One fetch feeds two blobs: `bonds` (benchmark
+# G-Secs keyed by residual tenor - replaced Stooq's daily CSV on 4 Sep 2026,
+# which had sat behind a JS proof-of-work page since August while the group
+# stayed green) and `rbi_rates` (repo/SDF/MSF/bank/reverse repo/CRR/SLR and
+# T-bill auction cut-offs). ponytail: regex over th/td pairs, no HTML parser
+# dependency; a layout change raises and the group goes red.
+
+RBI_URL = "https://www.rbi.org.in/"
+_RBI_PAIR = re.compile(r"<th[^>]*>\s*(.*?)\s*</th>\s*<td[^>]*>\s*:?\s*(.*?)\s*</td>", re.S)
+_RBI_GSEC = re.compile(r"^[\d.]+%\s*GS\s*(\d{4})$")
+RBI_RATES = {"Policy Repo Rate": "repo", "Standing Deposit Facility Rate": "sdf",
+             "Marginal Standing Facility Rate": "msf", "Bank Rate": "bank_rate",
+             "Fixed Reverse Repo Rate": "reverse_repo", "CRR": "crr", "SLR": "slr",
+             "91 day T-bills": "tbill_91d", "182 day T-bills": "tbill_182d",
+             "364 day T-bills": "tbill_364d"}
 
 
-def parse_stooq_csv(text):
-    """Date,Open,High,Low,Close(,Volume) history -> (last, prev, date) closes."""
-    closes = []
-    for line in (text or "").strip().splitlines()[1:]:
-        parts = line.split(",")
-        if len(parts) >= 5:
-            try:
-                closes.append((parts[0], float(parts[4])))
-            except ValueError:
-                continue
-    if not closes:
-        return None
-    (date, last), prev = closes[-1], (closes[-2][1] if len(closes) > 1 else None)
-    return last, prev, date
+def _rbi_text(s):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>|&nbsp;", " ", s)).strip()
+
+
+def _rbi_pct(v):
+    m = re.match(r"([\d.]+)\s*%", v)
+    return float(m.group(1)) if m else None
+
+
+def parse_rbi_home(html, year):
+    """-> (gsec yields, rates dict, as-on ISO date) from the Current Rates box."""
+    a = html.find("CURRENT RATES START")
+    seg = html[a:a + 40000] if a >= 0 else html
+    m = re.search(r"as on\s*(?:<!--.*?-->)?\s*([A-Z][a-z]+ \d{1,2}, \d{4})", seg, re.S)
+    asof = datetime.strptime(m.group(1), "%B %d, %Y").date().isoformat() if m else None
+    gsecs, rates = [], {}
+    for k, v in _RBI_PAIR.findall(seg):
+        k, v = _rbi_text(k), _rbi_text(v)
+        g = _RBI_GSEC.match(k)
+        if g:
+            y = _rbi_pct(v)
+            if y is not None:
+                gsecs.append({"tenor": f"{int(g.group(1)) - year}Y", "name": k,
+                              "yield": y, "date": asof})
+        elif k in RBI_RATES:
+            rates[RBI_RATES[k]] = _rbi_pct(v)
+    return gsecs, rates, asof
 
 
 def refresh_bonds(sb, now):
-    yields = []
-    for tenor, sym in STOOQ_BONDS:
-        try:
-            r = requests.get("https://stooq.com/q/d/l/", params={"s": sym, "i": "d"},
-                             headers=BROWSER_UA, timeout=TIMEOUT)
-            r.raise_for_status()
-            parsed = parse_stooq_csv(r.text)
-        except Exception as e:
-            print(f"MARKET bonds {sym}: {e}")
-            continue
-        if not parsed:
-            continue
-        y, prev, date = parsed
-        yields.append({"tenor": tenor, "yield": y, "prev": prev, "date": date,
-                       "chg_bp": round((y - prev) * 100, 1) if prev is not None else None})
-    if not yields:
-        # Old blob stays, but the group must go RED: Stooq answered every
-        # symbol with an HTML proof-of-work page for weeks (4 Sep) while a
-        # silent 0 kept this group green and the prod blob never existed.
-        raise RuntimeError("no yields parsed — Stooq blocked or challenge page?")
-    return write_blobs(sb, [{"key": "bonds", "payload": {"yields": yields},
-                             "updated_at": now.isoformat()}])
+    r = requests.get(RBI_URL, headers=BROWSER_UA, timeout=TIMEOUT)
+    r.raise_for_status()
+    gsecs, rates, asof = parse_rbi_home(r.text, now.astimezone(IST).year)
+    if not gsecs:
+        raise RuntimeError("RBI current-rates box not found: layout changed or blocked page")
+    # chg_bp is day-over-day against the last published blob, never intraday
+    old = sb("GET", "market_blobs?select=payload&key=eq.bonds")
+    prev = {y.get("name"): y for y in ((old[0]["payload"] if old else {}) or {}).get("yields") or []}
+    for y in gsecs:
+        p = prev.get(y["name"])
+        if p and p.get("date") != asof and p.get("yield") is not None:
+            y["prev"] = p["yield"]
+            y["chg_bp"] = round((y["yield"] - p["yield"]) * 100, 1)
+        else:  # first sight, or the same day re-read: keep the last comparison
+            y["prev"], y["chg_bp"] = (p or {}).get("prev"), (p or {}).get("chg_bp")
+    ts = now.isoformat()
+    return write_blobs(sb, [{"key": "bonds", "payload": {"yields": gsecs}, "updated_at": ts},
+                            {"key": "rbi_rates", "payload": {**rates, "asof": asof}, "updated_at": ts}])
 
 
 # ---------- sentiment composites (P2, worldmonitor study) ----------
