@@ -268,7 +268,8 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new",
-                                             "analysis_new", "fundamentals", "technicals",
+                                             "analysis_new", "worldmacro", "hazards",
+                                             "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
                                              "screener", "screener_px"]
@@ -713,3 +714,74 @@ def test_refresh_sentiment_reads_db_only_and_writes_derived_blobs(monkeypatch):
     # derived blobs carry no computed_at: unchanged scores must suppress writes
     assert "computed_at" not in rows[0]["payload"]
     assert market.refresh_sentiment(sb, NOW) == 0  # identical inputs -> suppressed
+
+
+# ---------- P4 context sources ----------
+
+def test_parse_worldbank_keeps_latest_and_previous_per_indicator():
+    payload = [{"lastupdated": "2026-07-13"}, [
+        {"indicator": {"id": "NY.GDP.MKTP.KD.ZG"}, "date": "2025", "value": 7.5666},
+        {"indicator": {"id": "NY.GDP.MKTP.KD.ZG"}, "date": "2024", "value": 7.0993},
+        {"indicator": {"id": "NY.GDP.MKTP.KD.ZG"}, "date": "2023", "value": 7.21},
+        {"indicator": {"id": "BN.CAB.XOKA.GD.ZS"}, "date": "2025", "value": None},
+        {"indicator": {"id": "BN.CAB.XOKA.GD.ZS"}, "date": "2024", "value": -0.7},
+        {"indicator": {"id": "SP.POP.TOTL"}, "date": "2025", "value": 1.4e9},
+    ]]
+    series, asof = market.parse_worldbank(payload)
+    assert asof == "2026-07-13"
+    assert series["NY.GDP.MKTP.KD.ZG"] == {"name": "GDP growth", "units": "%", "value": 7.57,
+                                           "year": "2025", "prev": 7.1, "prev_year": "2024"}
+    assert series["BN.CAB.XOKA.GD.ZS"]["value"] == -0.7 and series["BN.CAB.XOKA.GD.ZS"]["year"] == "2024"
+    assert "SP.POP.TOTL" not in series
+    assert market.parse_worldbank([{"message": "bad"}]) == ({}, None)
+
+
+def test_refresh_worldmacro_writes_blob_or_raises(monkeypatch):
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"lastupdated": "2026-07-13"},
+                    [{"indicator": {"id": "FP.CPI.TOTL.ZG"}, "date": "2025", "value": 4.2}]]
+
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or len(rows))
+    assert market.refresh_worldmacro(None, NOW) == 1
+    assert written[0]["key"] == "macro_context" and written[0]["payload"]["asof"] == "2026-07-13"
+
+    class Empty(R):
+        def json(self):
+            return [{"lastupdated": "2026-07-13"}, []]
+
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
+    with pytest.raises(RuntimeError):
+        market.refresh_worldmacro(None, NOW)
+
+
+def test_parse_usgs_and_refresh_hazards_publishes_empty_weeks(monkeypatch):
+    feat = {"type": "Feature", "properties": {"mag": 5.1, "place": "115 km NE of Joshimath, India",
+            "time": 1788423396417, "url": "https://earthquake.usgs.gov/x"},
+            "geometry": {"type": "Point", "coordinates": [79.9, 31.2, 10.0]}}
+    quakes = market.parse_usgs({"features": [feat, {"properties": {"mag": None}}]})
+    assert quakes == [{"mag": 5.1, "place": "115 km NE of Joshimath, India",
+                       "time": "2026-09-03T08:16:36.417000+00:00",
+                       "url": "https://earthquake.usgs.gov/x", "lat": 31.2, "lon": 79.9}]
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"features": []}
+
+    calls = []
+    monkeypatch.setattr(market.requests, "get", lambda url, **k: calls.append(k["params"]) or R())
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or len(rows))
+    assert market.refresh_hazards(None, NOW) == 1
+    assert written[0]["payload"] == {"quakes": []}
+    assert calls[0]["minmagnitude"] == 4.5 and calls[0]["minlatitude"] == 5

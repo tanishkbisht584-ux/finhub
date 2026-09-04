@@ -81,7 +81,7 @@ _status = {}    # group -> last attempt outcome; mirrored to app_config `market_
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
             "mf_new": 5, "analysis_new": 5, "deep_new": 5, "screener_px": 60,
-            "sentiment": 60}
+            "sentiment": 60, "hazards": 60}
 
 
 def market_hours(now):
@@ -107,7 +107,7 @@ def nav_slot(now):
 
 
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
-              "deep_warm": (17, 30), "screener": (18, 0)}
+              "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0)}
 
 
 def due(group, now):
@@ -1016,6 +1016,81 @@ def refresh_bonds(sb, now):
                             {"key": "rbi_rates", "payload": {**rates, "asof": asof}, "updated_at": ts}])
 
 
+# ---------- P4 context sources (4 Sep 2026, worldmonitor study) ----------
+# World Bank WDI: the annual India macro frame (growth, inflation, CAD, fiscal)
+# for one context card. Keyless JSON; `lastupdated` is the content date.
+
+WB_INDICATORS = {"NY.GDP.MKTP.KD.ZG": ("GDP growth", "%"),
+                 "FP.CPI.TOTL.ZG": ("CPI inflation", "%"),
+                 "BN.CAB.XOKA.GD.ZS": ("Current account", "% of GDP")}
+# (no fiscal balance: WDI's GC.NLD.TOTL.GD.ZS for India stops at 2022 with gaps)
+WB_URL = "https://api.worldbank.org/v2/country/IND/indicator/" + ";".join(WB_INDICATORS)
+
+
+def parse_worldbank(payload):
+    """[meta, rows] (mrv=3, newest first per indicator) -> (series, lastupdated)."""
+    if not isinstance(payload, list) or len(payload) < 2:
+        return {}, None
+    meta, rows = payload[0] or {}, payload[1] or []
+    series = {}
+    for r in rows:
+        code = (r.get("indicator") or {}).get("id")
+        if code not in WB_INDICATORS or r.get("value") is None:
+            continue
+        name, units = WB_INDICATORS[code]
+        cur = series.get(code)
+        if cur is None:
+            series[code] = {"name": name, "units": units, "value": round(r["value"], 2),
+                            "year": r.get("date"), "prev": None, "prev_year": None}
+        elif cur["prev"] is None:
+            cur["prev"], cur["prev_year"] = round(r["value"], 2), r.get("date")
+    return series, meta.get("lastupdated")
+
+
+def refresh_worldmacro(sb, now):
+    r = requests.get(WB_URL, params={"source": 2, "format": "json", "mrv": 3},
+                     headers=BROWSER_UA, timeout=TIMEOUT)
+    r.raise_for_status()
+    series, asof = parse_worldbank(r.json())
+    if not series:
+        raise RuntimeError("World Bank returned no India series")
+    return write_blobs(sb, [{"key": "macro_context", "payload": {"series": series, "asof": asof},
+                             "updated_at": now.isoformat()}])
+
+
+# USGS quakes over the India region, M4.5+, last 7 days. GeoJSON, keyless.
+# ponytail: quakes only - NASA EONET's "open" events carried 2025 wildfires
+# as current when probed, and GDELT 429s every call from here.
+
+USGS_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
+INDIA_BBOX = {"minlatitude": 5, "maxlatitude": 38, "minlongitude": 66, "maxlongitude": 98}
+QUAKE_MIN_MAG = 4.5
+
+
+def parse_usgs(payload):
+    out = []
+    for f in (payload or {}).get("features") or []:
+        p, g = f.get("properties") or {}, (f.get("geometry") or {}).get("coordinates") or []
+        if p.get("mag") is None or p.get("time") is None:
+            continue
+        out.append({"mag": p["mag"], "place": p.get("place") or "",
+                    "time": datetime.fromtimestamp(p["time"] / 1000, tz=timezone.utc).isoformat(),
+                    "url": p.get("url"),
+                    "lat": g[1] if len(g) > 1 else None, "lon": g[0] if g else None})
+    return out
+
+
+def refresh_hazards(sb, now):
+    r = requests.get(USGS_URL, params={"format": "geojson", "minmagnitude": QUAKE_MIN_MAG,
+                                       "starttime": (now - timedelta(days=7)).strftime("%Y-%m-%d"),
+                                       "orderby": "time", "limit": 20, **INDIA_BBOX},
+                     headers=BROWSER_UA, timeout=TIMEOUT)
+    r.raise_for_status()
+    quakes = parse_usgs(r.json())  # an empty week is a real, publishable answer
+    return write_blobs(sb, [{"key": "hazards", "payload": {"quakes": quakes},
+                             "updated_at": now.isoformat()}])
+
+
 # ---------- sentiment composites (P2, worldmonitor study) ----------
 # Editorial scales, not empirical. methodology_version is bumped whenever a
 # component, scale, or weighting changes so clients and history can tell
@@ -1245,6 +1320,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
           ("analysis_new", refresh_analysis_new),
+          ("worldmacro", refresh_worldmacro), ("hazards", refresh_hazards),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),
