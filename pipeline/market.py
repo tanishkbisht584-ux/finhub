@@ -21,7 +21,7 @@ import os
 import re
 import time
 from collections import namedtuple
-from datetime import datetime, timedelta, timezone
+from datetime import date as _date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 import requests
@@ -126,7 +126,7 @@ def nav_slot(now):
 
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
-              "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0)}
+              "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30)}
 
 
 def due(group, now):
@@ -1354,6 +1354,76 @@ def refresh_cb_rates(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+# Macro release calendar: FRED's release/dates for the US prints (keyed, the
+# same key refresh_macro uses); India from a rule (MOSPI: CPI+IIP on the 12th,
+# GDP on the last working day of Feb/May/Aug/Nov - the MOSPI site is a JS SPA
+# with no calendar endpoint) plus code-level RBI MPC dates. FOMC is a constant
+# too: FRED release 101 answers every calendar day (no schedule; 4 Sep 2026).
+# ponytail: refresh RBI_MPC each March and FOMC each December from the source.
+
+FRED_RELEASE_URL = "https://api.stlouisfed.org/fred/release/dates"
+FRED_RELEASES = {10: "US CPI", 46: "US PPI", 50: "US jobs report", 53: "US GDP", 54: "US PCE"}
+FOMC = ("2026-09-16", "2026-10-28", "2026-12-09")                       # decision day
+RBI_MPC = ("2026-04-08", "2026-06-05", "2026-08-05", "2026-10-07", "2026-12-04")  # FY27; Feb-2027 TBD
+CAL_DAYS = 45
+
+
+def _roll_fwd(d):
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+def india_events(today):
+    out = []
+    for k in range(3):  # this month and the next two
+        y, m0 = divmod(today.month - 1 + k, 12)
+        y, m = today.year + y, m0 + 1
+        out.append((_roll_fwd(_date(y, m, 12)), "India CPI + IIP (MOSPI)", "16:00 IST"))
+        if m in (2, 5, 8, 11):
+            last = _date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)
+            while last.weekday() >= 5:
+                last -= timedelta(days=1)
+            out.append((last, "India GDP, quarterly (MOSPI)", "16:00 IST"))
+    out += [(_date.fromisoformat(d), "RBI MPC decision", "10:00 IST") for d in RBI_MPC]
+    return [{"date": d.isoformat(), "name": n, "region": "IN", "time": t} for d, n, t in out]
+
+
+def fred_release_dates(key, today):
+    out = []
+    for rid, name in FRED_RELEASES.items():
+        try:
+            r = requests.get(FRED_RELEASE_URL, headers=BROWSER_UA, timeout=TIMEOUT,
+                             params={"release_id": rid, "api_key": key, "file_type": "json",
+                                     "realtime_start": today.isoformat(),
+                                     "realtime_end": (today + timedelta(days=60)).isoformat(),
+                                     # "true": scheduled dates carry no data yet; with
+                                     # "false" FRED only returns already-published ones
+                                     "include_release_dates_with_no_data": "true",
+                                     "sort_order": "asc"})
+            r.raise_for_status()
+            out += [{"date": x["date"], "name": name, "region": "US", "time": "08:30 ET"}
+                    for x in r.json().get("release_dates") or []]
+        except Exception as e:  # one dead release id never sinks the calendar
+            print(f"MARKET calendar {rid}: {e}")
+    return out
+
+
+def refresh_calendar(sb, now):
+    today = now.astimezone(IST).date()
+    events = india_events(today)
+    events += [{"date": d, "name": "FOMC decision", "region": "US", "time": "14:00 ET"} for d in FOMC]
+    key = os.environ.get("FRED_API_KEY", "").split(",")[0].strip()
+    if key:
+        events += fred_release_dates(key, today)
+    lo, hi = today.isoformat(), (today + timedelta(days=CAL_DAYS)).isoformat()
+    events = sorted((e for e in events if lo <= e["date"] <= hi),
+                    key=lambda e: (e["date"], e["region"], e["name"]))
+    return write_blobs(sb, [{"key": "calendar",
+                             "payload": {"events": events, "asof": today.isoformat()},
+                             "updated_at": now.isoformat()}])
+
+
 # ---------- sentiment composites (P2, worldmonitor study) ----------
 # Editorial scales, not empirical. methodology_version is bumped whenever a
 # component, scale, or weighting changes so clients and history can tell
@@ -1587,6 +1657,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("worldmacro", refresh_worldmacro), ("hazards", refresh_hazards),
           ("wikidata", refresh_wikidata), ("cpi", refresh_cpi),
           ("polymarket", refresh_polymarket), ("cb_rates", refresh_cb_rates),
+          ("calendar", refresh_calendar),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),

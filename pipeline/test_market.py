@@ -268,7 +268,7 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "global", "mf", "mf_new",
-                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates",
+                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates", "calendar",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
@@ -1064,3 +1064,39 @@ def test_refresh_cb_rates_writes_blob_or_raises(monkeypatch):
     monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
     with pytest.raises(RuntimeError):
         market.refresh_cb_rates(None, NOW)
+
+
+def test_india_events_rule_rolls_weekends_and_quarter_ends():
+    from datetime import date
+    ev = {(e["date"], e["name"]) for e in market.india_events(date(2026, 8, 22))}
+    assert ("2026-09-14", "India CPI + IIP (MOSPI)") in ev      # 12 Sep 2026 is a Saturday
+    assert ("2026-08-31", "India GDP, quarterly (MOSPI)") in ev  # last working day of Aug
+    assert ("2026-10-12", "India CPI + IIP (MOSPI)") in ev
+    assert ("2026-10-07", "RBI MPC decision") in ev
+
+
+def test_refresh_calendar_merges_sources_and_trims_window(monkeypatch):
+    calls = []
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"release_dates": [{"date": "2026-09-11"}, {"date": "2026-11-10"}]}
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: calls.append(k["params"]) or R())
+    monkeypatch.setenv("FRED_API_KEY", "k1,k2")
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or 1)
+    assert market.refresh_calendar(None, NOW) == 1  # NOW = 22 Aug 2026 IST
+    ev = written[0]["payload"]["events"]
+    assert [c["api_key"] for c in calls] == ["k1"] * len(market.FRED_RELEASES)
+    assert ev == sorted(ev, key=lambda e: e["date"]) and ev[0]["date"] >= "2026-08-22"
+    names = {e["name"] for e in ev}
+    assert {"US CPI", "FOMC decision", "India CPI + IIP (MOSPI)", "India GDP, quarterly (MOSPI)"} <= names
+    assert all(e["date"] <= "2026-10-06" for e in ev)          # 45-day window: 2026-11-10 and RBI 7 Oct trimmed
+    assert "RBI MPC decision" not in names
+
+    monkeypatch.delenv("FRED_API_KEY")
+    calls.clear()
+    written.clear()
+    market.refresh_calendar(None, NOW)
+    assert calls == [] and any(e["region"] == "IN" for e in written[0]["payload"]["events"])
