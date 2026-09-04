@@ -390,6 +390,13 @@ class _MarketsBodyState extends State<MarketsBody> {
         (data.blobs['move_context'] as Map?)?.cast<String, dynamic>() ?? const {};
     final explained = _l(moves['explained']);
     final unexplained = _l(moves['unexplained']);
+    // P4 (0.31.0): RBI policy box, World Bank frame, USGS quakes.
+    final rbi =
+        (data.blobs['rbi_rates'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final wb = ((data.blobs['macro_context'] as Map?)?['series'] as Map?)
+            ?.cast<String, dynamic>() ??
+        const {};
+    final quakes = _l((data.blobs['hazards'] as Map?)?['quakes']);
     return [
       if (idxGroups.isNotEmpty)
         (
@@ -611,15 +618,29 @@ class _MarketsBodyState extends State<MarketsBody> {
                   child: Text('+ Add fund',
                       style: mono.copyWith(fontSize: 12, color: green)))),
         ),
-      if (bonds.isNotEmpty)
+      if (bonds.isNotEmpty || rbi.isNotEmpty)
         (
           id: 'bonds',
           label: 'BONDS',
           child: _Section('Bonds', [
+            // The curve: benchmark G-Secs by residual tenor (RBI homepage),
+            // evenly spaced - the tenor row underneath is the axis.
+            if (bonds.length >= 2) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                  height: 40,
+                  child: Sparkline(
+                      [for (final b in bonds) ((b['yield'] ?? 0) as num).toDouble()],
+                      inkDim)),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                for (final b in bonds)
+                  Text('${b['tenor'] ?? ''}', style: mono.copyWith(fontSize: 10)),
+              ]),
+            ],
             for (final b in bonds)
               _LineRow(
                   lead: '${b['tenor'] ?? ''}',
-                  main: 'G-Sec yield',
+                  main: '${b['name'] ?? 'G-Sec yield'}',
                   trail: '${fmtNum(((b['yield'] ?? 0) as num).toDouble())}%',
                   // Falling yield = rising bond prices, so down is green here.
                   trailColor: b['chg_bp'] == null
@@ -630,6 +651,22 @@ class _MarketsBodyState extends State<MarketsBody> {
                       '${(b['chg_bp'] as num) >= 0 ? '+' : '−'}${(b['chg_bp'] as num).abs()} bp',
                     if (b['date'] != null) '${b['date']}',
                   ].join(' · ')),
+            for (final (key, label) in const [
+              ('repo', 'Repo rate'),
+              ('sdf', 'Standing deposit facility'),
+              ('msf', 'Marginal standing facility'),
+              ('crr', 'CRR'),
+              ('slr', 'SLR'),
+              ('tbill_91d', '91-day T-bill cut-off'),
+              ('tbill_182d', '182-day T-bill cut-off'),
+              ('tbill_364d', '364-day T-bill cut-off'),
+            ])
+              if (rbi[key] != null)
+                _LineRow(
+                    lead: 'RBI',
+                    main: label,
+                    trail: '${fmtNum((rbi[key] as num).toDouble())}%',
+                    sub: rbi['asof'] == null ? null : '${rbi['asof']}'),
           ], stamp: data.blobUpdated['bonds']),
         ),
       if (ipos.isNotEmpty)
@@ -655,13 +692,39 @@ class _MarketsBodyState extends State<MarketsBody> {
             ]),
           ], stamp: data.blobUpdated['ipos']),
         ),
-      if (macro.isNotEmpty)
+      if (macro.isNotEmpty || wb.isNotEmpty)
         (
           id: 'macro',
           label: 'MACRO',
           child: _Section('Macro', [
             for (final t in macro) _MacroRow(t),
+            // Annual frame from the World Bank: one row per series, prior year under.
+            for (final e in wb.entries)
+              if (e.value is Map && (e.value as Map)['value'] != null)
+                _LineRow(
+                    lead: '${(e.value as Map)['year'] ?? ''}',
+                    main: '${(e.value as Map)['name'] ?? e.key}',
+                    trail:
+                        '${fmtNum(((e.value as Map)['value'] as num).toDouble(), decimals: 2)}${(e.value as Map)['units'] == '%' ? '%' : ''}',
+                    sub: [
+                      if ((e.value as Map)['units'] != '%') '${(e.value as Map)['units']}',
+                      if ((e.value as Map)['prev'] != null)
+                        'prev ${(e.value as Map)['prev_year'] ?? ''}: ${fmtNum(((e.value as Map)['prev'] as num).toDouble(), decimals: 2)}',
+                    ].join(' · ')),
           ]),
+        ),
+      if (quakes.isNotEmpty)
+        (
+          id: 'quakes',
+          label: 'QUAKES',
+          child: _Section('Quakes', [  // last 7 days, M4.5+, India region
+            for (final q in quakes)
+              _LineRow(
+                  lead: 'M${q['mag']}',
+                  main: '${q['place'] ?? ''}',
+                  trail: '${q['time']}'.length >= 10 ? '${q['time']}'.substring(5, 10) : '',
+                  trailColor: ((q['mag'] as num?) ?? 0) >= 6 ? red : null),
+          ], stamp: data.blobUpdated['hazards']),
         ),
       if (results.isNotEmpty)
         (

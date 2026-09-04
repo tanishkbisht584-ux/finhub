@@ -1,6 +1,7 @@
 import 'package:finswipe/models.dart';
 import 'package:finswipe/screens/feed.dart' show homeTabLabels, marketsTab;
 import 'package:finswipe/screens/markets.dart';
+import 'package:finswipe/screens/stock.dart';
 import 'package:finswipe/ticks.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -56,8 +57,24 @@ final _blobs = <String, dynamic>{
   'bonds': {
     'yields': [
       {'tenor': '10Y', 'yield': 6.82, 'prev': 6.85, 'chg_bp': -3.0, 'date': '2026-08-28'},
+      {'tenor': '3Y', 'name': '6.20% GS 2029', 'yield': 6.38, 'prev': null, 'chg_bp': null,
+       'date': '2026-09-03'},
     ],
   },
+  'rbi_rates': {'repo': 5.25, 'sdf': 5.0, 'crr': 3.0, 'tbill_91d': 5.2599, 'asof': '2026-09-03'},
+  'macro_context': {
+    'asof': '2026-07-13',
+    'series': {
+      'NY.GDP.MKTP.KD.ZG': {'name': 'GDP growth', 'units': '%', 'value': 7.57, 'year': '2025',
+        'prev': 7.1, 'prev_year': '2024'},
+      'BN.CAB.XOKA.GD.ZS': {'name': 'Current account', 'units': '% of GDP', 'value': -0.42,
+        'year': '2025', 'prev': -0.85, 'prev_year': '2024'},
+    },
+  },
+  'hazards': {'quakes': [
+    {'mag': 5.1, 'place': '115 km NE of Joshimath, India', 'time': '2026-09-03T08:16:36+00:00',
+     'url': 'https://earthquake.usgs.gov/x', 'lat': 31.2, 'lon': 79.9},
+  ]},
   'ipos': {
     'current': [
       {'symbol': 'ABCIPO', 'company': 'ABC Ltd', 'open': '01-Sep-2026', 'close': '03-Sep-2026',
@@ -120,7 +137,7 @@ void main() {
       expect(find.text(h), findsNWidgets(2), reason: h);
     }
     expect(find.text('MACRO'), findsNothing); // empty section = no chip either
-    for (final h in ['TODAY', 'MOOD', 'MOVES']) {
+    for (final h in ['TODAY', 'MOOD', 'MOVES', 'QUAKES', 'BONDS']) {
       expect(find.text(h), findsNothing, reason: '$h needs its blob');
     }
     expect(find.text('NIFTY 50'), findsOneWidget);
@@ -259,6 +276,20 @@ void main() {
     expect(find.text('top gainer'), findsOneWidget);
     expect(find.text('6.82%'), findsOneWidget);
     expect(find.text('−3.0 bp · 2026-08-28'), findsOneWidget);
+    // 0.31.0: named benchmark G-Secs, the curve (2+ points), RBI policy box
+    expect(find.text('6.20% GS 2029'), findsOneWidget);
+    expect(find.byType(Sparkline), findsWidgets);
+    expect(find.text('Repo rate'), findsOneWidget);
+    expect(find.text('5.25%'), findsOneWidget);
+    expect(find.text('91-day T-bill cut-off'), findsOneWidget);
+    // World Bank rows ride the MACRO section; quakes get their own
+    expect(find.text('GDP growth'), findsOneWidget);
+    expect(find.text('prev 2024: 7.10'), findsOneWidget);
+    expect(find.textContaining('% of GDP · prev 2024: '), findsOneWidget);
+    expect(find.textContaining('0.85'), findsOneWidget);
+    expect(find.text('QUAKES'), findsNWidgets(2));
+    expect(find.text('M5.1'), findsOneWidget);
+    expect(find.text('09-03'), findsOneWidget);
     expect(find.text('ABC Ltd'), findsOneWidget);
     expect(find.text('Open'), findsOneWidget);
     expect(find.text('₹95-100 · 1,200.00 · 01-Sep-2026–03-Sep-2026'),
