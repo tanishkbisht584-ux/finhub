@@ -1479,6 +1479,16 @@ def refresh(sb, now=None):
     and the watchdog see per-group state instead of grepping stdout; a
     `groups_off` list on the pipeline config row disables single groups."""
     now = now or datetime.now(timezone.utc)
+    if not _last_run:  # fresh process: rehydrate cadence from the status row,
+        # or every DAILY_SLOT group re-fires on each ~5.5h CI boot (4-5x/day)
+        try:
+            rows = sb("GET", "app_config?select=value&key=eq.market_status")
+            for g, st in (((rows[0]["value"] if rows else {}) or {}).get("groups") or {}).items():
+                if st.get("ts"):
+                    _last_run[g] = datetime.fromisoformat(st["ts"])
+                    _status.setdefault(g, st)
+        except Exception:
+            pass  # first-ever run or unreadable row -> run everything, as before
     todo = [(g, fn) for g, fn in GROUPS if due(g, now)]
     if not todo:
         return {}

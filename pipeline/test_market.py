@@ -911,3 +911,37 @@ def test_refresh_cpi_upserts_with_prev_month_and_raises_when_absent(monkeypatch)
     monkeypatch.setattr(market, "_legacy_tls_session", lambda: Empty())
     with pytest.raises(RuntimeError):
         market.refresh_cpi(sb, NOW)
+
+
+# ---------- boot rehydration ----------
+
+def test_refresh_rehydrates_last_run_from_status_row(monkeypatch):
+    """A new CI process must not re-fire daily groups that already ran today —
+    _last_run seeds from the market_status row's per-group ts on first call."""
+    from datetime import timedelta
+    calls = []
+    monkeypatch.setattr(market, "GROUPS", (("mf", lambda sb, now: calls.append("mf") or 1),
+                                           ("crypto", lambda sb, now: calls.append("crypto") or 1)))
+    monkeypatch.setattr(market, "_last_run", {})
+    monkeypatch.setattr(market, "_status", {})
+    ts = (NOW - timedelta(minutes=1)).isoformat()
+
+    def sb(method, path, **kw):
+        if "market_status" in path:
+            return [{"value": {"groups": {"mf": {"ok": True, "ts": ts},
+                                          "crypto": {"ok": True, "ts": ts}}}}]
+        return []
+
+    assert market.refresh(sb, NOW) == {}  # both ran a minute ago: nothing due
+    assert calls == [] and market._last_run["mf"].isoformat() == ts
+
+    # first-ever run (no status row): everything fires as before
+    monkeypatch.setattr(market, "_last_run", {})
+    monkeypatch.setattr(market, "_status", {})
+    monkeypatch.setattr(market, "_blob_sent", {})
+
+    def sb2(method, path, **kw):
+        return [] if method == "GET" else None
+
+    counts = market.refresh(sb2, NOW)
+    assert set(calls) == {"mf", "crypto"} and counts == {"mf": 1, "crypto": 1}
