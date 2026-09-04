@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FinSwipe logo — exploration</title>
+<style>
+  :root{--bg:#0E100F;--surface:#161917;--border:#272B28;--ink:#E8E6E3;--dim:#9BA09C;--green:#3ECF8E}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Sitka Text","Iowan Old Style",Georgia,serif;padding:48px 56px}
+  h1{font-size:34px;font-weight:600;margin:0 0 6px}
+  .sub{color:var(--dim);font-size:16px;max-width:760px;line-height:1.5;margin:0 0 40px}
+  .lbl{font-family:Consolas,"JetBrains Mono",monospace;font-size:11px;font-weight:700;letter-spacing:1.2px;color:var(--dim);text-transform:uppercase}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:40px}
+  .col{border:1px solid var(--border);border-radius:6px;padding:28px}
+  .col h2{font-size:20px;font-weight:600;margin:0 0 4px}
+  .col p{color:var(--dim);font-size:13px;line-height:1.45;margin:0 0 22px;font-family:"Segoe UI",system-ui,sans-serif}
+  .lockup{display:flex;justify-content:center;padding:18px 0 26px}
+  .row{display:flex;align-items:flex-end;gap:22px;margin:12px 0 22px}
+  .home{background:linear-gradient(135deg,#23282b,#4a4f52 60%,#2c3134);border-radius:10px;padding:16px 18px 12px;display:flex;gap:26px;align-items:flex-start}
+  .app{display:flex;flex-direction:column;align-items:center;gap:6px;width:72px}
+  .tile{width:60px;height:60px;border-radius:15px;background:var(--bg);display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.5)}
+  .tile.other{background:#e8e8e8}
+  .app span{font-family:"Segoe UI",system-ui,sans-serif;font-size:11px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+  .sz{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .sz small{font-family:Consolas,monospace;font-size:10px;color:var(--dim)}
+  .circ{border-radius:50%;background:#000;display:flex;align-items:center;justify-content:center}
+  .circ.light{background:#f2f2f2}
+  svg{display:block}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <!-- Shared geometry: one closed arrow silhouette, tip 50,6 shoulders y=46 (45°), shaft 29..71 to y=96. -->
+    <!-- Colours come from CSS vars so the same symbol renders dark, light, or mono. -->
+
+    <!-- V1 hairline: dim body, green chevron roof -->
+    <symbol id="v1" viewBox="0 0 100 100">
+      <path d="M50 3 L93 46 L71 46 L71 92 Q71 96 67 96 L33 96 Q29 96 29 92 L29 46 L7 46 Z"
+            fill="none" stroke="var(--d)" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M7 46 L50 3 L93 46" fill="none" stroke="var(--g)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+      <text x="50" y="79" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="24" fill="var(--i)">Fin</text>
+    </symbol>
+
+    <!-- V2 medium: whole arrow green, heavier stroke -->
+    <symbol id="v2" viewBox="0 0 100 100">
+      <path d="M50 3 L93 46 L71 46 L71 92 Q71 96 67 96 L33 96 Q29 96 29 92 L29 46 L7 46 Z"
+            fill="none" stroke="var(--g)" stroke-width="2.6" stroke-linejoin="round"/>
+      <text x="50" y="79" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="24" fill="var(--i)">Fin</text>
+    </symbol>
+
+    <!-- V3 filled head: solid green head, outlined shaft -->
+    <symbol id="v3" viewBox="0 0 100 100">
+      <path d="M7 46 L50 3 L93 46 Z" fill="var(--g)" stroke="var(--g)" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M71 46 L71 92 Q71 96 67 96 L33 96 Q29 96 29 92 L29 46"
+            fill="none" stroke="var(--d)" stroke-width="2" stroke-linejoin="round"/>
+      <text x="50" y="79" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="24" fill="var(--i)">Fin</text>
+    </symbol>
+
+    <!-- Lockups: mark + SWIPE label -->
+    <symbol id="l1" viewBox="0 0 100 126"><use href="#v1" width="100" height="100"/><text x="50" y="119" text-anchor="middle" font-family="Consolas,'JetBrains Mono',monospace" font-size="11.5" font-weight="700" letter-spacing="3.2" fill="var(--s)">SWIPE</text></symbol>
+    <symbol id="l2" viewBox="0 0 100 126"><use href="#v2" width="100" height="100"/><text x="50" y="119" text-anchor="middle" font-family="Consolas,'JetBrains Mono',monospace" font-size="11.5" font-weight="700" letter-spacing="3.2" fill="var(--s)">SWIPE</text></symbol>
+    <symbol id="l3" viewBox="0 0 100 126"><use href="#v3" width="100" height="100"/><text x="50" y="119" text-anchor="middle" font-family="Consolas,'JetBrains Mono',monospace" font-size="11.5" font-weight="700" letter-spacing="3.2" fill="var(--s)">SWIPE</text></symbol>
+  </defs>
+</svg>
+
+<h1>FinSwipe — the mark</h1>
+<p class="sub">An arrow going up, <em>Fin</em> set inside it, <span class="lbl">swipe</span> beneath. Same silhouette in all three; only the weight and where the one green lands differ. Ledger rules apply: hairlines, serif for the word, mono caps for the label, green spent on direction only — and the arrow <em>is</em> the direction.</p>
+
+<div class="grid">
+
+  <div class="col" style="--g:#3ECF8E;--i:#E8E6E3;--d:#9BA09C;--s:#9BA09C">
+    <h2>1 · Hairline</h2>
+    <p>Dim body, green roof. Quietest. The head is the only colour, exactly like a green tick in the feed.</p>
+    <div class="lockup"><svg width="200" height="252"><use href="#l1"/></svg></div>
+
+    <div class="lbl">Home screen</div>
+    <div class="row"><div class="home">
+      <div class="app"><div class="tile"><svg width="46" height="46"><use href="#v1"/></svg></div><span>FinSwipe</span></div>
+      <div class="app"><div class="tile other"><svg width="30" height="30" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="#34a853"/></svg></div><span>Phone</span></div>
+      <div class="app"><div class="tile other"><svg width="30" height="30" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4" fill="#1a73e8"/></svg></div><span>Mail</span></div>
+    </div></div>
+
+    <div class="lbl">Sizes · themed icon</div>
+    <div class="row">
+      <div class="sz"><svg width="64" height="64"><use href="#v1"/></svg><small>64</small></div>
+      <div class="sz"><svg width="48" height="48"><use href="#v1"/></svg><small>48</small></div>
+      <div class="sz"><svg width="32" height="32"><use href="#v1"/></svg><small>32</small></div>
+      <div class="sz"><svg width="24" height="24"><use href="#v1"/></svg><small>24</small></div>
+      <div class="sz"><div class="circ" style="width:40px;height:40px;--g:#fff;--i:#fff;--d:#fff"><svg width="24" height="24"><use href="#v1"/></svg></div><small>mono</small></div>
+      <div class="sz"><div class="circ light" style="width:40px;height:40px;--g:#1f8a5c;--i:#0E100F;--d:#5c635f"><svg width="24" height="24"><use href="#v1"/></svg></div><small>light</small></div>
+    </div>
+  </div>
+
+  <div class="col" style="--g:#3ECF8E;--i:#E8E6E3;--d:#9BA09C;--s:#9BA09C">
+    <h2>2 · Medium</h2>
+    <p>Whole arrow green, heavier line. Most "logo"; the shaft becomes a badge around the word.</p>
+    <div class="lockup"><svg width="200" height="252"><use href="#l2"/></svg></div>
+
+    <div class="lbl">Home screen</div>
+    <div class="row"><div class="home">
+      <div class="app"><div class="tile"><svg width="46" height="46"><use href="#v2"/></svg></div><span>FinSwipe</span></div>
+      <div class="app"><div class="tile other"><svg width="30" height="30" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="#34a853"/></svg></div><span>Phone</span></div>
+      <div class="app"><div class="tile other"><svg width="30" height="30" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4" fill="#1a73e8"/></svg></div><span>Mail</span></div>
+    </div></div>
+
+    <div class="lbl">Sizes · themed icon</div>
+    <div class="row">
+      <div class="sz"><svg width="64" height="64"><use href="#v2"/></svg><small>64</small></div>
+      <div class="sz"><svg width="48" height="48"><use href="#v2"/></svg><small>48</small></div>
+      <div class="sz"><svg width="32" height="32"><use href="#v2"/></svg><small>32</small></div>
+      <div class="sz"><svg width="24" height="24"><use href="#v2"/></svg><small>24</small></div>
+      <div class="sz"><div class="circ" style="width:40px;height:40px;--g:#fff;--i:#fff;--d:#fff"><svg width="24" height="24"><use href="#v2"/></svg></div><small>mono</small></div>
+      <div class="sz"><div class="circ light" style="width:40px;height:40px;--g:#1f8a5c;--i:#0E100F;--d:#5c635f"><svg width="24" height="24"><use href="#v2"/></svg></div><small>light</small></div>
+    </div>
+  </div>
+
+  <div class="col" style="--g:#3ECF8E;--i:#E8E6E3;--d:#9BA09C;--s:#9BA09C">
+    <h2>3 · Filled head</h2>
+    <p>Solid green head on an outlined shaft. Heaviest; reads at 24 px without the text. Closest to a conventional app icon.</p>
+    <div class="lockup"><svg width="200" height="252"><use href="#l3"/></svg></div>
+
+    <div class="lbl">Home screen</div>
+    <div class="row"><div class="home">
+      <div class="app"><div class="tile"><svg width="46" height="46"><use href="#v3"/></svg></div><span>FinSwipe</span></div>
+      <div class="app"><div class="tile other"><svg width="30" height="30" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="#34a853"/></svg></div><span>Phone</span></div>
+      <div class="app"><div class="tile other"><svg width="30" height="30" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4" fill="#1a73e8"/></svg></div><span>Mail</span></div>
+    </div></div>
+
+    <div class="lbl">Sizes · themed icon</div>
+    <div class="row">
+      <div class="sz"><svg width="64" height="64"><use href="#v3"/></svg><small>64</small></div>
+      <div class="sz"><svg width="48" height="48"><use href="#v3"/></svg><small>48</small></div>
+      <div class="sz"><svg width="32" height="32"><use href="#v3"/></svg><small>32</small></div>
+      <div class="sz"><svg width="24" height="24"><use href="#v3"/></svg><small>24</small></div>
+      <div class="sz"><div class="circ" style="width:40px;height:40px;--g:#fff;--i:#fff;--d:#fff"><svg width="24" height="24"><use href="#v3"/></svg></div><small>mono</small></div>
+      <div class="sz"><div class="circ light" style="width:40px;height:40px;--g:#1f8a5c;--i:#0E100F;--d:#5c635f"><svg width="24" height="24"><use href="#v3"/></svg></div><small>light</small></div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

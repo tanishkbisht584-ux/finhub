@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 126" width="100" height="126">
+  <!-- FinSwipe lockup: the mark with SWIPE beneath in mono caps (theme.dart monoLabel: w700, +tracking, inkDim). -->
+  <path d="M7 46 L50 3 L93 46 Z" fill="#3ECF8E" stroke="#3ECF8E" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M71 46 L71 92 Q71 96 67 96 L33 96 Q29 96 29 92 L29 46" fill="none" stroke="#9BA09C" stroke-width="2" stroke-linejoin="round"/>
+  <text x="50" y="79" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="24" fill="#E8E6E3">Fin</text>
+  <text x="50" y="119" text-anchor="middle" font-family="Consolas,'JetBrains Mono',monospace" font-size="11.5" font-weight="700" letter-spacing="3.2" fill="#9BA09C">SWIPE</text>
+</svg>
