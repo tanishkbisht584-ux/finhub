@@ -42,6 +42,8 @@
   .hg{background:rgba(62,207,142,.10)} .hg2{background:rgba(62,207,142,.18)} .hg3{background:rgba(62,207,142,.28)} .hg4{background:rgba(62,207,142,.40)}
   .hr{background:rgba(229,72,77,.10)} .hr2{background:rgba(229,72,77,.18)} .hr3{background:rgba(229,72,77,.28)} .hr4{background:rgba(229,72,77,.40)}
   .h0{background:var(--border)}
+  table.kv td.w,table.kv th.w{text-align:left;white-space:normal;color:var(--dim)} table.kv td.w{color:var(--ink)}
+  table.kv th{font-size:10px;letter-spacing:.06em} table.kv td:first-child{color:var(--ink)}
   .stack{display:flex;height:8px;margin:12px 0 6px} .legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:10px;color:var(--dim)}
   .legend b{display:inline-block;width:8px;height:8px;margin-right:5px;vertical-align:middle}
   .peer{display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:11px}
@@ -90,16 +92,28 @@
 
   <!-- FUNDAMENTALS -->
   <div class="sec">
-    <div class="hdr"><span>FUNDAMENTALS</span></div>
-    <div class="row"><div class="main"><div class="t">EPS (TTM)</div></div><div class="trail">₹108.9</div></div>
-    <div class="row"><div class="main"><div class="t">Net margin</div></div><div class="trail">7.8%</div></div>
-    <div class="row"><div class="main"><div class="t">Growth (YoY)</div><div class="s">revenue · earnings</div></div><div class="trail"><span class="g">+9.4%</span> · <span class="r">−1.2%</span></div></div>
-    <div class="row"><div class="main"><div class="t">Holding</div><div class="s">promoter · institutions</div></div><div class="trail">50.3% · 32.1%</div></div>
-    <div class="row"><div class="main"><div class="t">Analyst</div><div class="s">target ₹3,250</div></div><div class="trail g">BUY</div></div>
-    <div class="row"><div class="main"><div class="t">Beta</div></div><div class="trail">0.62</div></div>
-    <div class="row"><div class="main"><div class="t">ROCE</div></div><div class="trail">9.6%</div></div>
-    <div class="row"><div class="main"><div class="t">Book value</div></div><div class="trail">₹1,290</div></div>
-    <div style="font-size:10px;margin-top:14px" class="dim">QUARTERLY SALES · <span style="color:#3ECF8E">■</span> sales &nbsp;<span class="a">■</span> net profit &nbsp;(₹ L Cr)</div>
+    <div class="hdr"><span>FUNDAMENTALS</span><span class="stamp">vs 10 Oil &amp; Gas peers</span></div>
+    <table class="kv" style="margin-top:2px">
+      <tr><th style="width:96px">METRIC</th><th>VALUE</th><th>SECTOR</th><th class="w" style="padding-left:10px">READ</th></tr>
+      <tr><td>P/E</td><td>27.4</td><td class="dim">9.1</td><td class="w" style="padding-left:10px"><span class="r">premium</span> · fwd 23.1</td></tr>
+      <tr><td>P/B</td><td>2.31</td><td class="dim">1.4</td><td class="w" style="padding-left:10px">above peers</td></tr>
+      <tr><td>Mkt cap</td><td>₹20.2L Cr</td><td class="dim">₹1.9L Cr</td><td class="w" style="padding-left:10px">largest in sector</td></tr>
+      <tr><td>EPS (TTM)</td><td>₹108.9</td><td class="dim">—</td><td class="w" style="padding-left:10px">4 quarters</td></tr>
+      <tr><td>Div yield</td><td>0.34%</td><td class="dim">2.8%</td><td class="w" style="padding-left:10px">low payout</td></tr>
+      <tr><td>ROE</td><td>8.9%</td><td class="dim">13.8%</td><td class="w" style="padding-left:10px"><span class="r">below</span> peers</td></tr>
+      <tr><td>ROCE</td><td>9.6%</td><td class="dim">15.1%</td><td class="w" style="padding-left:10px"><span class="r">below</span> peers</td></tr>
+      <tr><td>Debt/Equity</td><td>0.41</td><td class="dim">0.55</td><td class="w" style="padding-left:10px"><span class="g">lighter</span> than peers</td></tr>
+      <tr><td>Net margin</td><td>7.8%</td><td class="dim">5.2%</td><td class="w" style="padding-left:10px"><span class="g">above</span> peers</td></tr>
+      <tr><td>Rev growth</td><td class="g">+9.4%</td><td class="dim">—</td><td class="w" style="padding-left:10px">YoY</td></tr>
+      <tr><td>Earn growth</td><td class="r">−1.2%</td><td class="dim">—</td><td class="w" style="padding-left:10px">YoY</td></tr>
+      <tr><td>Promoter</td><td>50.3%</td><td class="dim">61.0%</td><td class="w" style="padding-left:10px">institutions 32.1%</td></tr>
+      <tr><td>Analyst</td><td>₹3,250</td><td class="dim">—</td><td class="w" style="padding-left:10px"><span class="g">BUY</span> · +8.9% to target</td></tr>
+      <tr><td>Beta</td><td>0.62</td><td class="dim">—</td><td class="w" style="padding-left:10px">less volatile than Nifty</td></tr>
+      <tr><td>Book value</td><td>₹1,290</td><td class="dim">—</td><td class="w" style="padding-left:10px">per share</td></tr>
+      <tr><td>Sector</td><td colspan="3" class="w" style="text-align:right;color:var(--ink)">Oil &amp; Gas · Refining &amp; Marketing</td></tr>
+    </table>
+    <div class="foot">SECTOR = median of same-sector peers (screener_metrics) · Yahoo Finance · as of 3 Sep</div>
+    <div style="font-size:10px;margin-top:16px" class="dim">QUARTERLY SALES · <span style="color:#3ECF8E">■</span> sales &nbsp;<span class="a">■</span> net profit &nbsp;(₹ L Cr)</div>
     <svg viewBox="0 0 350 84" width="350" height="84" style="margin-top:6px;display:block">
       <g fill="#3ECF8E" fill-opacity=".55">
         <rect x="4" y="22" width="30" height="48"/><rect x="47" y="20" width="30" height="50"/><rect x="90" y="14" width="30" height="56"/><rect x="133" y="18" width="30" height="52"/>
@@ -114,33 +128,30 @@
         <text x="19" y="82">Sep24</text><text x="62" y="82">Dec24</text><text x="105" y="82">Mar25</text><text x="148" y="82">Jun25</text><text x="191" y="82">Sep25</text><text x="234" y="82">Dec25</text><text x="277" y="82">Mar26</text><text x="320" y="82">Jun26</text>
       </g>
     </svg>
-    <div class="foot">Yahoo Finance · as of 3 Sep</div>
+    <div class="foot">numbers in QUARTERLY RESULTS below</div>
   </div>
 
   <!-- TECHNICALS -->
   <div class="sec">
-    <div class="hdr"><span>TECHNICALS</span></div>
+    <div class="hdr"><span>TECHNICALS</span><span class="stamp">1y daily closes</span></div>
     <div class="grid c3" style="margin-top:10px">
       <div class="tile"><div class="l">Trend</div><div class="v g">UP</div><div class="s">above 200-DMA</div></div>
       <div class="tile"><div class="l">RSI-14</div><div class="v">64</div><div class="s">neutral</div></div>
       <div class="tile"><div class="l">MACD</div><div class="v g">bullish</div><div class="s">hist +4.2</div></div>
     </div>
-    <div class="row" style="border:0;padding-bottom:0"><div class="main"><div class="t">RSI-14</div></div><div class="trail">64</div></div>
-    <div class="scale" style="margin-top:6px">
-      <div class="z" style="left:0;width:30%;background:rgba(62,207,142,.25)"></div>
-      <div class="z" style="left:70%;width:30%;background:rgba(229,72,77,.25)"></div>
-      <div class="k" style="left:30%"></div><div class="kl" style="left:30%">30</div>
-      <div class="k" style="left:70%"></div><div class="kl" style="left:70%">70</div>
-      <div class="m" style="left:64%"></div>
-    </div>
-    <div class="row" style="border:0;padding-bottom:0;margin-top:14px"><div class="main"><div class="t">Volume</div><div class="s">vs 20-day average</div></div><div class="trail">1.4×</div></div>
-    <div class="scale" style="margin-top:6px">
-      <div class="k" style="left:33%"></div><div class="kl" style="left:33%">1×</div>
-      <div class="k" style="left:66%"></div><div class="kl" style="left:66%">2×</div>
-      <div class="m" style="left:46%"></div>
-    </div>
-    <div class="row" style="margin-top:14px;border-top:1px solid var(--border)"><div class="main"><div class="t">vs 50-DMA</div><div class="bar"><i class="g" style="width:26%"></i></div></div><div class="trail g">+2.6%</div></div>
-    <div class="row"><div class="main"><div class="t">vs 200-DMA</div><div class="bar"><i class="g" style="width:47%"></i></div></div><div class="trail g">+4.7%</div></div>
+    <table class="kv" style="margin-top:14px">
+      <tr><th style="width:96px">INDICATOR</th><th>LEVEL</th><th>VS PRICE</th><th class="w" style="padding-left:10px">SIGNAL</th></tr>
+      <tr><td>Close</td><td>₹2,984</td><td class="dim">—</td><td class="w" style="padding-left:10px">3 Sep</td></tr>
+      <tr><td>SMA-20</td><td>₹2,941</td><td class="g">+1.5%</td><td class="w" style="padding-left:10px"><span class="g">above</span></td></tr>
+      <tr><td>SMA-50</td><td>₹2,910</td><td class="g">+2.6%</td><td class="w" style="padding-left:10px"><span class="g">above</span></td></tr>
+      <tr><td>SMA-200</td><td>₹2,850</td><td class="g">+4.7%</td><td class="w" style="padding-left:10px"><span class="g">above</span> · golden cross</td></tr>
+      <tr><td>52-wk high</td><td>₹3,217</td><td class="r">−7.2%</td><td class="w" style="padding-left:10px">at 77% of range</td></tr>
+      <tr><td>52-wk low</td><td>₹2,220</td><td class="g">+34.4%</td><td class="w" style="padding-left:10px">off the low</td></tr>
+      <tr><td>RSI-14</td><td>64</td><td class="dim">—</td><td class="w" style="padding-left:10px">neutral (30–70)</td></tr>
+      <tr><td>MACD hist</td><td class="g">+4.2</td><td class="dim">—</td><td class="w" style="padding-left:10px"><span class="g">bullish</span></td></tr>
+      <tr><td>Volume</td><td>1.4×</td><td class="dim">—</td><td class="w" style="padding-left:10px">vs 20-day avg · active</td></tr>
+      <tr><td>Beta</td><td>0.62</td><td class="dim">—</td><td class="w" style="padding-left:10px">vs Nifty 50</td></tr>
+    </table>
     <div class="foot">computed from 1y daily closes · as of 3 Sep</div>
   </div>
 
