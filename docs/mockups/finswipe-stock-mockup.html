@@ -1,0 +1,220 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FinSwipe — stock page, ledger + tiles</title>
+<style>
+  :root{--bg:#0E100F;--surface:#161917;--border:#272B28;--ink:#E8E6E3;--dim:#9BA09C;--green:#3ECF8E;--red:#E5484D;--amber:#E2B93B}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 "Cascadia Mono",Consolas,monospace;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+  .phone{width:390px;margin:0;padding:0 20px 40px}
+  .serif{font-family:"Sitka Text",Georgia,serif}
+  .dim{color:var(--dim)} .g{color:var(--green)} .r{color:var(--red)} .a{color:var(--amber)}
+  .appbar{display:flex;align-items:center;justify-content:space-between;height:52px;font-size:18px}
+  .ribbon{display:flex;gap:6px;overflow:hidden;padding:6px 0 10px;border-bottom:1px solid var(--border)}
+  .pill{font-size:10px;letter-spacing:.08em;padding:4px 8px;border:1px solid var(--border);color:var(--dim);white-space:nowrap}
+  .pill.on{border:1.5px solid var(--green);background:rgba(62,207,142,.18);color:var(--ink)}
+  .pill.amb.on{border-color:var(--amber);background:rgba(226,185,59,.18)}
+  .sec{margin-top:24px}
+  .hdr{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;letter-spacing:.12em;color:var(--dim);padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:4px}
+  .hdr .stamp{font-weight:400;letter-spacing:0;font-size:10px}
+  .foot{font-size:10px;color:var(--dim);margin-top:6px}
+  .row{display:flex;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)}
+  .row .lead{width:86px;font-size:12px;color:var(--ink)}
+  .row .main{flex:1;min-width:0} .row .main .t{font-family:"Sitka Text",Georgia,serif;font-size:13px}
+  .row .main .s{font-size:10px;color:var(--dim)}
+  .row .trail{width:84px;text-align:right;font-size:12px;color:var(--ink)}
+  .bar{height:3px;background:var(--border);margin-top:5px;position:relative}
+  .bar i{position:absolute;left:0;top:0;bottom:0;background:rgba(232,230,227,.25)}
+  .bar i.g{background:var(--green)} .bar i.r{background:var(--red)}
+  .grid{display:grid;gap:8px} .c3{grid-template-columns:repeat(3,1fr)} .c2{grid-template-columns:repeat(2,1fr)} .c4{grid-template-columns:60px repeat(4,1fr)}
+  .tile{border:1px solid var(--border);padding:8px 10px}
+  .tile .l{font-size:10px;color:var(--dim)} .tile .v{font-size:15px;color:var(--ink);margin-top:2px} .tile .s{font-size:10px;color:var(--dim)}
+  .heat{border:1px solid var(--border);padding:7px 9px;min-height:56px;display:flex;flex-direction:column;justify-content:space-between}
+  .heat .l{font-size:10px;color:var(--ink)} .heat .v{font-size:13px}
+  .scale{position:relative;height:6px;background:var(--border);margin:14px 0 4px}
+  .scale .z{position:absolute;top:0;bottom:0} .scale .m{position:absolute;top:-4px;width:2px;height:14px;background:var(--ink)}
+  .scale .k{position:absolute;top:-3px;width:1px;height:12px;background:var(--dim)}
+  .scale .kl{position:absolute;top:12px;font-size:9px;color:var(--dim);transform:translateX(-50%)}
+  .lbls{display:flex;justify-content:space-between;font-size:10px;color:var(--dim)}
+  table{border-collapse:collapse;width:100%;font-size:11px}
+  th,td{height:28px;padding:0 4px;text-align:right;white-space:nowrap} th{color:var(--dim);font-weight:400;border-bottom:1px solid var(--border)}
+  td:first-child,th:first-child{text-align:left;padding-left:0;width:104px;color:var(--dim)}
+  td{color:var(--ink)}
+  .hg{background:rgba(62,207,142,.10)} .hg2{background:rgba(62,207,142,.18)} .hg3{background:rgba(62,207,142,.28)} .hg4{background:rgba(62,207,142,.40)}
+  .hr{background:rgba(229,72,77,.10)} .hr2{background:rgba(229,72,77,.18)} .hr3{background:rgba(229,72,77,.28)} .hr4{background:rgba(229,72,77,.40)}
+  .h0{background:var(--border)}
+  .stack{display:flex;height:8px;margin:12px 0 6px} .legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:10px;color:var(--dim)}
+  .legend b{display:inline-block;width:8px;height:8px;margin-right:5px;vertical-align:middle}
+  .peer{display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:11px}
+  .peer .n{flex:1;min-width:0} .peer .n .nm{color:var(--ink);font-size:12px} .peer .c{width:70px;text-align:right} .peer .c2{width:54px;text-align:right} .peer .c3{width:60px;text-align:right}
+  .peer.self{border-left:2px solid var(--green);padding-left:8px}
+  .pc{display:flex;gap:16px} .pc div{flex:1;font-size:11px} .pc h4{margin:0 0 4px;font-size:10px;letter-spacing:.1em;font-weight:700} .pc p{margin:0 0 6px;color:var(--ink)}
+</style>
+<div class="phone">
+  <div class="appbar"><span class="serif">‹&nbsp; Reliance Industries</span><span class="a">★</span></div>
+  <div class="ribbon"><span class="pill on">CHART</span><span class="pill">SNAPSHOT</span><span class="pill">FUNDAMENTALS</span><span class="pill">TECHNICALS</span><span class="pill">PROS·CONS</span><span class="pill">GROWTH</span><span class="pill">PEERS</span><span class="pill">QUARTERS</span></div>
+
+  <!-- CHART -->
+  <div class="sec" style="margin-top:18px">
+    <div style="font-size:12px" class="dim">RELIANCE <span style="margin-left:8px">Oil &amp; Gas · Refining</span></div>
+    <div style="display:flex;align-items:flex-end;gap:10px;margin-top:8px">
+      <span class="serif" style="font-size:34px;font-weight:700;line-height:1">₹2,984.50</span>
+      <span class="g" style="font-size:13px;padding-bottom:4px">+35.20 (1.19%)</span>
+    </div>
+    <svg viewBox="0 0 350 96" width="350" height="96" style="margin-top:16px;display:block">
+      <polyline fill="none" stroke="#3ECF8E" stroke-width="1.5" points="0,70 18,64 36,68 54,58 72,60 90,50 108,54 126,44 144,48 162,40 180,46 198,36 216,30 234,38 252,28 270,34 288,24 306,20 324,26 350,14"/>
+      <polyline fill="none" stroke="#E2B93B" stroke-width="1" points="0,52 88,52 88,44 176,44 176,48 262,48 262,38 350,38"/>
+    </svg>
+    <div class="a" style="font-size:10px;margin:10px 0 8px">P/E 27.4 · TTM, quarter-end steps</div>
+    <div style="display:flex;gap:6px"><span class="pill">1M</span><span class="pill">6M</span><span class="pill on">1Y</span><span class="pill">3Y</span><span class="pill">5Y</span><span class="pill">10Y</span><span class="pill">MAX</span><span class="pill amb on">P/E</span></div>
+    <div class="scale" style="margin-top:22px">
+      <div class="k" style="left:69%"></div><div class="kl" style="left:69%">50D</div>
+      <div class="k" style="left:63%"></div><div class="kl" style="left:63%">200D</div>
+      <div class="m" style="left:76.6%"></div>
+    </div>
+    <div class="lbls" style="margin-top:14px"><span>52-wk ₹2,220</span><span>at 77%</span><span>₹3,217</span></div>
+    <div class="foot">Delayed price · Yahoo Finance</div>
+  </div>
+
+  <!-- SNAPSHOT -->
+  <div class="sec">
+    <div class="hdr"><span>SNAPSHOT</span></div>
+    <div class="grid c3" style="margin-top:10px">
+      <div class="tile"><div class="l">Mkt cap</div><div class="v">₹20.2L Cr</div></div>
+      <div class="tile"><div class="l">P/E</div><div class="v">27.4</div><div class="s">fwd 23.1</div></div>
+      <div class="tile"><div class="l">P/B</div><div class="v">2.31</div></div>
+      <div class="tile"><div class="l">ROE</div><div class="v">8.9%</div></div>
+      <div class="tile"><div class="l">Div yield</div><div class="v">0.34%</div></div>
+      <div class="tile"><div class="l">Debt/Equity</div><div class="v">0.41</div></div>
+    </div>
+  </div>
+
+  <!-- FUNDAMENTALS -->
+  <div class="sec">
+    <div class="hdr"><span>FUNDAMENTALS</span></div>
+    <div class="row"><div class="main"><div class="t">EPS (TTM)</div></div><div class="trail">₹108.9</div></div>
+    <div class="row"><div class="main"><div class="t">Net margin</div></div><div class="trail">7.8%</div></div>
+    <div class="row"><div class="main"><div class="t">Growth (YoY)</div><div class="s">revenue · earnings</div></div><div class="trail"><span class="g">+9.4%</span> · <span class="r">−1.2%</span></div></div>
+    <div class="row"><div class="main"><div class="t">Holding</div><div class="s">promoter · institutions</div></div><div class="trail">50.3% · 32.1%</div></div>
+    <div class="row"><div class="main"><div class="t">Analyst</div><div class="s">target ₹3,250</div></div><div class="trail g">BUY</div></div>
+    <div class="row"><div class="main"><div class="t">Beta</div></div><div class="trail">0.62</div></div>
+    <div class="row"><div class="main"><div class="t">ROCE</div></div><div class="trail">9.6%</div></div>
+    <div class="row"><div class="main"><div class="t">Book value</div></div><div class="trail">₹1,290</div></div>
+    <div style="font-size:10px;margin-top:14px" class="dim">QUARTERLY SALES · <span style="color:#3ECF8E">■</span> sales &nbsp;<span class="a">■</span> net profit &nbsp;(₹ L Cr)</div>
+    <svg viewBox="0 0 350 84" width="350" height="84" style="margin-top:6px;display:block">
+      <g fill="#3ECF8E" fill-opacity=".55">
+        <rect x="4" y="22" width="30" height="48"/><rect x="47" y="20" width="30" height="50"/><rect x="90" y="14" width="30" height="56"/><rect x="133" y="18" width="30" height="52"/>
+        <rect x="176" y="10" width="30" height="60"/><rect x="219" y="8" width="30" height="62"/><rect x="262" y="16" width="30" height="54"/><rect x="305" y="14" width="30" height="56"/>
+      </g>
+      <g fill="#E2B93B">
+        <rect x="14" y="60" width="10" height="10"/><rect x="57" y="58" width="10" height="12"/><rect x="100" y="56" width="10" height="14"/><rect x="143" y="59" width="10" height="11"/>
+        <rect x="186" y="55" width="10" height="15"/><rect x="229" y="54" width="10" height="16"/><rect x="272" y="58" width="10" height="12"/><rect x="315" y="56" width="10" height="14"/>
+      </g>
+      <line x1="0" y1="70.5" x2="350" y2="70.5" stroke="#272B28"/>
+      <g fill="#9BA09C" font-size="9" text-anchor="middle" font-family="Consolas,monospace">
+        <text x="19" y="82">Sep24</text><text x="62" y="82">Dec24</text><text x="105" y="82">Mar25</text><text x="148" y="82">Jun25</text><text x="191" y="82">Sep25</text><text x="234" y="82">Dec25</text><text x="277" y="82">Mar26</text><text x="320" y="82">Jun26</text>
+      </g>
+    </svg>
+    <div class="foot">Yahoo Finance · as of 3 Sep</div>
+  </div>
+
+  <!-- TECHNICALS -->
+  <div class="sec">
+    <div class="hdr"><span>TECHNICALS</span></div>
+    <div class="grid c3" style="margin-top:10px">
+      <div class="tile"><div class="l">Trend</div><div class="v g">UP</div><div class="s">above 200-DMA</div></div>
+      <div class="tile"><div class="l">RSI-14</div><div class="v">64</div><div class="s">neutral</div></div>
+      <div class="tile"><div class="l">MACD</div><div class="v g">bullish</div><div class="s">hist +4.2</div></div>
+    </div>
+    <div class="row" style="border:0;padding-bottom:0"><div class="main"><div class="t">RSI-14</div></div><div class="trail">64</div></div>
+    <div class="scale" style="margin-top:6px">
+      <div class="z" style="left:0;width:30%;background:rgba(62,207,142,.25)"></div>
+      <div class="z" style="left:70%;width:30%;background:rgba(229,72,77,.25)"></div>
+      <div class="k" style="left:30%"></div><div class="kl" style="left:30%">30</div>
+      <div class="k" style="left:70%"></div><div class="kl" style="left:70%">70</div>
+      <div class="m" style="left:64%"></div>
+    </div>
+    <div class="row" style="border:0;padding-bottom:0;margin-top:14px"><div class="main"><div class="t">Volume</div><div class="s">vs 20-day average</div></div><div class="trail">1.4×</div></div>
+    <div class="scale" style="margin-top:6px">
+      <div class="k" style="left:33%"></div><div class="kl" style="left:33%">1×</div>
+      <div class="k" style="left:66%"></div><div class="kl" style="left:66%">2×</div>
+      <div class="m" style="left:46%"></div>
+    </div>
+    <div class="row" style="margin-top:14px;border-top:1px solid var(--border)"><div class="main"><div class="t">vs 50-DMA</div><div class="bar"><i class="g" style="width:26%"></i></div></div><div class="trail g">+2.6%</div></div>
+    <div class="row"><div class="main"><div class="t">vs 200-DMA</div><div class="bar"><i class="g" style="width:47%"></i></div></div><div class="trail g">+4.7%</div></div>
+    <div class="foot">computed from 1y daily closes · as of 3 Sep</div>
+  </div>
+
+  <!-- PROS · CONS -->
+  <div class="sec">
+    <div class="hdr"><span>PROS · CONS</span></div>
+    <div class="pc" style="margin-top:10px">
+      <div><h4 class="g">PROS</h4><p>Debt reduced by ₹41,000 Cr in 2 years</p><p>Healthy dividend payout of 34%</p></div>
+      <div><h4 class="r">CONS</h4><p>Low ROE of 8.9% over 3 years</p><p>Sales growth 6.1% over 5 years is slow</p></div>
+    </div>
+  </div>
+
+  <!-- GROWTH heat grid -->
+  <div class="sec">
+    <div class="hdr"><span>GROWTH</span><span class="stamp">CAGR</span></div>
+    <div class="grid c4" style="margin-top:10px;gap:6px 8px">
+      <div></div><div class="dim" style="font-size:10px;text-align:center">10Y</div><div class="dim" style="font-size:10px;text-align:center">5Y</div><div class="dim" style="font-size:10px;text-align:center">3Y</div><div class="dim" style="font-size:10px;text-align:center">TTM</div>
+      <div class="dim" style="font-size:11px;align-self:center">Sales</div><div class="heat hg2" style="min-height:44px"><div class="v g">9%</div></div><div class="heat hg" style="min-height:44px"><div class="v g">6%</div></div><div class="heat hg2" style="min-height:44px"><div class="v g">12%</div></div><div class="heat hg2" style="min-height:44px"><div class="v g">9%</div></div>
+      <div class="dim" style="font-size:11px;align-self:center">Profit</div><div class="heat hg2" style="min-height:44px"><div class="v g">11%</div></div><div class="heat hg" style="min-height:44px"><div class="v g">7%</div></div><div class="heat hg3" style="min-height:44px"><div class="v g">18%</div></div><div class="heat hr" style="min-height:44px"><div class="v r">−1%</div></div>
+      <div class="dim" style="font-size:11px;align-self:center">Price</div><div class="heat hg3" style="min-height:44px"><div class="v g">17%</div></div><div class="heat hg4" style="min-height:44px"><div class="v g">24%</div></div><div class="heat hg" style="min-height:44px"><div class="v g">6%</div></div><div class="heat hg2" style="min-height:44px"><div class="v g">12%</div></div>
+      <div class="dim" style="font-size:11px;align-self:center">ROE</div><div class="heat hg" style="min-height:44px"><div class="v g">9%</div></div><div class="heat hg" style="min-height:44px"><div class="v g">8%</div></div><div class="heat hg" style="min-height:44px"><div class="v g">9%</div></div><div class="heat h0" style="min-height:44px"><div class="v dim">—</div></div>
+    </div>
+    <div class="foot">Screener-style compounded growth · ₹ Cr basis</div>
+  </div>
+
+  <!-- PEERS -->
+  <div class="sec">
+    <div class="hdr"><span>PEERS</span><span class="stamp">Oil &amp; Gas · by mkt cap</span></div>
+    <div class="peer dim" style="padding:4px 0"><div class="n">company</div><div class="c">price</div><div class="c2">P/E</div><div class="c3">ROE</div></div>
+    <div class="peer self"><div class="n"><div class="nm">Reliance</div><div class="bar" style="width:70%"><i style="width:100%"></i></div></div><div class="c">2,984</div><div class="c2">27.4</div><div class="c3">8.9%</div></div>
+    <div class="peer"><div class="n"><div class="nm">ONGC</div><div class="bar" style="width:70%"><i style="width:17%"></i></div></div><div class="c">241</div><div class="c2">7.8</div><div class="c3">14.2%</div></div>
+    <div class="peer"><div class="n"><div class="nm">IOC</div><div class="bar" style="width:70%"><i style="width:11%"></i></div></div><div class="c">142</div><div class="c2">9.1</div><div class="c3">12.0%</div></div>
+    <div class="peer"><div class="n"><div class="nm">BPCL</div><div class="bar" style="width:70%"><i style="width:7%"></i></div></div><div class="c">318</div><div class="c2">8.4</div><div class="c3">21.6%</div></div>
+    <div class="peer"><div class="n"><div class="nm">GAIL</div><div class="bar" style="width:70%"><i style="width:6%"></i></div></div><div class="c">176</div><div class="c2">11.2</div><div class="c3">13.8%</div></div>
+    <div class="foot">bar = market cap vs largest peer · screener_metrics</div>
+  </div>
+
+  <!-- QUARTERLY RESULTS with HEAT -->
+  <div class="sec">
+    <div class="hdr"><span>QUARTERLY RESULTS</span><span class="pill amb on">HEAT</span></div>
+    <div style="overflow:hidden;margin-top:4px">
+    <table>
+      <tr><th></th><th>Sep25</th><th>Dec25</th><th>Mar26</th><th>Jun26</th></tr>
+      <tr><td>Sales</td><td class="hg">2,58,027</td><td class="hg">2,64,834</td><td class="hr2">2,44,101</td><td class="hg">2,48,660</td></tr>
+      <tr><td>Expenses</td><td class="hg">2,16,522</td><td class="hg">2,20,910</td><td class="hr2">2,04,388</td><td class="hg">2,07,215</td></tr>
+      <tr><td>Operating profit</td><td class="hg2">41,505</td><td class="hg">43,924</td><td class="hr2">39,713</td><td class="hg">41,445</td></tr>
+      <tr><td>OPM %</td><td class="h0">16.1</td><td class="hg">16.6</td><td class="hr">16.3</td><td class="hg">16.7</td></tr>
+      <tr><td>Interest</td><td class="hr">6,017</td><td class="hr">6,179</td><td class="hg">5,908</td><td class="hg">5,821</td></tr>
+      <tr><td>Net profit</td><td class="hg2">19,101</td><td class="hg3">21,930</td><td class="hr3">18,540</td><td class="hg2">20,120</td></tr>
+      <tr><td>EPS ₹</td><td class="hg2">14.1</td><td class="hg3">16.2</td><td class="hr3">13.7</td><td class="hg2">14.9</td></tr>
+    </table>
+    </div>
+    <div class="foot">₹ Cr · tint = change vs previous period · Yahoo Finance + backfill</div>
+  </div>
+
+  <!-- SHAREHOLDING -->
+  <div class="sec">
+    <div class="hdr"><span>SHAREHOLDING</span><span class="stamp">Jun 2026</span></div>
+    <div class="stack">
+      <div style="width:50.3%;background:rgba(232,230,227,.8)"></div>
+      <div style="width:21.5%;background:rgba(232,230,227,.6)"></div>
+      <div style="width:17.1%;background:rgba(232,230,227,.45)"></div>
+      <div style="width:0.2%;background:rgba(232,230,227,.3)"></div>
+      <div style="width:10.9%;background:rgba(232,230,227,.2)"></div>
+    </div>
+    <div class="legend"><span><b style="background:rgba(232,230,227,.8)"></b>Promoters 50.3%</span><span><b style="background:rgba(232,230,227,.6)"></b>FII 21.5%</span><span><b style="background:rgba(232,230,227,.45)"></b>DII 17.1%</span><span><b style="background:rgba(232,230,227,.2)"></b>Public 10.9%</span></div>
+    <table style="margin-top:12px">
+      <tr><th></th><th>Sep25</th><th>Dec25</th><th>Mar26</th><th>Jun26</th></tr>
+      <tr><td>Promoters</td><td>50.3</td><td>50.3</td><td>50.3</td><td>50.3</td></tr>
+      <tr><td>FIIs</td><td>22.1</td><td>21.9</td><td>21.6</td><td>21.5</td></tr>
+      <tr><td>DIIs</td><td>16.4</td><td>16.7</td><td>16.9</td><td>17.1</td></tr>
+      <tr><td>Public</td><td>11.1</td><td>11.0</td><td>11.0</td><td>10.9</td></tr>
+      <tr><td>No. of holders</td><td>35.2L</td><td>36.1L</td><td>37.4L</td><td>38.0L</td></tr>
+    </table>
+    <div class="foot">% of equity · NSE shareholding pattern</div>
+  </div>
+</div>

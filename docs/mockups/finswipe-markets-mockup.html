@@ -1,0 +1,177 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FinSwipe — markets tab, ledger + tiles</title>
+<style>
+  :root{--bg:#0E100F;--surface:#161917;--border:#272B28;--ink:#E8E6E3;--dim:#9BA09C;--green:#3ECF8E;--red:#E5484D;--amber:#E2B93B}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 "Cascadia Mono",Consolas,monospace;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+  .phone{width:390px;margin:0;padding:0 20px 40px}
+  .serif{font-family:"Sitka Text",Georgia,serif}
+  .dim{color:var(--dim)} .g{color:var(--green)} .r{color:var(--red)} .a{color:var(--amber)}
+  .appbar{display:flex;align-items:center;justify-content:space-between;height:52px;font-size:18px}
+  .ribbon{display:flex;gap:6px;overflow:hidden;padding:6px 0 10px;border-bottom:1px solid var(--border)}
+  .pill{font-size:10px;letter-spacing:.08em;padding:4px 8px;border:1px solid var(--border);color:var(--dim);white-space:nowrap}
+  .pill.on{border:1.5px solid var(--green);background:rgba(62,207,142,.18);color:var(--ink)}
+  .sec{margin-top:24px}
+  .hdr{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;letter-spacing:.12em;color:var(--dim);padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:4px}
+  .hdr .stamp{font-weight:400;letter-spacing:0;font-size:10px}
+  .hdr .pills{display:flex;gap:4px}
+  .foot{font-size:10px;color:var(--dim);margin-top:6px}
+  .row{display:flex;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)}
+  .row .lead{width:86px;font-size:12px;color:var(--ink)}
+  .row .main{flex:1;min-width:0} .row .main .t{font-family:"Sitka Text",Georgia,serif;font-size:13px}
+  .row .main .s{font-size:10px;color:var(--dim)}
+  .row .trail{width:84px;text-align:right;font-size:12px;color:var(--ink)}
+  .bar{height:3px;background:var(--border);margin-top:5px;position:relative}
+  .bar i{position:absolute;left:0;top:0;bottom:0;background:rgba(232,230,227,.25)}
+  .bar.rt{background:rgba(229,72,77,.35)} .bar i.g{background:var(--green)} .bar i.r{background:var(--red)}
+  .grid{display:grid;gap:8px} .c3{grid-template-columns:repeat(3,1fr)} .c2{grid-template-columns:repeat(2,1fr)}
+  .tile{border:1px solid var(--border);padding:8px 10px}
+  .tile .l{font-size:10px;color:var(--dim)} .tile .v{font-size:15px;color:var(--ink);margin-top:2px} .tile .s{font-size:10px;color:var(--dim)}
+  .heat{border:1px solid var(--border);padding:7px 9px;min-height:56px;display:flex;flex-direction:column;justify-content:space-between}
+  .heat .l{font-size:10px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .heat .v{font-size:13px} .heat .s{font-size:9px;color:var(--dim)}
+  .heat .bar{margin-top:3px}
+  .hg{background:rgba(62,207,142,.10);border-color:rgba(62,207,142,.45)} .hg2{background:rgba(62,207,142,.18);border-color:rgba(62,207,142,.45)} .hg3{background:rgba(62,207,142,.28);border-color:rgba(62,207,142,.45)} .hg4{background:rgba(62,207,142,.40);border-color:rgba(62,207,142,.45)}
+  .hr{background:rgba(229,72,77,.10);border-color:rgba(229,72,77,.45)} .hr2{background:rgba(229,72,77,.18);border-color:rgba(229,72,77,.45)} .hr3{background:rgba(229,72,77,.28);border-color:rgba(229,72,77,.45)} .hr4{background:rgba(229,72,77,.40);border-color:rgba(229,72,77,.45)}
+  .h0{background:var(--border)}
+  .legend{display:flex;align-items:center;gap:0;margin-top:10px;font-size:9px;color:var(--dim)}
+  .legend b{display:inline-block;width:22px;height:8px}
+  .scale{position:relative;height:6px;background:var(--border);margin:14px 0 4px}
+  .scale .z{position:absolute;top:0;bottom:0} .scale .m{position:absolute;top:-4px;width:2px;height:14px;background:var(--ink)}
+  .scale .k{position:absolute;top:-3px;width:1px;height:12px;background:var(--dim)}
+  .scale .kl{position:absolute;top:12px;font-size:9px;color:var(--dim);transform:translateX(-50%)}
+  .tick{display:flex;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}
+  .tick .n{flex:1;min-width:0} .tick .n .nm{font-family:"Sitka Text",Georgia,serif;font-size:15px} .tick .n .lb{font-size:10px;color:var(--dim)}
+  .tick .p{width:84px;text-align:right} .tick .p .pr{font-size:14px;color:var(--ink)} .tick .p .pc{font-size:11px}
+  .pair{margin:4px 0 6px} .pair .l{display:flex;justify-content:space-between;font-size:10px;color:var(--dim)}
+  .pair .b{height:6px;margin:3px 0} .pair .b i{display:block;height:100%}
+  .curve{margin-top:12px} .cl{display:flex} .cl span{flex:1;text-align:center;font-size:10px;color:var(--dim)} .cl.v span{color:var(--ink);font-size:11px}
+</style>
+<div class="phone">
+  <div class="appbar"><span class="serif">Markets</span><span class="dim" style="font-size:10px">as of 15:31 IST</span></div>
+  <div class="ribbon"><span class="pill on">SECTORS</span><span class="pill">WATCHLIST</span><span class="pill">SCREENS</span><span class="pill">INDICES</span><span class="pill">FLOWS</span><span class="pill">MOOD</span><span class="pill">F&amp;O</span><span class="pill">BONDS</span><span class="pill">IPO</span></div>
+
+  <!-- SECTORS -->
+  <div class="sec">
+    <div class="hdr"><span>SECTORS</span><span class="pills"><span class="pill on">TODAY</span><span class="pill">30D</span><span class="pill">1Y</span></span></div>
+    <div class="dim" style="font-size:10px;margin:10px 0 6px">SECTORAL</div>
+    <div class="grid c3">
+      <div class="heat hg4"><div class="l">PSU Bank</div><div class="v g">+2.84%</div><div class="bar rt"><i class="g" style="width:83%"></i></div></div>
+      <div class="heat hg3"><div class="l">Metal</div><div class="v g">+2.12%</div><div class="bar rt"><i class="g" style="width:73%"></i></div></div>
+      <div class="heat hg3"><div class="l">Realty</div><div class="v g">+2.05%</div><div class="bar rt"><i class="g" style="width:80%"></i></div></div>
+      <div class="heat hg2"><div class="l">Bank</div><div class="v g">+1.36%</div><div class="bar rt"><i class="g" style="width:75%"></i></div></div>
+      <div class="heat hg2"><div class="l">Auto</div><div class="v g">+1.12%</div><div class="bar rt"><i class="g" style="width:60%"></i></div></div>
+      <div class="heat hg"><div class="l">Energy</div><div class="v g">+0.71%</div><div class="bar rt"><i class="g" style="width:55%"></i></div></div>
+      <div class="heat hg"><div class="l">FMCG</div><div class="v g">+0.54%</div><div class="bar rt"><i class="g" style="width:53%"></i></div></div>
+      <div class="heat h0"><div class="l">Pharma</div><div class="v dim">+0.06%</div><div class="bar rt"><i class="g" style="width:50%"></i></div></div>
+      <div class="heat hr"><div class="l">Media</div><div class="v r">−0.62%</div><div class="bar rt"><i class="g" style="width:38%"></i></div></div>
+      <div class="heat hr2"><div class="l">IT</div><div class="v r">−1.24%</div><div class="bar rt"><i class="g" style="width:20%"></i></div></div>
+      <div class="heat hr2"><div class="l">Fin Services</div><div class="v r">−1.41%</div><div class="bar rt"><i class="g" style="width:30%"></i></div></div>
+      <div class="heat hr3"><div class="l">Oil &amp; Gas</div><div class="v r">−2.30%</div><div class="bar rt"><i class="g" style="width:13%"></i></div></div>
+    </div>
+    <div class="legend"><span style="margin-right:6px">−3%</span><b style="background:rgba(229,72,77,.40)"></b><b style="background:rgba(229,72,77,.28)"></b><b style="background:rgba(229,72,77,.18)"></b><b style="background:rgba(229,72,77,.10)"></b><b style="background:#272B28"></b><b style="background:rgba(62,207,142,.10)"></b><b style="background:rgba(62,207,142,.18)"></b><b style="background:rgba(62,207,142,.28)"></b><b style="background:rgba(62,207,142,.40)"></b><span style="margin-left:6px">+3%</span><span style="margin-left:auto">bar = advances vs declines</span></div>
+    <div class="dim" style="font-size:10px;margin:14px 0 6px">BROAD MARKET</div>
+    <div class="grid c3">
+      <div class="heat hg"><div class="l">Nifty 50</div><div class="v g">+0.82%</div><div class="bar rt"><i class="g" style="width:64%"></i></div></div>
+      <div class="heat hg2"><div class="l">Nifty Midcap 100</div><div class="v g">+1.21%</div><div class="bar rt"><i class="g" style="width:68%"></i></div></div>
+      <div class="heat hg2"><div class="l">Nifty Smallcap 100</div><div class="v g">+1.48%</div><div class="bar rt"><i class="g" style="width:71%"></i></div></div>
+    </div>
+    <div style="font-size:12px;margin-top:8px" class="g">show all 9</div>
+    <div class="foot">NSE · 15:30 IST · tap a tile for P/E, breadth, 52-wk</div>
+  </div>
+
+  <!-- INDICES -->
+  <div class="sec">
+    <div class="hdr"><span>INDICES</span></div>
+    <div class="tick"><div class="n"><div class="nm">NIFTY 50</div></div><svg width="80" height="24" viewBox="0 0 80 24"><polyline fill="none" stroke="#3ECF8E" stroke-width="1.5" points="0,18 8,16 16,17 24,12 32,14 40,10 48,11 56,7 64,9 72,4 80,3"/></svg><div class="p" style="margin-left:14px"><div class="pr">24,812.30</div><div class="pc g">+0.82%</div></div></div>
+    <div class="tick"><div class="n"><div class="nm">SENSEX</div></div><svg width="80" height="24" viewBox="0 0 80 24"><polyline fill="none" stroke="#3ECF8E" stroke-width="1.5" points="0,19 8,15 16,16 24,12 32,13 40,9 48,10 56,6 64,8 72,5 80,3"/></svg><div class="p" style="margin-left:14px"><div class="pr">81,204.10</div><div class="pc g">+0.78%</div></div></div>
+    <div class="tick"><div class="n"><div class="nm">BANK NIFTY</div></div><svg width="80" height="24" viewBox="0 0 80 24"><polyline fill="none" stroke="#3ECF8E" stroke-width="1.5" points="0,20 8,18 16,14 24,15 32,10 40,11 48,8 56,9 64,5 72,6 80,2"/></svg><div class="p" style="margin-left:14px"><div class="pr">53,118.45</div><div class="pc g">+1.36%</div></div></div>
+    <div class="tick"><div class="n"><div class="nm">NIFTY IT</div></div><svg width="80" height="24" viewBox="0 0 80 24"><polyline fill="none" stroke="#E5484D" stroke-width="1.5" points="0,4 8,6 16,5 24,9 32,8 40,12 48,11 56,15 64,14 72,18 80,21"/></svg><div class="p" style="margin-left:14px"><div class="pr">36,420.80</div><div class="pc r">−1.24%</div></div></div>
+    <div class="tick"><div class="n"><div class="nm">INDIA VIX</div><div class="lb">volatility</div></div><svg width="80" height="24" viewBox="0 0 80 24"><polyline fill="none" stroke="#E5484D" stroke-width="1.5" points="0,6 8,8 16,7 24,10 32,12 40,11 48,14 56,13 64,16 72,18 80,19"/></svg><div class="p" style="margin-left:14px"><div class="pr">12.84</div><div class="pc r">−3.10%</div></div></div>
+  </div>
+
+  <!-- FLOWS -->
+  <div class="sec">
+    <div class="hdr"><span>FLOWS</span><span class="stamp">NSE · 3 Sep</span></div>
+    <div class="row" style="border:0;padding-bottom:4px"><div class="lead">FII</div><div class="main"><div class="t">cash market</div></div><div class="trail r">−₹1,842 Cr</div></div>
+    <div class="pair"><div class="l"><span>buy ₹12,310 Cr</span><span>sell ₹14,152 Cr</span></div><div class="b"><i class="g" style="width:87%;background:var(--green);opacity:.7"></i></div><div class="b"><i style="width:100%;background:var(--red);opacity:.7"></i></div></div>
+    <div class="row" style="padding-bottom:4px"><div class="lead">DII</div><div class="main"><div class="t">cash market</div></div><div class="trail g">+₹2,124 Cr</div></div>
+    <div class="pair"><div class="l"><span>buy ₹11,890 Cr</span><span>sell ₹9,766 Cr</span></div><div class="b"><i style="width:100%;background:var(--green);opacity:.7"></i></div><div class="b"><i style="width:82%;background:var(--red);opacity:.7"></i></div></div>
+    <div class="row" style="border-top:1px solid var(--border)"><div class="lead">NIFTY 50</div><div class="main"><div class="t">breadth</div><div class="bar rt"><i class="g" style="width:64%"></i></div></div><div class="trail g">32↑ 18↓</div></div>
+    <div class="row"><div class="lead">NIFTY 500</div><div class="main"><div class="t">breadth</div><div class="bar rt"><i class="g" style="width:58%"></i></div></div><div class="trail g">291↑ 209↓</div></div>
+  </div>
+
+  <!-- MOOD -->
+  <div class="sec">
+    <div class="hdr"><span>MOOD</span></div>
+    <div class="row" style="border:0;padding-bottom:0"><div class="main"><div class="t">Fear &amp; Greed</div><div class="s">score 62</div></div><div class="trail g">Greed</div></div>
+    <div class="scale" style="margin-top:8px"><div class="z" style="left:0;width:30%;background:rgba(229,72,77,.25)"></div><div class="z" style="left:30%;width:40%;background:rgba(226,185,59,.18)"></div><div class="z" style="left:70%;width:30%;background:rgba(62,207,142,.25)"></div><div class="m" style="left:62%"></div></div>
+    <div class="row" style="border:0;padding-bottom:0;margin-top:12px"><div class="main"><div class="t">Risk</div><div class="s">score 38</div></div><div class="trail a">Elevated</div></div>
+    <div class="scale" style="margin-top:8px"><div class="z" style="left:0;width:30%;background:rgba(62,207,142,.25)"></div><div class="z" style="left:30%;width:40%;background:rgba(226,185,59,.18)"></div><div class="z" style="left:70%;width:30%;background:rgba(229,72,77,.25)"></div><div class="m" style="left:38%"></div></div>
+    <div class="row" style="margin-top:14px;border-top:1px solid var(--border)"><div class="main"><div class="t">India VIX</div><div class="bar"><i style="width:28%"></i></div></div><div class="trail">28</div></div>
+    <div class="row"><div class="main"><div class="t">Breadth</div><div class="bar"><i style="width:71%"></i></div></div><div class="trail">71</div></div>
+    <div class="row"><div class="main"><div class="t">FII flow</div><div class="bar"><i style="width:34%"></i></div></div><div class="trail">34</div></div>
+    <div class="row"><div class="main"><div class="t">Momentum</div><div class="bar"><i style="width:80%"></i></div></div><div class="trail">80</div></div>
+    <div class="foot">0–100 · methodology v2</div>
+  </div>
+
+  <!-- F&O -->
+  <div class="sec">
+    <div class="hdr"><span>F&amp;O</span><span class="stamp">NSE · 15:30</span></div>
+    <div class="row" style="border:0;padding-bottom:0"><div class="main"><div class="t">put/call ratio</div><div class="s">NIFTY · 9 Sep expiry · max OI 25,000</div></div><div class="trail">PCR 1.08</div></div>
+    <div class="scale" style="margin-top:8px"><div class="k" style="left:50%"></div><div class="kl" style="left:50%">1.0</div><div class="m" style="left:58%"></div></div>
+    <div class="row" style="margin-top:14px;border-top:1px solid var(--border)"><div class="lead">52-WK</div><div class="main"><div class="t">new highs / lows</div><div class="bar rt"><i class="g" style="width:74%"></i></div></div><div class="trail g">34↑ 12↓</div></div>
+    <div class="dim" style="font-size:10px;margin:14px 0 6px">TOP GAINERS</div>
+    <div class="grid c3">
+      <div class="heat hg4"><div class="l">ANANTRAJ</div><div class="v g">+6.82%</div><div class="s">₹612.40</div></div>
+      <div class="heat hg4"><div class="l">IREDA</div><div class="v g">+5.91%</div><div class="s">₹184.15</div></div>
+      <div class="heat hg4"><div class="l">RVNL</div><div class="v g">+4.40%</div><div class="s">₹402.70</div></div>
+    </div>
+    <div class="dim" style="font-size:10px;margin:12px 0 6px">TOP LOSERS</div>
+    <div class="grid c3">
+      <div class="heat hr4"><div class="l">MPHASIS</div><div class="v r">−4.12%</div><div class="s">₹2,410</div></div>
+      <div class="heat hr4"><div class="l">COFORGE</div><div class="v r">−3.55%</div><div class="s">₹1,732</div></div>
+      <div class="heat hr3"><div class="l">PERSISTENT</div><div class="v r">−2.90%</div><div class="s">₹5,118</div></div>
+    </div>
+    <div class="dim" style="font-size:10px;margin:14px 0 0">OI GAINERS</div>
+    <div class="row"><div class="lead">HINDALCO</div><div class="main"><div class="t">₹712.30 · +2.4%</div><div class="bar"><i style="width:100%"></i></div></div><div class="trail">+38.2% OI</div></div>
+    <div class="row"><div class="lead">TATASTEEL</div><div class="main"><div class="t">₹164.85 · +1.9%</div><div class="bar"><i style="width:71%"></i></div></div><div class="trail">+27.1% OI</div></div>
+    <div class="row"><div class="lead">SAIL</div><div class="main"><div class="t">₹128.10 · +3.1%</div><div class="bar"><i style="width:56%"></i></div></div><div class="trail">+21.4% OI</div></div>
+    <div style="font-size:12px;margin-top:8px" class="g">show all 12</div>
+  </div>
+
+  <!-- BONDS -->
+  <div class="sec">
+    <div class="hdr"><span>BONDS</span><span class="stamp">Stooq · 3 Sep</span></div>
+    <div class="curve">
+      <svg viewBox="0 0 350 56" width="350" height="56" style="display:block">
+        <polyline fill="none" stroke="#E8E6E3" stroke-width="1.5" points="43.75,44 131.25,30 218.75,18 306.25,10"/>
+        <g fill="#E8E6E3"><circle cx="43.75" cy="44" r="2.5"/><circle cx="131.25" cy="30" r="2.5"/><circle cx="218.75" cy="18" r="2.5"/><circle cx="306.25" cy="10" r="2.5"/></g>
+      </svg>
+      <div class="cl v"><span>6.42%</span><span>6.61%</span><span>6.78%</span><span>6.94%</span></div>
+      <div class="cl"><span>2Y</span><span>5Y</span><span>10Y</span><span>30Y</span></div>
+    </div>
+    <div class="row" style="margin-top:10px;border-top:1px solid var(--border)"><div class="lead">10Y</div><div class="main"><div class="t">G-Sec yield</div><div class="s">3 Sep</div></div><div class="trail g">−3.0 bp</div></div>
+    <div class="row"><div class="lead">5Y</div><div class="main"><div class="t">G-Sec yield</div><div class="s">3 Sep</div></div><div class="trail r">+1.5 bp</div></div>
+    <div class="dim" style="font-size:10px;margin:14px 0 6px">RBI POLICY RATES</div>
+    <div class="grid c2">
+      <div class="tile"><div class="l">Repo rate</div><div class="v">5.25%</div></div>
+      <div class="tile"><div class="l">SDF</div><div class="v">5.00%</div></div>
+      <div class="tile"><div class="l">MSF</div><div class="v">5.50%</div></div>
+      <div class="tile"><div class="l">CRR</div><div class="v">3.00%</div></div>
+      <div class="tile"><div class="l">SLR</div><div class="v">18.00%</div></div>
+      <div class="tile"><div class="l">91-day T-bill cut-off</div><div class="v">5.38%</div></div>
+    </div>
+    <div class="foot">falling yield = green · RBI as of 6 Aug</div>
+  </div>
+
+  <!-- IPO -->
+  <div class="sec">
+    <div class="hdr"><span>IPO</span></div>
+    <div class="row"><div class="lead">URBANCO</div><div class="main"><div class="t">Urban Company</div><div class="s">₹98–103 · ₹1,900 Cr · 10–12 Sep</div></div><div class="trail g">open</div></div>
+    <div class="row"><div class="lead">SHRINGAR</div><div class="main"><div class="t">Shringar House of Mangalsutra</div><div class="s">₹155–165 · ₹401 Cr · 10–12 Sep</div></div><div class="trail dim">upcoming</div></div>
+    <div class="row"><div class="lead">VMSTMT</div><div class="main"><div class="t">VMS TMT</div><div class="s">₹94–99 · ₹148 Cr · 17–19 Sep</div></div><div class="trail dim">upcoming</div></div>
+  </div>
+
+  <div class="foot" style="margin-top:28px">as of 15:31 IST · NSE · Yahoo · Stooq · RBI · FRED</div>
+</div>
