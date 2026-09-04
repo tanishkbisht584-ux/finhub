@@ -12,7 +12,7 @@ lands next to this file. Sizes:
   play-icon-512.png         Play Store listing icon
   play-feature-1024x500.png Play Store feature graphic (lockup + tagline)
   splash-mark-512.png       transparent mark for launch_background.xml
-  lockup-2x.png / -3x.png   in-app lockup (200 logical px wide)
+  lockup-2x.png / -3x.png   in-app wordmark-free mark (200 logical px wide)
 """
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 BG = "#0E100F"
 MARK = (HERE / "mark.svg").read_text(encoding="utf-8")
 MONO = (HERE / "mark-mono.svg").read_text(encoding="utf-8")
-LOCKUP = (HERE / "lockup.svg").read_text(encoding="utf-8")
 
 
 def svg_at(svg: str, w: int, h: int) -> str:
@@ -64,12 +63,12 @@ def main() -> None:
     shoot("icon-full-1024.png", page(svg_at(MARK, box, box), 1024, 1024, BG), 1024, 1024, False)
     shoot("play-icon-512.png", page(svg_at(MARK, 300, 300), 512, 512, BG), 512, 512, False)
     shoot("splash-mark-512.png", page(svg_at(MARK, 512, 512), 512, 512, None), 512, 512, True)
-    shoot("lockup-2x.png", page(svg_at(LOCKUP, 400, 504), 400, 504, None), 400, 504, True)
-    shoot("lockup-3x.png", page(svg_at(LOCKUP, 600, 756), 600, 756, None), 600, 756, True)
+    shoot("lockup-2x.png", page(svg_at(MARK, 400, 400), 400, 400, None), 400, 400, True)
+    shoot("lockup-3x.png", page(svg_at(MARK, 600, 600), 600, 600, None), 600, 600, True)
 
     feature = (
         '<div style="display:flex;align-items:center;gap:72px">'
-        + svg_at(LOCKUP, 240, 302)
+        + svg_at(MARK, 260, 260)
         + '<div style="font-family:Georgia,\'Noto Serif\',serif;color:#E8E6E3">'
         '<div style="font-size:64px;font-weight:700;letter-spacing:-.01em">FinSwipe</div>'
         '<div style="font-size:26px;font-style:italic;color:#9BA09C;margin-top:14px;max-width:460px;line-height:1.35">'
