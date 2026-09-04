@@ -1,4 +1,7 @@
 import 'package:finswipe/fundamentals.dart';
+import 'package:finswipe/heat.dart';
+import 'package:finswipe/ledger.dart';
+import 'package:finswipe/theme.dart';
 import 'package:finswipe/screens/stock_sections.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -83,6 +86,60 @@ void main() {
                   rows: rows,
                   byPeriod: byPeriod))));
       expect(find.text('CWIP'), findsNothing);
+    });
+
+    testWidgets('heat tints cells by change vs the previous period', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: StatementTable(
+                  periods: const ['FY2025', 'FY2026'],
+                  rows: rows,
+                  byPeriod: byPeriod,
+                  heat: true))));
+      Color? bg(String text) =>
+          (t.widget<Container>(find.ancestor(
+                      of: find.text(text), matching: find.byType(Container)).first)
+                  .decoration as BoxDecoration?)
+              ?.color;
+      expect(bg('800'), isNull); // first period has nothing to compare
+      expect(bg('1,000'), deltaHeat(1000, 800, scale: 20)); // +25% -> deep green
+      expect(bg('20%'), deltaHeat(20.0, 18.8, scale: 3, points: true)); // +1.2 pts
+    });
+  });
+
+  group('KvTable', () {
+    testWidgets('renders headers, rows, and tones the read cell', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: KvTable(const ['METRIC', 'VALUE', 'SECTOR', 'READ'], const [
+        (metric: 'ROE', value: '47.7%', third: '15.0%', read: 'above peers', tone: 1),
+        (metric: 'D/E', value: '1.20', third: '0.50', read: 'heavier', tone: -1),
+        (metric: 'Rev growth', value: '+13.9%', third: '—', read: 'YoY', tone: 1),
+      ]))));
+      expect(find.text('METRIC'), findsOneWidget);
+      expect(find.text('47.7%'), findsOneWidget);
+      expect(find.text('15.0%'), findsOneWidget);
+      expect(t.widget<Text>(find.text('above peers')).style!.color, green);
+      expect(t.widget<Text>(find.text('heavier')).style!.color, red);
+      expect(t.widget<Text>(find.text('+13.9%')).style!.color, green);
+    });
+  });
+
+  group('growthGrid', () {
+    testWidgets('one heat cell per horizon, dash for gaps', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: growthGrid(const {
+        'sales': {'y10': 15.0, 'y5': 18.0, 'y3': 6.0, 'ttm': 15.0},
+        'roe': {'y10': 9.0, 'y5': 8.0, 'y3': 9.0},
+      }))));
+      expect(find.text('10Y'), findsOneWidget);
+      expect(find.text('Sales'), findsOneWidget);
+      expect(find.text('ROE'), findsOneWidget);
+      expect(find.text('Profit'), findsNothing); // absent block hidden
+      expect(find.text('18%'), findsOneWidget);
+      expect(find.text('—'), findsOneWidget); // ROE ttm missing
+      expect(find.byType(HeatCell), findsNWidgets(8));
     });
   });
 
@@ -172,30 +229,27 @@ void main() {
           'mcap_cr': mcap, 'pe': pe, 'roe': 12.0,
         };
 
-    testWidgets('sorts by market cap, excludes self, caps at 10', (t) async {
+    testWidgets('self pinned on top, others by market cap, capped at 10',
+        (t) async {
       final peers = [
         for (var i = 0; i < 12; i++) row('P$i', 100.0 + i, 1000 - i, 20),
         row('SELF', 50, 99999, 5),
       ];
       await t.pumpWidget(MaterialApp(
           home: Scaffold(body: PeersTable(peers, self: 'SELF'))));
-      expect(find.text('SELF Ltd'), findsNothing);
+      expect(find.text('SELF Ltd'), findsOneWidget);
       expect(find.text('P0 Ltd'), findsOneWidget); // biggest mcap first
       expect(find.text('P11 Ltd'), findsNothing); // 11th largest cut
-      expect(find.text('1,000'), findsOneWidget); // mcap already in Cr
+      expect(t.getRect(find.text('SELF Ltd')).top,
+          lessThan(t.getRect(find.text('P0 Ltd')).top));
+      expect(find.text('COMPANY'), findsOneWidget);
+      expect(find.text('P/E'), findsOneWidget);
     });
-  });
 
-  group('CagrStrip', () {
-    testWidgets('renders 10y/5y/3y/TTM cells from a summary block', (t) async {
+    testWidgets('no other peers -> nothing', (t) async {
       await t.pumpWidget(MaterialApp(
-          home: Scaffold(
-              body: CagrStrip('Compounded Sales Growth',
-                  const {'y10': 15.0, 'y5': 18.0, 'y3': 6.0, 'ttm': 15.0}))));
-      expect(find.text('Compounded Sales Growth'), findsOneWidget);
-      expect(find.text('10Y'), findsOneWidget);
-      expect(find.text('18%'), findsOneWidget);
-      expect(find.text('TTM'), findsOneWidget);
+          home: Scaffold(body: PeersTable([row('SELF', 1, 1, 1)], self: 'SELF'))));
+      expect(find.text('SELF Ltd'), findsNothing);
     });
   });
 }

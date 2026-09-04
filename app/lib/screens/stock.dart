@@ -9,6 +9,7 @@ import '../analysis.dart';
 import '../charts.dart';
 import '../follows.dart';
 import '../fundamentals.dart';
+import '../ledger.dart';
 import '../models.dart';
 import '../remote_config.dart';
 import '../section_ribbon.dart';
@@ -49,6 +50,7 @@ class _StockScreenState extends State<StockScreen> {
   List<double> _chartCloses = const [];
   List<DateTime> _chartTimes = const [];
   bool _showPe = false;
+  bool _heat = false; // statement tables: tint cells by change vs prior period
   final _tracker = SectionTracker();
 
   // Yahoo chart range/interval per pill; the 1M fetch doubles as the quote.
@@ -115,7 +117,7 @@ class _StockScreenState extends State<StockScreen> {
       if (sector == null || sector.isEmpty || !mounted) return;
       sb
           .from('screener_metrics')
-          .select('symbol,name,price,pe,mcap_cr,roe')
+          .select('symbol,name,price,pe,pb,mcap_cr,roe,roce,de,div_yield,opm,promoter_pct')
           .eq('sector', sector)
           .order('mcap_cr', ascending: false)
           .limit(11)
@@ -324,6 +326,9 @@ class _StockScreenState extends State<StockScreen> {
     }
   }
 
+  Map<String, dynamic> get _meta =>
+      ticks.value[widget.company.nseSymbol]?.meta ?? const {};
+
   List<Widget> _priceHeader() {
     final q = _quote;
     final up = q != null && q.price >= q.prevClose;
@@ -338,8 +343,25 @@ class _StockScreenState extends State<StockScreen> {
         ? peSeries(closes, _chartTimes, _fund.quarter)
         : null;
     final peLatest = pe?.reversed.firstWhere((v) => v != null, orElse: () => null);
+    final meta = _meta;
+    final f = (meta['f'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final t = (meta['t'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final sectorLine =
+        [f['sector'], f['industry']].whereType<String>().join(' · ');
+    final sma50 = (t['sma50'] as num?)?.toDouble();
+    final sma200 = (t['sma200'] as num?)?.toDouble();
     return [
-      Text(widget.company.nseSymbol, style: mono.copyWith(fontSize: 12)),
+      Row(children: [
+        Text(widget.company.nseSymbol, style: mono.copyWith(fontSize: 12)),
+        if (sectorLine.isNotEmpty) ...[
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text(sectorLine,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: mono.copyWith(fontSize: 12))),
+        ],
+      ]),
       const SizedBox(height: 8),
       if (q != null) ...[
         Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
@@ -353,7 +375,7 @@ class _StockScreenState extends State<StockScreen> {
           ),
         ]),
         const SizedBox(height: 16),
-        SizedBox(height: 64, child: Sparkline(closes, up ? green : red, secondary: pe)),
+        SizedBox(height: 96, child: Sparkline(closes, up ? green : red, secondary: pe)),
         const SizedBox(height: 10),
         if (peLatest != null)
           Padding(
@@ -376,9 +398,20 @@ class _StockScreenState extends State<StockScreen> {
                     () => setState(() => _showPe = !_showPe), fontSize: 10),
             ]),
           ),
-        if (q.high52 > 0)
-          Text('52-wk  ₹${q.low52.toStringAsFixed(0)} – ₹${q.high52.toStringAsFixed(0)}',
-              style: mono.copyWith(fontSize: 12)),
+        if (q.high52 > q.low52) ...[
+          const SizedBox(height: 12),
+          ScaleBar(q.price, min: q.low52, max: q.high52, marks: [
+            if (sma50 != null) (sma50, '50D'),
+            if (sma200 != null) (sma200, '200D'),
+          ]),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text('52-wk  ₹${q.low52.toStringAsFixed(0)}', style: mono.copyWith(fontSize: 10)),
+            Text('at ${((q.price - q.low52) / (q.high52 - q.low52) * 100).round()}%',
+                style: mono.copyWith(fontSize: 10)),
+            Text('₹${q.high52.toStringAsFixed(0)}', style: mono.copyWith(fontSize: 10)),
+          ]),
+          const SizedBox(height: 6),
+        ],
         Text('Delayed price · Yahoo Finance', style: mono.copyWith(fontSize: 10)),
       ] else if (_quoteFailed)
         GestureDetector(
@@ -394,58 +427,94 @@ class _StockScreenState extends State<StockScreen> {
     ];
   }
 
-  Widget _analysisStrips() => ValueListenableBuilder<Map<String, Tick>>(
+  Widget _onTicks(Widget Function(Map<String, dynamic> meta) build) =>
+      ValueListenableBuilder<Map<String, Tick>>(
         valueListenable: ticks,
-        builder: (_, m, __) {
-          final meta = m[widget.company.nseSymbol]?.meta ?? const {};
-          final fund = fundamentalLines(meta);
-          final tech = technicalLines(meta);
-          final s = _fund.summary;
-          if (fund.isEmpty && tech.isEmpty) return const SizedBox.shrink();
-          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (fund.isNotEmpty) ...[
-              const Divider(height: 40),
-              Text('FUNDAMENTALS', style: monoLabel),
-              const SizedBox(height: 8),
-              for (final (k, v) in fund) _kv(k, v),
-              if (s['roce'] != null)
-                _kv('ROCE', fmtCell(s['roce'] as num?, CellFmt.pct)),
-              if (s['book_value'] != null)
-                _kv('Book value', '₹${fmtCell(s['book_value'] as num?, CellFmt.num2)}'),
-              Text('Yahoo Finance · as of ${fmtDay(meta['f_at'])}',
-                  style: mono.copyWith(fontSize: 10)),
-            ],
-            if (tech.isNotEmpty) ...[
-              const Divider(height: 40),
-              Text('TECHNICALS', style: monoLabel),
-              const SizedBox(height: 8),
-              for (final (k, v) in tech) _kv(k, v),
-              Text('computed from 1y daily closes · as of ${fmtDay(meta['t_at'])}',
-                  style: mono.copyWith(fontSize: 10)),
-            ],
-          ]);
-        },
+        builder: (_, m, __) =>
+            build(m[widget.company.nseSymbol]?.meta ?? const {}),
       );
 
-  List<Widget> _tape() => [
-        if (_events.isNotEmpty) ...[
-          const Divider(height: 40),
-          Text('ON THE TAPE', style: monoLabel),
-          const SizedBox(height: 8),
-          for (final e in _events.take(8))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(e, style: mono.copyWith(fontSize: 12, height: 1.4)),
-            ),
-          Text('NSE · board meetings, bulk/block deals, insider filings',
-              style: mono.copyWith(fontSize: 10)),
-        ],
-      ];
+  Widget _stamp(String s) => Text(s, style: mono.copyWith(fontSize: 10));
 
-  List<Widget> _storyList() => [
-        const Divider(height: 40),
-        Text('RECENT STORIES', style: monoLabel),
-        const SizedBox(height: 8),
+  /// SNAPSHOT: six headline ratios as tiles.
+  Widget _snapshot() => _onTicks((meta) {
+        final tiles = snapshotStats(meta);
+        if (tiles.isEmpty) return const SizedBox.shrink();
+        return LedgerSection('Snapshot', children: [
+          const SizedBox(height: 10),
+          StatGrid([for (final t in tiles) StatTile(t.label, t.value, sub: t.sub)]),
+        ]);
+      });
+
+  /// FUNDAMENTALS: the full labelled table against sector medians, then the
+  /// eight-quarter sales/profit bars.
+  Widget _fundamentals() => _onTicks((meta) {
+        final medians = sectorMedians(_peers, self: widget.company.nseSymbol);
+        final rows = fundamentalRows(meta, medians: medians, summary: _fund.summary);
+        if (rows.isEmpty) return const SizedBox.shrink();
+        final qs = quarterSeries(_fund.quarter, meta, label: periodLabel);
+        final hasBars = qs.sales.any((v) => v != null);
+        final nPeers = _peers.where((p) => p['symbol'] != widget.company.nseSymbol).length;
+        Widget swatch(Color c) =>
+            SizedBox(width: 8, height: 8, child: ColoredBox(color: c));
+        return LedgerSection('Fundamentals',
+            action: nPeers == 0 ? null : _stamp('vs $nPeers sector peers'),
+            footnote:
+                'SECTOR = median of same-sector peers · Yahoo Finance · as of ${fmtDay(meta['f_at'])}',
+            children: [
+              const SizedBox(height: 2),
+              KvTable(const ['METRIC', 'VALUE', 'SECTOR', 'READ'], rows),
+              if (hasBars) ...[
+                const SizedBox(height: 16),
+                Row(children: [
+                  Text('QUARTERLY · ', style: mono.copyWith(fontSize: 10)),
+                  swatch(green.withValues(alpha: 0.55)),
+                  Text(' sales   ', style: mono.copyWith(fontSize: 10)),
+                  swatch(amber),
+                  Text(' net profit   (₹ Cr)', style: mono.copyWith(fontSize: 10)),
+                ]),
+                const SizedBox(height: 6),
+                SizedBox(
+                    height: 84,
+                    child: BarChart(qs.sales, secondary: qs.profit, labels: qs.labels)),
+              ],
+            ]);
+      });
+
+  /// TECHNICALS: three one-word tiles, then every level against the close.
+  Widget _technicals() => _onTicks((meta) {
+        final tiles = techStats(meta);
+        final rows = technicalRows(meta);
+        if (tiles.isEmpty && rows.isEmpty) return const SizedBox.shrink();
+        return LedgerSection('Technicals',
+            action: _stamp('1y daily closes'),
+            footnote: 'computed from 1y daily closes · as of ${fmtDay(meta['t_at'])}',
+            children: [
+              if (tiles.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                StatGrid([
+                  for (final t in tiles)
+                    StatTile(t.label, t.value,
+                        sub: t.sub, color: KvTable.toneColor(t.tone)),
+                ]),
+                const SizedBox(height: 14),
+              ],
+              KvTable(const ['INDICATOR', 'LEVEL', 'VS PRICE', 'SIGNAL'], rows),
+            ]);
+      });
+
+  Widget _tape() => LedgerSection('On the tape',
+      footnote: 'NSE · board meetings, bulk/block deals, insider filings',
+      children: [
+        const SizedBox(height: 6),
+        for (final e in _events.take(8))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(e, style: mono.copyWith(fontSize: 12, height: 1.4)),
+          ),
+      ]);
+
+  Widget _storyList() => LedgerSection('Recent stories', children: [
         if (_stories.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -468,38 +537,68 @@ class _StockScreenState extends State<StockScreen> {
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => StoryDetailScreen(storyId: s.id))),
           ),
-      ];
+      ]);
 
-  /// One statement section: heading + divider + table, Screener order.
-  List<Widget> _table(String title, List<String> periods,
+  /// One statement section: heading + HEAT pill + table, Screener order.
+  Widget _table(String title, List<String> periods,
           List<(String, String, CellFmt)> rows,
-          Map<String, Map<String, dynamic>> byPeriod) =>
-      [
-        const Divider(height: 40),
-        Text(title, style: monoLabel),
-        const SizedBox(height: 8),
-        StatementTable(periods: periods, rows: rows, byPeriod: byPeriod),
-        Text('₹ Cr · Yahoo Finance + backfill', style: mono.copyWith(fontSize: 10)),
-      ];
+          Map<String, Map<String, dynamic>> byPeriod,
+          {List<Widget> lead = const []}) =>
+      LedgerSection(title,
+          action: filterPill('HEAT', _heat, amber,
+              () => setState(() => _heat = !_heat), fontSize: 10),
+          footnote:
+              '₹ Cr · ${_heat ? 'tint = change vs previous period · ' : ''}Yahoo Finance + backfill',
+          children: [
+            ...lead,
+            const SizedBox(height: 4),
+            StatementTable(periods: periods, rows: rows, byPeriod: byPeriod, heat: _heat),
+          ]);
+
+  /// Latest quarter's holders as one 100% bar, ink alphas only (no
+  /// direction to colour).
+  List<Widget> _holdersBar() {
+    final f = _fund;
+    if (f.shareholding.isEmpty) return const [];
+    final latest = f.shareholding[f.shareholding.keys.last]!;
+    const parts = [
+      ('promoters', 'Promoters', 0.8), ('fiis', 'FIIs', 0.6), ('diis', 'DIIs', 0.45),
+      ('govt', 'Govt', 0.3), ('public', 'Public', 0.2), ('employee_trusts', 'Trusts', 0.12),
+    ];
+    final segs = [
+      for (final (k, label, a) in parts)
+        if (latest[k] is num && (latest[k] as num) > 0)
+          ((latest[k] as num) / 100, ink.withValues(alpha: a),
+              '$label ${fmtCell(latest[k] as num, CellFmt.pct)}')
+    ];
+    if (segs.isEmpty) return const [];
+    return [
+      const SizedBox(height: 12),
+      Row(children: [
+        Expanded(child: StackedBar(segs)),
+      ]),
+      const SizedBox(height: 4),
+      _stamp(periodLabel(f.shareholding.keys.last)),
+      const SizedBox(height: 8),
+    ];
+  }
 
   List<({String id, String label, Widget child})> _sections() {
     final f = _fund;
     final cagr = (f.summary['cagr'] as Map?)?.cast<String, dynamic>() ?? const {};
-    Map<String, dynamic> block(String k) =>
-        (cagr[k] as Map?)?.cast<String, dynamic>() ?? const {};
     Widget col(List<Widget> children) =>
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
     return [
       (id: 'chart', label: 'CHART', child: col(_priceHeader())),
-      (id: 'ratios', label: 'RATIOS', child: _analysisStrips()),
+      (id: 'snapshot', label: 'SNAPSHOT', child: _snapshot()),
+      (id: 'fundamentals', label: 'FUNDAMENTALS', child: _fundamentals()),
+      (id: 'technicals', label: 'TECHNICALS', child: _technicals()),
       if ((f.summary['pros'] as List?)?.isNotEmpty == true ||
           (f.summary['cons'] as List?)?.isNotEmpty == true)
         (
           id: 'proscons',
           label: 'PROS·CONS',
-          child: col([
-            const Divider(height: 40),
-            Text('ANALYSIS', style: monoLabel),
+          child: LedgerSection('Pros · Cons', children: [
             const SizedBox(height: 8),
             ProsCons(f.summary),
           ])
@@ -508,82 +607,67 @@ class _StockScreenState extends State<StockScreen> {
         (
           id: 'growth',
           label: 'GROWTH',
-          child: col([
-            const Divider(height: 40),
-            Text('GROWTH', style: monoLabel),
-            const SizedBox(height: 8),
-            CagrStrip('Compounded Sales Growth', block('sales')),
-            CagrStrip('Compounded Profit Growth', block('profit')),
-            CagrStrip('Stock Price CAGR', block('price')),
-            CagrStrip('Return on Equity', block('roe')),
-          ])
+          child: LedgerSection('Growth',
+              action: _stamp('CAGR'),
+              footnote: 'compounded growth · ₹ Cr basis',
+              children: [const SizedBox(height: 10), growthGrid(cagr)])
         ),
       if (_peers.isNotEmpty)
         (
           id: 'peers',
           label: 'PEERS',
-          child: col([
-            const Divider(height: 40),
-            Text('PEERS', style: monoLabel),
-            const SizedBox(height: 8),
-            PeersTable(_peers, self: widget.company.nseSymbol),
-            Text('same sector · top 10 by market cap',
-                style: mono.copyWith(fontSize: 10)),
-          ])
+          child: LedgerSection('Peers',
+              action: _stamp('same sector · by mkt cap'),
+              footnote: 'bar = market cap vs largest · screener_metrics',
+              children: [PeersTable(_peers, self: widget.company.nseSymbol)])
         ),
       if (f.quarter.isNotEmpty)
         (
           id: 'quarters',
           label: 'QUARTERS',
-          child: col(_table('QUARTERLY RESULTS', f.quarter.keys.toList(),
-              quarterRows, f.quarter))
+          child: _table('Quarterly results', f.quarter.keys.toList(),
+              quarterRows, f.quarter)
         ),
       if (f.annual.isNotEmpty) ...[
         (
           id: 'pnl',
           label: 'P&L',
-          child: col(
-              _table('PROFIT & LOSS', f.annual.keys.toList(), pnlRows, f.annual))
+          child: _table('Profit & loss', f.annual.keys.toList(), pnlRows, f.annual)
         ),
         (
           id: 'bs',
           label: 'BALANCE SHEET',
-          child: col(
-              _table('BALANCE SHEET', f.annual.keys.toList(), bsRows, f.annual))
+          child: _table('Balance sheet', f.annual.keys.toList(), bsRows, f.annual)
         ),
         (
           id: 'cf',
           label: 'CASH FLOW',
-          child:
-              col(_table('CASH FLOW', f.annual.keys.toList(), cfRows, f.annual))
+          child: _table('Cash flow', f.annual.keys.toList(), cfRows, f.annual)
         ),
         (
           id: 'trend',
           label: 'RATIO TREND',
-          child: col(
-              _table('RATIOS', f.annual.keys.toList(), ratioRows, f.annual))
+          child: _table('Ratios', f.annual.keys.toList(), ratioRows, f.annual)
         ),
       ],
       if (f.shareholding.isNotEmpty)
         (
           id: 'holders',
           label: 'SHAREHOLDING',
-          child: col(_table('SHAREHOLDING PATTERN',
-              f.shareholding.keys.toList(), shareholdingRows, f.shareholding))
+          child: _table('Shareholding pattern', f.shareholding.keys.toList(),
+              shareholdingRows, f.shareholding, lead: _holdersBar())
         ),
       if (f.docs.isNotEmpty)
         (
           id: 'docs',
           label: 'DOCS',
-          child: col([
-            const Divider(height: 40),
-            Text('DOCUMENTS', style: monoLabel),
+          child: LedgerSection('Documents', children: [
             const SizedBox(height: 8),
             DocsSection(f.docs),
           ])
         ),
-      if (_events.isNotEmpty) (id: 'tape', label: 'TAPE', child: col(_tape())),
-      (id: 'stories', label: 'STORIES', child: col(_storyList())),
+      if (_events.isNotEmpty) (id: 'tape', label: 'TAPE', child: _tape()),
+      (id: 'stories', label: 'STORIES', child: _storyList()),
     ];
   }
 
@@ -613,9 +697,11 @@ class _StockScreenState extends State<StockScreen> {
       return scaffold(
         body: ListView(padding: const EdgeInsets.all(20), children: [
           ..._priceHeader(),
-          _analysisStrips(),
-          ..._tape(),
-          ..._storyList(),
+          _snapshot(),
+          _fundamentals(),
+          _technicals(),
+          if (_events.isNotEmpty) _tape(),
+          _storyList(),
         ]),
       );
     }
@@ -647,17 +733,3 @@ class _StockScreenState extends State<StockScreen> {
     );
   }
 }
-
-/// Fundamentals/Technicals line: label left, value right, both mono.
-Widget _kv(String k, String v) => Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(
-            width: 110,
-            child: Text(k, style: mono.copyWith(fontSize: 12))),
-        Expanded(
-            child: Text(v,
-                style: mono.copyWith(fontSize: 12, color: ink, height: 1.3))),
-      ]),
-    );
-

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../analysis.dart';
 import '../fundamentals.dart';
+import '../heat.dart';
+import '../ledger.dart';
 import '../models.dart';
 import '../theme.dart';
 
@@ -74,14 +77,85 @@ const shareholdingRows = [
   ('No. of Shareholders', 'n_holders', CellFmt.cr),
 ];
 
+/// Labelled text table for FUNDAMENTALS / TECHNICALS: metric · value · third
+/// · read. Numeric columns right-aligned, the read column wraps.
+class KvTable extends StatelessWidget {
+  const KvTable(this.columns, this.rows, {super.key});
+  final List<String> columns; // 4 headers
+  final List<KvRow> rows;
+
+  static Color toneColor(int tone) => tone > 0 ? green : tone < 0 ? red : ink;
+
+  @override
+  Widget build(BuildContext context) {
+    if (rows.isEmpty) return const SizedBox.shrink();
+    Widget cell(String s,
+            {bool head = false, bool right = true, Color? color, bool wrap = false}) =>
+        Container(
+          constraints: const BoxConstraints(minHeight: 28),
+          alignment: right ? Alignment.centerRight : Alignment.centerLeft,
+          padding: EdgeInsets.only(left: right ? 6 : 0),
+          child: Text(s,
+              maxLines: wrap ? 2 : 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: right ? TextAlign.right : TextAlign.left,
+              style: mono.copyWith(
+                  fontSize: head ? 10 : 11,
+                  letterSpacing: head ? 0.6 : 0,
+                  color: color ?? (head ? inkDim : ink))),
+        );
+    Color valueColor(String v) =>
+        v.startsWith('+') ? green : v.startsWith('−') ? red : ink;
+    return Table(
+      columnWidths: const {
+        0: FixedColumnWidth(92),
+        1: FlexColumnWidth(1.1),
+        2: FlexColumnWidth(0.9),
+        3: FlexColumnWidth(1.5),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        TableRow(
+          decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: border))),
+          children: [
+            cell(columns[0], head: true, right: false),
+            cell(columns[1], head: true),
+            cell(columns[2], head: true),
+            Padding(
+                padding: const EdgeInsets.only(left: 10),
+                child: cell(columns[3], head: true, right: false)),
+          ],
+        ),
+        for (final r in rows)
+          TableRow(children: [
+            cell(r.metric, right: false),
+            cell(r.value, color: valueColor(r.value)),
+            cell(r.third, color: inkDim),
+            Padding(
+                padding: const EdgeInsets.only(left: 10),
+                child: cell(r.read,
+                    right: false, wrap: true, color: toneColor(r.tone))),
+          ]),
+      ],
+    );
+  }
+}
+
 /// Sticky label column + horizontally scrollable period columns. reverse:true
 /// starts the scroll at the newest period (Screener keeps oldest on the left).
+/// [heat] tints each cell by its change vs the previous period (deltaHeat).
 class StatementTable extends StatelessWidget {
   const StatementTable(
-      {super.key, required this.periods, required this.rows, required this.byPeriod});
+      {super.key,
+      required this.periods,
+      required this.rows,
+      required this.byPeriod,
+      this.heat = false});
   final List<String> periods; // ascending
   final List<(String, String, CellFmt)> rows;
   final Map<String, Map<String, dynamic>> byPeriod;
+  final bool heat;
 
   @override
   Widget build(BuildContext context) {
@@ -90,19 +164,36 @@ class StatementTable extends StatelessWidget {
         if (periods.any((p) => byPeriod[p]?[r.$2] != null)) r
     ];
     if (visible.isEmpty) return const SizedBox.shrink();
-    Widget cell(String s, {bool head = false, bool label = false}) => Container(
-          height: 26,
-          width: label ? null : 66,
+    Widget cell(String s, {bool head = false, bool label = false, Color? bg}) =>
+        Container(
+          height: 28,
+          width: label ? null : 68,
           alignment: label ? Alignment.centerLeft : Alignment.centerRight,
+          padding: label ? EdgeInsets.zero : const EdgeInsets.only(right: 6),
+          decoration: BoxDecoration(
+              color: bg,
+              border: head
+                  ? const Border(bottom: BorderSide(color: border))
+                  : null),
           child: Text(s,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: mono.copyWith(
-                  fontSize: 11, color: head ? inkDim : ink)),
+              style: mono.copyWith(fontSize: 11, color: head ? inkDim : ink)),
         );
+    Color? tint(int i, (String, String, CellFmt) r) {
+      if (!heat || i == 0) return null;
+      final cur = byPeriod[periods[i]]?[r.$2] as num?;
+      final prev = byPeriod[periods[i - 1]]?[r.$2] as num?;
+      // ponytail: pct/days rows compare raw points at scale 3 (a 3-point OPM
+      // move is big); money rows compare % change at scale 20.
+      final points = r.$3 == CellFmt.pct || r.$3 == CellFmt.days;
+      final c = deltaHeat(cur, prev, scale: points ? 3 : 20, points: points);
+      return c == border ? null : c;
+    }
+
     return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       SizedBox(
-        width: 118,
+        width: 124,
         child: Column(children: [
           cell('', head: true, label: true),
           for (final r in visible) cell(r.$1, head: true, label: true),
@@ -113,11 +204,12 @@ class StatementTable extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           reverse: true,
           child: Row(children: [
-            for (final p in periods)
+            for (var i = 0; i < periods.length; i++)
               Column(children: [
-                cell(periodLabel(p), head: true),
+                cell(periodLabel(periods[i]), head: true),
                 for (final r in visible)
-                  cell(fmtCell(byPeriod[p]?[r.$2] as num?, r.$3)),
+                  cell(fmtCell(byPeriod[periods[i]]?[r.$2] as num?, r.$3),
+                      bg: tint(i, r)),
               ]),
           ]),
         ),
@@ -126,40 +218,49 @@ class StatementTable extends StatelessWidget {
   }
 }
 
-const _cagrLabels = [('y10', '10Y'), ('y5', '5Y'), ('y3', '3Y'),
-                     ('y1', '1Y'), ('ttm', 'TTM'), ('last', 'Last')];
+const _cagrCols = [('y10', '10Y'), ('y5', '5Y'), ('y3', '3Y'), ('ttm', 'TTM')];
+const _cagrRows = [
+  ('sales', 'Sales'), ('profit', 'Profit'), ('price', 'Price'), ('roe', 'ROE')
+];
 
-/// "Compounded Sales Growth"-style block: 10Y/5Y/3Y/TTM percent cells.
-class CagrStrip extends StatelessWidget {
-  const CagrStrip(this.title, this.block, {super.key});
-  final String title;
-  final Map<String, dynamic> block;
-
-  @override
-  Widget build(BuildContext context) {
-    final cells = [
-      for (final (k, label) in _cagrLabels)
-        if (block[k] != null) (label, fmtCell(block[k] as num?, CellFmt.pct))
-    ];
-    if (cells.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title, style: mono.copyWith(fontSize: 11, color: inkDim)),
-        const SizedBox(height: 4),
-        Row(children: [
-          for (final (label, v) in cells)
-            Padding(
-              padding: const EdgeInsets.only(right: 18),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(label, style: mono.copyWith(fontSize: 10, color: inkDim)),
-                Text(v, style: mono.copyWith(fontSize: 12, color: ink)),
-              ]),
-            ),
-        ]),
+/// GROWTH heat grid: Sales / Profit / Price / ROE × 10Y / 5Y / 3Y / TTM, each
+/// cell tinted by its compounded rate (scale 20: 20%+ is the deepest tint).
+Widget growthGrid(Map<String, dynamic> cagr) {
+  Map<String, dynamic> block(String k) =>
+      (cagr[k] as Map?)?.cast<String, dynamic>() ?? const {};
+  final rows = [
+    for (final (k, l) in _cagrRows)
+      if (block(k).isNotEmpty) (k, l)
+  ];
+  if (rows.isEmpty) return const SizedBox.shrink();
+  return Column(children: [
+    Row(children: [
+      const SizedBox(width: 60),
+      for (final (_, l) in _cagrCols) ...[
+        const SizedBox(width: 8),
+        Expanded(
+            child: Text(l,
+                textAlign: TextAlign.center,
+                style: mono.copyWith(fontSize: 10))),
+      ],
+    ]),
+    const SizedBox(height: 6),
+    for (final (k, l) in rows) ...[
+      Row(children: [
+        SizedBox(width: 60, child: Text(l, style: mono.copyWith(fontSize: 11))),
+        for (final (ck, _) in _cagrCols) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            child: HeatCell('', (block(k)[ck] as num?)?.toDouble(),
+                scale: 20,
+                height: 44,
+                pctText: fmtCell(block(k)[ck] as num?, CellFmt.pct)),
+          ),
+        ],
       ]),
-    );
-  }
+      const SizedBox(height: 6),
+    ],
+  ]);
 }
 
 /// Annual-report links + recent NSE announcements from the docs row.
@@ -233,8 +334,9 @@ class DocsSection extends StatelessWidget {
 }
 
 /// Same-sector companies from screener_metrics (the full ~1.8k covered
-/// market), biggest first. Ranking + self-exclusion live here so a test can
-/// feed raw rows.
+/// market), biggest first, self pinned on top with a green rule. Fixed-width
+/// numeric columns share one right edge; the bar under each name is market
+/// cap against the largest row.
 class PeersTable extends StatelessWidget {
   const PeersTable(this.peers, {super.key, required this.self});
   final List<Map<String, dynamic>> peers;
@@ -243,40 +345,63 @@ class PeersTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     num mcap(Map r) => (r['mcap_cr'] as num?) ?? 0;
-    final rows = [
+    final others = [
       for (final r in peers)
         if (r['symbol'] != self) r
     ]..sort((a, b) => mcap(b).compareTo(mcap(a)));
-    if (rows.isEmpty) return const SizedBox.shrink();
-    Widget cell(String s, {int flex = 1, bool head = false, bool right = true}) =>
-        Expanded(
-          flex: flex,
+    if (others.isEmpty) return const SizedBox.shrink();
+    final rows = [...peers.where((r) => r['symbol'] == self), ...others.take(10)];
+    final top = rows.fold<num>(0, (m, r) => mcap(r) > m ? mcap(r) : m);
+    Widget col(String s, double w, {bool head = false}) => SizedBox(
+          width: w,
           child: Text(s,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              textAlign: right ? TextAlign.right : TextAlign.left,
+              textAlign: TextAlign.right,
               style: mono.copyWith(fontSize: 11, color: head ? inkDim : ink)),
         );
+    Widget line(Map<String, dynamic> r) {
+      final mine = r['symbol'] == self;
+      return Container(
+        padding: EdgeInsets.fromLTRB(mine ? 8 : 0, 8, 0, 8),
+        decoration: BoxDecoration(
+            border: Border(
+                bottom: const BorderSide(color: border),
+                left: mine
+                    ? const BorderSide(color: green, width: 2)
+                    : BorderSide.none)),
+        child: Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${r['name'] ?? r['symbol']}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: mono.copyWith(fontSize: 12, color: ink)),
+              const SizedBox(height: 5),
+              FractionallySizedBox(
+                  widthFactor: 0.7,
+                  alignment: Alignment.centerLeft,
+                  child: miniBar(top == 0 ? 0 : mcap(r) / top)),
+            ]),
+          ),
+          col(r['price'] == null ? '—' : fmtNum((r['price'] as num).toDouble()), 70),
+          col(fmtCell(r['pe'] as num?, CellFmt.num2), 54),
+          col(fmtCell(r['roe'] as num?, CellFmt.pct), 60),
+        ]),
+      );
+    }
+
     return Column(children: [
-      Row(children: [
-        cell('NAME', flex: 3, head: true, right: false),
-        cell('PRICE', head: true),
-        cell('P/E', head: true),
-        cell('MCAP CR', flex: 2, head: true),
-        cell('ROE', head: true),
-      ]),
-      const SizedBox(height: 4),
-      for (final r in rows.take(10))
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Row(children: [
-            cell('${r['name'] ?? r['symbol']}', flex: 3, right: false),
-            cell(r['price'] == null ? '—' : fmtNum((r['price'] as num).toDouble())),
-            cell(fmtCell(r['pe'] as num?, CellFmt.num2)),
-            cell(fmtCell(mcap(r) == 0 ? null : mcap(r), CellFmt.cr), flex: 2),
-            cell(fmtCell(r['roe'] as num?, CellFmt.pct)),
-          ]),
-        ),
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          Expanded(child: Text('COMPANY', style: mono.copyWith(fontSize: 10))),
+          col('PRICE', 70, head: true),
+          col('P/E', 54, head: true),
+          col('ROE', 60, head: true),
+        ]),
+      ),
+      for (final r in rows) line(r),
     ]);
   }
 }
