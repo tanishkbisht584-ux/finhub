@@ -68,6 +68,7 @@ DEFAULT_MF = (120716, 119063, 143341, 122639, 118955, 118825, 120586, 125497,
 # honest set. Any id that 400s is skipped, not faked.
 MACRO_SERIES = {"FEDFUNDS": ("US Fed funds rate", "%"),
                 "DGS10": ("US 10Y Treasury yield", "%"),
+                "DGS2": ("US 2Y Treasury yield", "%"),  # 2s10s inversion read with DGS10
                 "DEXINUS": ("USD/INR (Fed H.10)", "INR"),
                 # P3 (4 Sep): every India series FRED keeps within ~3 months.
                 # Monthly OECD rates; the daily curve comes from the RBI
