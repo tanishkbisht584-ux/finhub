@@ -39,7 +39,19 @@ TROY_OZ_G = 31.1035
 INDICES = {"^NSEI": "NIFTY 50", "^BSESN": "SENSEX", "^NSEBANK": "NIFTY Bank", "^CNXIT": "NIFTY IT",
            "^INDIAVIX": "India VIX"}  # verified on spark 2026-09-02; feeds fear/greed
 FX = {"USDINR=X": "USD/INR", "EURINR=X": "EUR/INR", "GBPINR=X": "GBP/INR", "JPYINR=X": "JPY/INR"}
-COMMODITIES = {"GC=F": "Gold (USD/oz)", "SI=F": "Silver (USD/oz)", "CL=F": "Crude WTI (USD/bbl)"}
+COMMODITIES = {"GC=F": "Gold (USD/oz)", "SI=F": "Silver (USD/oz)", "CL=F": "Crude WTI (USD/bbl)",
+               "BZ=F": "Crude Brent (USD/bbl)", "HG=F": "Copper (USD/lb)"}
+# Global layer (4 Sep, worldmonitor follow-up): world indices + India ADRs.
+# kind stays "index" with meta.global=true — a new quotes.kind means a
+# migration (011 CHECK), and kind="equity" would drag ADRs into signals
+# movers and the 7-day equity age-out. ADR symbols are prefixed: bare "INFY"
+# IS the NSE row (quotes PK), Yahoo's NYSE ADR would silently overwrite it.
+GLOBAL_INDICES = {"^GSPC": "S&P 500", "^IXIC": "Nasdaq", "^DJI": "Dow Jones",
+                  "^FTSE": "FTSE 100", "^GDAXI": "DAX", "^N225": "Nikkei 225",
+                  "^HSI": "Hang Seng", "000001.SS": "Shanghai Composite",
+                  "^VIX": "US VIX", "DX-Y.NYB": "Dollar Index"}
+ADRS = {"INFY": "Infosys ADR (NYSE)", "HDB": "HDFC Bank ADR (NYSE)",
+        "IBN": "ICICI Bank ADR (NYSE)", "WIT": "Wipro ADR (NYSE)"}
 # Stablecoins ride the same call (P3, 4 Sep): USDT/INR vs USDINR is the
 # on-ramp premium Indian crypto users actually watch; peg drift + mcap in meta.
 CRYPTO = {"bitcoin": "Bitcoin", "ethereum": "Ethereum", "solana": "Solana",
@@ -78,7 +90,7 @@ _last_run = {}  # group -> utc datetime of the last attempt (success or not)
 _status = {}    # group -> last attempt outcome; mirrored to app_config `market_status`
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
-INTERVAL = {"fxcom": 15, "crypto": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
+INTERVAL = {"fxcom": 15, "crypto": 15, "global": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
             "mf_new": 5, "analysis_new": 5, "deep_new": 5, "screener_px": 60,
             "sentiment": 60, "hazards": 60}
 
@@ -221,6 +233,16 @@ def refresh_indices(sb, now):
     data = fetch_spark(list(INDICES), rng="1mo")  # ~22 closes for the sparkline
     rows = [row(s, "index", n, p, now, closes=True)
             for s, n in INDICES.items() if (p := parse_spark(data.get(s, {})))]
+    return upsert(sb, rows)
+
+
+def refresh_global(sb, now):
+    data = fetch_spark(list(GLOBAL_INDICES) + list(ADRS), rng="1mo")
+    rows = [row(s, "index", n, p, now, currency="", closes=True, meta={"global": True})
+            for s, n in GLOBAL_INDICES.items() if (p := parse_spark(data.get(s, {})))]
+    rows += [row(f"ADR:{s}", "index", n, p, now, currency="USD", closes=True,
+                 meta={"global": True, "adr": True})
+             for s, n in ADRS.items() if (p := parse_spark(data.get(s, {})))]
     return upsert(sb, rows)
 
 
@@ -1461,6 +1483,7 @@ def refresh_screener_px(sb, now):
 
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
+          ("global", refresh_global),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
           ("analysis_new", refresh_analysis_new),
           ("worldmacro", refresh_worldmacro), ("hazards", refresh_hazards),

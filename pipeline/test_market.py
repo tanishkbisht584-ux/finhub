@@ -267,7 +267,7 @@ def test_market_is_an_admin_switch():
 
 
 def test_all_groups_registered():
-    assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new",
+    assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "global", "mf", "mf_new",
                                              "analysis_new", "worldmacro", "hazards", "wikidata", "cpi",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
@@ -945,3 +945,19 @@ def test_refresh_rehydrates_last_run_from_status_row(monkeypatch):
 
     counts = market.refresh(sb2, NOW)
     assert set(calls) == {"mf", "crypto"} and counts == {"mf": 1, "crypto": 1}
+
+
+# ---------- global layer ----------
+
+def test_refresh_global_prefixes_adrs_and_marks_meta_global(monkeypatch):
+    spark = {s: {"close": [100.0, 101.0], "timestamp": [1, 2]}
+             for s in list(market.GLOBAL_INDICES) + list(market.ADRS)}
+    monkeypatch.setattr(market, "fetch_spark", lambda syms, rng="5d": spark)
+    rows = []
+    monkeypatch.setattr(market, "upsert", lambda sb, r: rows.extend(r) or len(r))
+    assert market.refresh_global(None, NOW) == len(spark)
+    by = {r["symbol"]: r for r in rows}
+    assert by["^GSPC"]["kind"] == "index" and by["^GSPC"]["meta"] == {"global": True}
+    # bare "INFY" is the NSE equity row (quotes PK) - the ADR must never use it
+    assert "INFY" not in by and by["ADR:INFY"]["meta"] == {"global": True, "adr": True}
+    assert by["ADR:INFY"]["kind"] == "index" and by["ADR:INFY"]["currency"] == "USD"
