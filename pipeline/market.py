@@ -13,7 +13,9 @@ PostgREST helper `sb` is passed in.
 ponytail: Yahoo spark is the single equity source. Trigger to add Twelve Data
 (800/day, keyed): runner 403/429 on >5% of spark calls for a day.
 """
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -124,7 +126,7 @@ def nav_slot(now):
 
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
-              "wikidata": (3, 0), "cpi": (18, 0)}
+              "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0)}
 
 
 def due(group, now):
@@ -1314,6 +1316,44 @@ def refresh_wikidata(sb, now):
     return patched
 
 
+# ---------- Context layer (4 Sep 2026 night, worldmonitor residue) ----------
+# BIS WS_CBPOL: one keyless CSV with the latest policy rate of every major
+# central bank. TITLE cells contain commas, so it goes through csv, never split.
+
+BIS_URL = ("https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/"
+           "D.US+XM+JP+GB+CN+IN?lastNObservations=1&format=csv")
+BIS_NAMES = {"US": "Fed funds", "XM": "ECB deposit", "JP": "BoJ policy",
+             "GB": "BoE bank rate", "CN": "PBoC 1y LPR", "IN": "RBI repo"}
+
+
+def parse_bis(text):
+    """CSV -> {REF_AREA: {"name", "rate", "asof"}}; blank/odd values skipped."""
+    out = {}
+    for r in csv.DictReader(io.StringIO(text or "")):
+        area = (r.get("REF_AREA") or "").strip()
+        try:
+            rate = float(r.get("OBS_VALUE") or "")
+        except ValueError:
+            continue
+        if area in BIS_NAMES:
+            out[area] = {"name": BIS_NAMES[area], "rate": rate, "asof": r.get("TIME_PERIOD")}
+    return out
+
+
+def refresh_cb_rates(sb, now):
+    r = requests.get(BIS_URL, headers=BROWSER_UA, timeout=TIMEOUT)
+    r.raise_for_status()
+    rates = parse_bis(r.text)
+    if not rates:
+        raise RuntimeError("BIS CBPOL: no policy-rate rows")
+    # asof = fetch date on purpose: the rates' own dates are months old (last
+    # change), so a payload-date freshness budget would grade a healthy group
+    # stale. Cost: one rewrite a day.
+    return write_blobs(sb, [{"key": "cb_rates",
+                             "payload": {"rates": rates, "asof": now.date().isoformat()},
+                             "updated_at": now.isoformat()}])
+
+
 # ---------- sentiment composites (P2, worldmonitor study) ----------
 # Editorial scales, not empirical. methodology_version is bumped whenever a
 # component, scale, or weighting changes so clients and history can tell
@@ -1546,7 +1586,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("analysis_new", refresh_analysis_new),
           ("worldmacro", refresh_worldmacro), ("hazards", refresh_hazards),
           ("wikidata", refresh_wikidata), ("cpi", refresh_cpi),
-          ("polymarket", refresh_polymarket),
+          ("polymarket", refresh_polymarket), ("cb_rates", refresh_cb_rates),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),

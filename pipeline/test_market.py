@@ -268,7 +268,7 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "global", "mf", "mf_new",
-                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket",
+                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
@@ -1027,3 +1027,40 @@ def test_refresh_polymarket_writes_blob_or_raises(monkeypatch):
     monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
     with pytest.raises(RuntimeError):
         market.refresh_polymarket(None, NOW)
+
+
+BIS_CSV = (
+    "FREQ,REF_AREA,UNIT_MEASURE,UNIT_MULT,TIME_FORMAT,COMPILATION,DECIMALS,SOURCE_REF,"
+    "SUPP_INFO_BREAKS,TITLE,TIME_PERIOD,OBS_VALUE,OBS_STATUS,OBS_CONF,OBS_PRE_BREAK\n"
+    'D,CN,368,0,,"From 20 Aug 2019 onwards: Loan Prime Rate (1 year), earlier: lending rate",4,'
+    "People's Bank of China,, Central bank policy rates - China - Daily,2026-09-01,3,A,F,\n"
+    "D,IN,368,0,,Policy repo rate,2,RBI,, Central bank policy rates - India,2026-07-23,5.25,A,F,\n"
+    "D,US,368,0,,Midpoint of the target range,4,Fed,, Central bank policy rates - US,2026-09-01,,A,F,\n"
+    "D,ZZ,368,0,,unknown area,2,x,, x,2026-09-01,1,A,F,\n")
+
+
+def test_parse_bis_handles_commas_in_title_and_blank_values():
+    out = market.parse_bis(BIS_CSV)
+    assert out == {"CN": {"name": "PBoC 1y LPR", "rate": 3.0, "asof": "2026-09-01"},
+                   "IN": {"name": "RBI repo", "rate": 5.25, "asof": "2026-07-23"}}  # US blank, ZZ unknown
+    assert market.parse_bis("") == {}
+
+
+def test_refresh_cb_rates_writes_blob_or_raises(monkeypatch):
+    class R:
+        text = BIS_CSV
+
+        def raise_for_status(self): pass
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or 1)
+    assert market.refresh_cb_rates(None, NOW) == 1
+    assert written[0]["key"] == "cb_rates" and written[0]["payload"]["rates"]["IN"]["rate"] == 5.25
+    assert written[0]["payload"]["asof"] == NOW.date().isoformat()
+
+    class Empty(R):
+        text = "FREQ,REF_AREA,OBS_VALUE\n"
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
+    with pytest.raises(RuntimeError):
+        market.refresh_cb_rates(None, NOW)
