@@ -1086,6 +1086,7 @@ def refresh_hazards(sb, now):
                                        "orderby": "time", "limit": 20, **INDIA_BBOX},
                      headers=BROWSER_UA, timeout=TIMEOUT)
     r.raise_for_status()
+    r.encoding = "utf-8"  # USGS omits charset; requests' Latin-1 fallback mojibakes place names
     quakes = parse_usgs(r.json())  # an empty week is a real, publishable answer
     return write_blobs(sb, [{"key": "hazards", "payload": {"quakes": quakes},
                              "updated_at": now.isoformat()}])
