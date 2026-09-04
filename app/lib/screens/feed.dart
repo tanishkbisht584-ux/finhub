@@ -3235,7 +3235,11 @@ class _TrendingStripState extends State<_TrendingStrip> {
   @override
   Widget build(BuildContext context) {
     if (_spikes.isEmpty) return const SizedBox(width: double.infinity);
-    return SizedBox(
+    // The feed Column starts at y=0 (no SafeArea): pad past the notch so the
+    // ribbon sits between the status bar and the LIVE row.
+    return Padding(
+      padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
+      child: SizedBox(
       height: 36,
       child: ListView(
         scrollDirection: Axis.horizontal,
@@ -3258,6 +3262,7 @@ class _TrendingStripState extends State<_TrendingStrip> {
               ),
             ),
         ],
+      ),
       ),
     );
   }
