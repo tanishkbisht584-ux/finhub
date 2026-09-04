@@ -200,6 +200,7 @@ with tab_s:
         {"source": "RBI homepage (Current Rates)", "feeds": "benchmark G-Sec yields, policy rates, T-bill cut-offs",
          "freshest": blobs.get("bonds", "—")},
         {"source": "FRED (keyed)", "feeds": "macro series", "freshest": ages.get("macro", "—")},
+        {"source": "MOSPI CPI API", "feeds": "India CPI inflation (official, monthly)", "freshest": ages.get("macro", "—")},
         {"source": "Wikidata SPARQL", "feeds": "company alias enrichment (daily)", "freshest": "—"},
         {"source": "Kaggle dump (static)", "feeds": "deep annual history, one-time backfill (src=kaggle)",
          "freshest": "static"},

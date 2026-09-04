@@ -268,7 +268,7 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new",
-                                             "analysis_new", "worldmacro", "hazards", "wikidata",
+                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
@@ -843,3 +843,71 @@ def test_refresh_wikidata_merges_only_new_and_raises_on_empty(monkeypatch):
     monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
     with pytest.raises(RuntimeError):
         market.refresh_wikidata(sb, NOW)
+
+
+# ---------- MOSPI CPI ----------
+
+def _cpi_row(state, sector, group, sub, idx, infl, month="December", year=2025):
+    return {"state": state, "sector": sector, "group": group, "subgroup": sub,
+            "index": idx, "inflation": infl, "month": month, "year": year}
+
+
+def test_parse_mospi_cpi_picks_newest_all_india_general():
+    pages = [
+        {"data": [_cpi_row("All India", "Rural", "Consumer Food Price",
+                           "Consumer Food Price-Overall", "198.5", "-3.03")]},
+        {"data": [_cpi_row("All India", "Rural", "General", "General-Overall", "199.9", "0.76"),
+                  _cpi_row("All India", "Urban", "General", "General-Overall", "195.9", "2.03"),
+                  _cpi_row("All India", "Combined", "General", "General-Overall", "198.0", "1.33"),
+                  _cpi_row("Kerala", "Combined", "General", "General-Overall", "205.0", "2.0"),
+                  # an older month must not leak into the result
+                  _cpi_row("All India", "Combined", "General", "General-Overall",
+                           "197.0", "1.10", month="November")]},
+    ]
+    out = market.parse_mospi_cpi(pages)
+    assert out["period"] == "2025-12"
+    assert out["Combined"] == {"index": 198.0, "inflation": 1.33}
+    assert out["Rural"]["inflation"] == 0.76 and out["Urban"]["inflation"] == 2.03
+    assert market.parse_mospi_cpi([{"data": []}]) is None
+
+
+def test_refresh_cpi_upserts_with_prev_month_and_raises_when_absent(monkeypatch):
+    calls = {"n": 0}
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [
+                _cpi_row("All India", "Combined", "General", "General-Overall", "198.0", "1.33"),
+                _cpi_row("All India", "Rural", "General", "General-Overall", "199.9", "0.76"),
+                _cpi_row("All India", "Urban", "General", "General-Overall", "195.9", "2.03")]}
+
+    class Sess:
+        def get(self, *a, **k):
+            calls["n"] += 1
+            return R()
+
+    monkeypatch.setattr(market, "_legacy_tls_session", lambda: Sess())
+    rows = []
+    monkeypatch.setattr(market, "upsert", lambda sb, r: rows.extend(r) or len(r))
+
+    def sb(method, path, **kw):
+        return [{"price": 1.10, "meta": {"period": "2025-11"}}]
+
+    assert market.refresh_cpi(sb, NOW) == 1
+    assert calls["n"] == 1  # all three sectors on page 1 -> stops early
+    r = rows[0]
+    assert r["symbol"] == "MACRO:MOSPI_CPI" and r["price"] == 1.33 and r["prev_close"] == 1.10
+    assert r["meta"]["delta"] == 0.23 and r["meta"]["period"] == "2025-12"
+    assert r["meta"]["index"] == 198.0
+
+    class Empty:
+        def get(self, *a, **k):
+            return type("E", (), {"raise_for_status": lambda s: None,
+                                  "json": lambda s: {"data": []}})()
+
+    monkeypatch.setattr(market, "_legacy_tls_session", lambda: Empty())
+    with pytest.raises(RuntimeError):
+        market.refresh_cpi(sb, NOW)

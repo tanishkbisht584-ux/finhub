@@ -56,7 +56,6 @@ DEFAULT_MF = (120716, 119063, 143341, 122639, 118955, 118825, 120586, 125497,
 # honest set. Any id that 400s is skipped, not faked.
 MACRO_SERIES = {"FEDFUNDS": ("US Fed funds rate", "%"),
                 "DGS10": ("US 10Y Treasury yield", "%"),
-                "INDCPIALLMINMEI": ("India CPI (OECD, 2015=100)", "index"),
                 "DEXINUS": ("USD/INR (Fed H.10)", "INR"),
                 # P3 (4 Sep): every India series FRED keeps within ~3 months.
                 # Monthly OECD rates; the daily curve comes from the RBI
@@ -108,7 +107,7 @@ def nav_slot(now):
 
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
-              "wikidata": (3, 0)}
+              "wikidata": (3, 0), "cpi": (18, 0)}
 
 
 def due(group, now):
@@ -1093,6 +1092,96 @@ def refresh_hazards(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+# ---------- MOSPI CPI (official, replaces FRED's frozen INDCPIALLMINMEI) ----------
+# api.mospi.gov.in is keyless, 10 rows/page, newest month first; its query
+# filters are IGNORED, so page and filter client-side — the All-India /
+# General-Overall rows sit within the first ~8 pages. Gotcha: the server
+# demands legacy TLS renegotiation, which modern OpenSSL refuses by default,
+# hence the dedicated session.
+
+MOSPI_CPI_URL = "https://api.mospi.gov.in/api/cpi/getCPIIndex"
+MOSPI_PAGES = 12  # sector blocks run ~3 pages each (Rural/Urban/Combined); Combined seen on page 9
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ("January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"))}
+_mospi = {"session": None}
+
+
+def _legacy_tls_session():
+    if _mospi["session"] is None:
+        import ssl
+        from requests.adapters import HTTPAdapter
+
+        class _LegacyTLS(HTTPAdapter):
+            def init_poolmanager(self, *a, **kw):
+                ctx = ssl.create_default_context()
+                ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+                kw["ssl_context"] = ctx
+                return super().init_poolmanager(*a, **kw)
+
+        sess = requests.Session()
+        sess.headers.update(BROWSER_UA)
+        sess.mount("https://", _LegacyTLS())
+        _mospi["session"] = sess
+    return _mospi["session"]
+
+
+def parse_mospi_cpi(pages):
+    """Page payloads (newest first) -> the newest month's All-India General
+    rows: {"period": "YYYY-MM", sector: {"index": f, "inflation": f}}."""
+    target, out = None, {}
+    for d in pages:
+        for r in (d or {}).get("data") or []:
+            if (r.get("state") != "All India" or r.get("group") != "General"
+                    or r.get("subgroup") != "General-Overall"):
+                continue
+            mm = _MONTHS.get(r.get("month"))
+            if not mm:
+                continue
+            period = f"{r['year']}-{mm:02d}"
+            target = target or period
+            if period != target:  # pages run newest-first; an older month = done
+                continue
+            try:
+                out[r["sector"]] = {"index": float(r["index"]),
+                                    "inflation": float(r["inflation"])}
+            except (TypeError, ValueError):
+                continue
+    return ({"period": target, **out} if target and "Combined" in out else None)
+
+
+def refresh_cpi(sb, now):
+    sess = _legacy_tls_session()
+    pages = []
+    for page in range(1, MOSPI_PAGES + 1):
+        r = sess.get(MOSPI_CPI_URL, params={"format": "json", "page": page}, timeout=TIMEOUT)
+        r.raise_for_status()
+        pages.append(r.json())
+        parsed = parse_mospi_cpi(pages)
+        if parsed and all(k in parsed for k in ("Combined", "Rural", "Urban")):
+            break
+    else:
+        parsed = parse_mospi_cpi(pages)
+    if not parsed:
+        raise RuntimeError(f"MOSPI CPI: no All-India General row in {MOSPI_PAGES} pages")
+    c = parsed["Combined"]
+    # prev = the last stored month's inflation (bonds pattern: vs our own row)
+    old = sb("GET", "quotes?select=price,meta&symbol=eq.MACRO:MOSPI_CPI")
+    prev = None
+    if old and ((old[0].get("meta") or {}).get("period")) != parsed["period"]:
+        prev = old[0].get("price")
+    elif old:
+        prev = (old[0].get("meta") or {}).get("prev_inflation")
+    meta = {"units": "%", "period": parsed["period"], "index": c["index"],
+            "series": "MOSPI CPI (2012=100)", "prev_inflation": prev,
+            "delta": round(c["inflation"] - prev, 2) if prev is not None else None,
+            "rural": (parsed.get("Rural") or {}).get("inflation"),
+            "urban": (parsed.get("Urban") or {}).get("inflation")}
+    p = Parsed(c["inflation"], prev, None, f"{parsed['period']}-01T00:00:00+00:00", None)
+    return upsert(sb, [row("MACRO:MOSPI_CPI", "macro", "India CPI inflation (MOSPI)",
+                           p, now, currency="", meta=meta)])
+
+
 # ---------- Wikidata entity aliases (worldmonitor leftover, 4 Sep 2026) ----------
 # One SPARQL query pulls every company Wikidata knows to be NSE-listed
 # (P414 exchange = Q638740 with a P249 ticker) plus its English altLabels —
@@ -1375,7 +1464,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
           ("analysis_new", refresh_analysis_new),
           ("worldmacro", refresh_worldmacro), ("hazards", refresh_hazards),
-          ("wikidata", refresh_wikidata),
+          ("wikidata", refresh_wikidata), ("cpi", refresh_cpi),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),
