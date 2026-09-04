@@ -130,3 +130,12 @@ insert into sources (name, type, feed_url, authority) values
   ('GNews Reuters',       'google_news_query', 'site:reuters.com', 6),
   ('GNews Bloomberg',     'google_news_query', 'site:bloomberg.com', 6)
 on conflict do nothing;
+
+-- 2026-09-04: beat feeds (worldmonitor residue). Derivatives, SEBI enforcement
+-- and FPI/hedge-fund flow desks that no single outlet feed covers; each query
+-- answered 44-100 items with <4 h freshness when probed. Zero fetch code.
+insert into sources (name, type, feed_url, authority) values
+  ('GNews Derivatives-IN',   'google_news_query', 'nifty options OR "open interest" OR "put call ratio" OR "F&O" when:2d', 6),
+  ('GNews SEBI-Enforcement', 'google_news_query', 'SEBI order OR SEBI penalty OR SEBI bars OR SEBI settlement when:3d', 6),
+  ('GNews FPI-Flows',        'google_news_query', '"FPI" OR "FII outflow" OR "FII inflow" OR "hedge fund" India when:3d', 6)
+on conflict do nothing;
