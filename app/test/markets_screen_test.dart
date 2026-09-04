@@ -65,6 +65,16 @@ final _blobs = <String, dynamic>{
     ],
     'upcoming': [],
   },
+  'market_summary': {'text': 'NIFTY +0.1%, SENSEX -0.0% · FII -2,346 cr / DII +4,977 cr · Mood: neutral (48)'},
+  'fear_greed': {'score': 48, 'label': 'Neutral', 'methodology_version': 1,
+    'components': {'fii': 11, 'vix': 94, 'breadth': 60, 'momentum': 25}},
+  'risk_index': {'score': 44, 'label': 'Elevated', 'methodology_version': 1,
+    'components': {'inr': 50, 'vix': 6, 'news': 33, 'breadth': 40, 'fii_outflow': 89}},
+  'move_context': {
+    'explained': [{'symbol': 'ANANTRAJ', 'chg': 7.67, 'story_id': 97588,
+      'title': 'NSE Questions Anant Raj Over Sudden Surge in Trading Volume'}],
+    'unexplained': [{'symbol': 'IFCI', 'chg': -3.1}],
+  },
   'nse_indices': [
     {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46,
      'last': 30532, 'pe': '28', 'advances': '3', 'declines': '7',
@@ -110,6 +120,9 @@ void main() {
       expect(find.text(h), findsNWidgets(2), reason: h);
     }
     expect(find.text('MACRO'), findsNothing); // empty section = no chip either
+    for (final h in ['TODAY', 'MOOD', 'MOVES']) {
+      expect(find.text(h), findsNothing, reason: '$h needs its blob');
+    }
     expect(find.text('NIFTY 50'), findsOneWidget);
     expect(find.text('₹24,252'), findsOneWidget);
     expect(find.text('▲0.08%'), findsOneWidget);
@@ -144,6 +157,21 @@ void main() {
     // Sectors open the tab: heatmap first, watchlist right below. (Two
     // matches per heading: ribbon chip first in the tree, header second.)
     expect(find.text('SECTORS'), findsNWidgets(2));
+    // Sentiment/signal cards (today / mood / moves) come after flows, so
+    // the heatmap still opens the tab.
+    for (final h in ['TODAY', 'MOOD', 'MOVES']) {
+      expect(find.text(h), findsNWidgets(2), reason: h);
+    }
+    expect(find.textContaining('Mood: neutral (48)'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('FLOWS').last).dy <
+        tester.getTopLeft(find.text('TODAY').last).dy, isTrue);
+    expect(find.text('Fear & Greed'), findsOneWidget);
+    expect(find.text('Neutral'), findsOneWidget);
+    expect(find.text('India VIX'), findsNWidgets(2)); // F&G and risk components
+    expect(find.text('Elevated'), findsOneWidget);
+    expect(find.text('ANANTRAJ'), findsOneWidget);
+    expect(find.text('▲7.67%'), findsOneWidget);
+    expect(find.text('No news we carry'), findsOneWidget);
     expect(find.text('IT'), findsOneWidget); // NIFTY prefix dropped
     expect(find.text('100'), findsOneWidget); // broad market renders too now
     expect(

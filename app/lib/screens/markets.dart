@@ -11,7 +11,7 @@ import '../remote_config.dart';
 import '../section_ribbon.dart';
 import '../theme.dart';
 import '../ticks.dart';
-import 'feed.dart' show homeTab, marketsTab, filterPill;
+import 'feed.dart' show homeTab, marketsTab, filterPill, pendingStory;
 import 'screens.dart';
 import 'stock.dart';
 
@@ -381,6 +381,15 @@ class _MarketsBodyState extends State<MarketsBody> {
     final ipoBlob =
         (data.blobs['ipos'] as Map?)?.cast<String, dynamic>() ?? const {};
     final ipos = [..._l(ipoBlob['current']), ..._l(ipoBlob['upcoming'])];
+    // Sentiment + signals (pipeline market.refresh_sentiment / signals.py).
+    final summary =
+        '${(data.blobs['market_summary'] as Map?)?['text'] ?? ''}'.trim();
+    final fg = (data.blobs['fear_greed'] as Map?)?.cast<String, dynamic>();
+    final risk = (data.blobs['risk_index'] as Map?)?.cast<String, dynamic>();
+    final moves =
+        (data.blobs['move_context'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final explained = _l(moves['explained']);
+    final unexplained = _l(moves['unexplained']);
     return [
       if (idxGroups.isNotEmpty)
         (
@@ -471,6 +480,46 @@ class _MarketsBodyState extends State<MarketsBody> {
                         ? green
                         : red),
           ], stamp: data.blobUpdated['flows']),
+        ),
+      // One no-AI line after the flows (the heatmap keeps opening the tab): index moves, FII/DII, top mover, mood.
+      if (summary.isNotEmpty)
+        (
+          id: 'today',
+          label: 'TODAY',
+          child: _Section('Today', [
+            Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(summary, style: serif.copyWith(fontSize: 14))),
+          ], stamp: data.blobUpdated['market_summary']),
+        ),
+      if (fg != null)
+        (
+          id: 'mood',
+          label: 'MOOD',
+          child: _Section('Mood', [
+            ..._gaugeRows('Fear & Greed', fg,
+                (fg['score'] as num) < 44 ? red : (fg['score'] as num) > 55 ? green : null),
+            if (risk != null)
+              ..._gaugeRows('Risk index', risk,
+                  risk['label'] == 'High' ? red : risk['label'] == 'Elevated' ? amber : green),
+          ]),
+        ),
+      if (explained.isNotEmpty || unexplained.isNotEmpty)
+        (
+          id: 'moves',
+          label: 'MOVES',
+          child: _Section('Moves', [
+            _Collapsible([
+              for (final m in explained)
+                InkWell(
+                    onTap: () {
+                      homeTab.value = 0;
+                      pendingStory.value = (m['story_id'] as num?)?.toInt();
+                    },
+                    child: _moveRow(m, '${m['title'] ?? ''}')),
+              for (final m in unexplained) _moveRow(m, 'No news we carry'),
+            ]),
+          ], stamp: data.blobUpdated['move_context']),
         ),
       if (fno.isNotEmpty || flows['pcr'] != null)
         (
@@ -753,6 +802,36 @@ String _crore(Object? v) {
   if (n >= 1e7) return '${(n / 1e7).toStringAsFixed(n >= 1e9 ? 0 : 1)} Cr';
   if (n >= 1e5) return '${(n / 1e5).toStringAsFixed(0)} L';
   return fmtNum(n, decimals: 0);
+}
+
+const _componentNames = {
+  'vix': 'India VIX',
+  'breadth': 'Breadth',
+  'fii': 'FII flows',
+  'hi_lo': '52-week highs vs lows',
+  'momentum': 'NIFTY momentum',
+  'fii_outflow': 'FII selling',
+  'inr': 'Rupee',
+  'news': 'News spikes',
+};
+
+/// Score + label head row, then one row per 0-100 component. A number reads
+/// fine; an arc gauge is a painter this file doesn't have — add if asked.
+List<Widget> _gaugeRows(String name, Map<String, dynamic> g, Color? color) {
+  final comps = (g['components'] as Map?)?.cast<String, dynamic>() ?? const {};
+  return [
+    _LineRow(lead: '${g['score']}', main: name, trail: '${g['label']}',
+        trailColor: color),
+    for (final e in comps.entries)
+      _LineRow(lead: '', main: _componentNames[e.key] ?? e.key,
+          trail: '${e.value}'),
+  ];
+}
+
+Widget _moveRow(Map<String, dynamic> m, String main) {
+  final chg = (m['chg'] as num?)?.toDouble();
+  return _LineRow(lead: '${m['symbol'] ?? ''}', main: main, trail: fmtPct(chg),
+      trailColor: chg == null ? null : (chg >= 0 ? green : red));
 }
 
 class _Section extends StatelessWidget {

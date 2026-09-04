@@ -47,6 +47,7 @@ void main() {
       },
     ))));
     await tester.pump();
+    expect(find.byType(SwitchListTile), findsNWidgets(3)); // + keyword_spike
 
     await tester.tap(find.byType(SwitchListTile).at(0)); // voice_l1 -> false
     await tester.pumpAndSettle();

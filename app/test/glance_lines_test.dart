@@ -45,7 +45,10 @@ Future<void> _pumpCard(WidgetTester tester, Story story) async {
 }
 
 void main() {
-  setUp(() => followedCompanyIds.value = {});
+  setUp(() {
+    followedCompanyIds.value = {};
+    unusualStoryIds.value = {};
+  });
 
   testWidgets('all fields render: bold line + merged chip row',
       (tester) async {
@@ -61,6 +64,15 @@ void main() {
     expect(find.text('Banks gain / NBFCs hurt'), findsOneWidget);
     expect(find.text('rumour'), findsOneWidget);
     expect(find.text('★ TCS on your watchlist'), findsOneWidget);
+    expect(find.text('Wide coverage'), findsNothing);
+  });
+
+  testWidgets('wide-coverage chip only for flagged ids, inside the one row',
+      (tester) async {
+    unusualStoryIds.value = {5};
+    await _pumpCard(tester, _s(5, winners: 'Banks gain'));
+    expect(find.text('Wide coverage'), findsOneWidget);
+    expect(find.byType(Wrap), findsOneWidget);
   });
 
   testWidgets('NULL fields render nothing extra', (tester) async {
@@ -81,6 +93,7 @@ void main() {
     tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
+    unusualStoryIds.value = {4}; // every chip at once on the smallest phone
     await _pumpCard(
         tester,
         _s(4,

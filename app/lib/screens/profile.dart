@@ -272,6 +272,14 @@ class AlertSettingsSectionState extends State<AlertSettingsSection> {
             activeThumbColor: green,
             onChanged: (v) => _toggle('personalized', v),
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Alerts for trending topics',
+                style: serif.copyWith(fontSize: 15)),
+            value: _value('keyword_spike'),
+            activeThumbColor: green,
+            onChanged: (v) => _toggle('keyword_spike', v),
+          ),
         ]);
       },
     );

@@ -33,6 +33,11 @@ final servingCacheProvider = StateProvider<DateTime?>((ref) => null);
 /// find a container with.
 final pendingStory = ValueNotifier<int?>(null);
 
+/// Story ids the pipeline flagged as unusually widely covered (signals.py,
+/// `trending.unusual_story_ids`); the card shows a "Wide coverage" chip.
+/// Fed by [_TrendingStrip]'s poll — one row, every 5 min.
+final unusualStoryIds = ValueNotifier<Set<int>>({});
+
 /// Which HomeShell tab is showing. A notification tap has to reach the feed
 /// from wherever the app happens to be — Ask, Profile, or a pushed sub-screen.
 /// Lives here (not main.dart) so the feed's poll can gate on it without a
@@ -903,6 +908,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                       ? _CacheBanner(savedAt: cachedAt)
                       : const SizedBox(width: double.infinity),
                 ),
+                const AnimatedSize(
+                    duration: Duration(milliseconds: 200),
+                    child: _TrendingStrip()),
                 Expanded(
                   child: Stack(children: [
                     shown.isEmpty
@@ -1782,21 +1790,6 @@ class _StoryCardState extends ConsumerState<StoryCard>
     'rumour': red,
   };
 
-  Widget _glanceChip(String text, {Color? dot}) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(border: Border.all(color: border)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          if (dot != null) ...[
-            Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
-            const SizedBox(width: 5),
-          ],
-          Text(text, style: mono.copyWith(fontSize: 12)),
-        ]),
-      );
-
   /// One merged row: winners/losers · claim status · watchlist flag.
   /// Merged deliberately — three separate lines would tip small phones into
   /// _FitScroll's inner-scroll mode and kill the vertical feed swipe.
@@ -1818,6 +1811,10 @@ class _StoryCardState extends ConsumerState<StoryCard>
                 if (watched.isNotEmpty)
                   _glanceChip('★ ${watched.join(', ')} on your watchlist',
                       dot: null),
+                // Read, not listened: the strip's 5-min poll lands well before
+                // the next card build. Stays inside this ONE Wrap (see above).
+                if (unusualStoryIds.value.contains(story.id))
+                  _glanceChip('Wide coverage', dot: green),
               ];
               if (chips.isEmpty) return const SizedBox.shrink();
               return Padding(
@@ -3164,6 +3161,104 @@ class _FitScrollState extends State<_FitScroll> {
       controller: _sc,
       physics: _overflows ? null : const NeverScrollableScrollPhysics(),
       child: widget.child,
+    );
+  }
+}
+
+/// Bordered mono chip shared by the card's glance row and the trending strip.
+Widget _glanceChip(String text, {Color? dot}) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(border: Border.all(color: border)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (dot != null) ...[
+          Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+          const SizedBox(width: 5),
+        ],
+        Text(text, style: mono.copyWith(fontSize: 12)),
+      ]),
+    );
+
+/// "Trending now" — keyword spikes from the `trending` market blob
+/// (pipeline/signals.py). Polls one tiny row every 5 min, the server's own
+/// rebuild throttle. Tap jumps the feed to the spike's story. Hidden while
+/// empty or unreachable — a miss must never cost the feed anything.
+class _TrendingStrip extends StatefulWidget {
+  const _TrendingStrip();
+
+  @override
+  State<_TrendingStrip> createState() => _TrendingStripState();
+}
+
+class _TrendingStripState extends State<_TrendingStrip> {
+  List<Map<String, dynamic>> _spikes = const [];
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _timer = Timer.periodic(const Duration(minutes: 5), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final row = await Supabase.instance.client
+          .from('market_blobs')
+          .select('payload')
+          .eq('key', 'trending')
+          .maybeSingle()
+          .timeout(const Duration(seconds: 4));
+      final p = (row?['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
+      if (!mounted) return;
+      unusualStoryIds.value = {
+        for (final id in (p['unusual_story_ids'] as List? ?? const []))
+          (id as num).toInt()
+      };
+      setState(() => _spikes = [
+            for (final x in (p['spikes'] as List? ?? const []))
+              Map<String, dynamic>.from(x as Map)
+          ]);
+    } catch (_) {
+      // Unreachable (or Supabase not initialised in a widget test): no strip.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_spikes.isEmpty) return const SizedBox(width: double.infinity);
+    return SizedBox(
+      height: 36,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        children: [
+          Center(child: Text('TRENDING', style: monoLabel)),
+          const SizedBox(width: 10),
+          for (final s in _spikes)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Center(
+                child: InkWell(
+                  onTap: () {
+                    homeTab.value = 0;
+                    pendingStory.value = (s['story_id'] as num?)?.toInt();
+                  },
+                  child: _glanceChip('#${s['term']} · ${s['outlets']}',
+                      dot: s['confidence'] == 'high' ? green : null),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
