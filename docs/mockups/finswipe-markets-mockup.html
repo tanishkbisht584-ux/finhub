@@ -45,6 +45,10 @@
   .tick .p{width:84px;text-align:right} .tick .p .pr{font-size:14px;color:var(--ink)} .tick .p .pc{font-size:11px}
   .pair{margin:4px 0 6px} .pair .l{display:flex;justify-content:space-between;font-size:10px;color:var(--dim)}
   .pair .b{height:6px;margin:3px 0} .pair .b i{display:block;height:100%}
+  table{border-collapse:collapse;width:100%;font-size:11px}
+  th,td{height:28px;padding:0 0 0 6px;text-align:right;white-space:nowrap} th{color:var(--dim);font-weight:400;font-size:10px;letter-spacing:.06em;border-bottom:1px solid var(--border)}
+  td:first-child,th:first-child{text-align:left;padding-left:0;width:92px;color:var(--ink)}
+  td{color:var(--ink)} td.w,th.w{text-align:left;padding-left:10px;white-space:normal} td.w{color:var(--dim)}
   .curve{margin-top:12px} .cl{display:flex} .cl span{flex:1;text-align:center;font-size:10px;color:var(--dim)} .cl.v span{color:var(--ink);font-size:11px}
 </style>
 <div class="phone">
@@ -133,10 +137,14 @@
       <div class="heat hr4"><div class="l">COFORGE</div><div class="v r">−3.55%</div><div class="s">₹1,732</div></div>
       <div class="heat hr3"><div class="l">PERSISTENT</div><div class="v r">−2.90%</div><div class="s">₹5,118</div></div>
     </div>
-    <div class="dim" style="font-size:10px;margin:14px 0 0">OI GAINERS</div>
-    <div class="row"><div class="lead">HINDALCO</div><div class="main"><div class="t">₹712.30 · +2.4%</div><div class="bar"><i style="width:100%"></i></div></div><div class="trail">+38.2% OI</div></div>
-    <div class="row"><div class="lead">TATASTEEL</div><div class="main"><div class="t">₹164.85 · +1.9%</div><div class="bar"><i style="width:71%"></i></div></div><div class="trail">+27.1% OI</div></div>
-    <div class="row"><div class="lead">SAIL</div><div class="main"><div class="t">₹128.10 · +3.1%</div><div class="bar"><i style="width:56%"></i></div></div><div class="trail">+21.4% OI</div></div>
+    <div class="dim" style="font-size:10px;margin:14px 0 2px">OI GAINERS</div>
+    <table>
+      <tr><th>SYMBOL</th><th>LTP</th><th>CHG</th><th class="w">OI CHANGE</th></tr>
+      <tr><td>HINDALCO</td><td>₹712.30</td><td class="g">+2.4%</td><td class="w"><span class="g">+38.2%</span> · long build-up</td></tr>
+      <tr><td>TATASTEEL</td><td>₹164.85</td><td class="g">+1.9%</td><td class="w"><span class="g">+27.1%</span> · long build-up</td></tr>
+      <tr><td>SAIL</td><td>₹128.10</td><td class="g">+3.1%</td><td class="w"><span class="g">+21.4%</span> · long build-up</td></tr>
+      <tr><td>INFY</td><td>₹1,482.00</td><td class="r">−1.2%</td><td class="w"><span class="g">+18.9%</span> · short build-up</td></tr>
+    </table>
     <div style="font-size:12px;margin-top:8px" class="g">show all 12</div>
   </div>
 
@@ -151,8 +159,13 @@
       <div class="cl v"><span>6.42%</span><span>6.61%</span><span>6.78%</span><span>6.94%</span></div>
       <div class="cl"><span>2Y</span><span>5Y</span><span>10Y</span><span>30Y</span></div>
     </div>
-    <div class="row" style="margin-top:10px;border-top:1px solid var(--border)"><div class="lead">10Y</div><div class="main"><div class="t">G-Sec yield</div><div class="s">3 Sep</div></div><div class="trail g">−3.0 bp</div></div>
-    <div class="row"><div class="lead">5Y</div><div class="main"><div class="t">G-Sec yield</div><div class="s">3 Sep</div></div><div class="trail r">+1.5 bp</div></div>
+    <table style="margin-top:12px">
+      <tr><th>TENOR</th><th>YIELD</th><th>CHG</th><th class="w">AS OF</th></tr>
+      <tr><td>2Y G-Sec</td><td>6.42%</td><td class="g">−1.0 bp</td><td class="w">3 Sep</td></tr>
+      <tr><td>5Y G-Sec</td><td>6.61%</td><td class="r">+1.5 bp</td><td class="w">3 Sep</td></tr>
+      <tr><td>10Y G-Sec</td><td>6.78%</td><td class="g">−3.0 bp</td><td class="w">3 Sep</td></tr>
+      <tr><td>30Y G-Sec</td><td>6.94%</td><td class="dim">0.0 bp</td><td class="w">3 Sep</td></tr>
+    </table>
     <div class="dim" style="font-size:10px;margin:14px 0 6px">RBI POLICY RATES</div>
     <div class="grid c2">
       <div class="tile"><div class="l">Repo rate</div><div class="v">5.25%</div></div>
@@ -167,10 +180,59 @@
 
   <!-- IPO -->
   <div class="sec">
-    <div class="hdr"><span>IPO</span></div>
-    <div class="row"><div class="lead">URBANCO</div><div class="main"><div class="t">Urban Company</div><div class="s">₹98–103 · ₹1,900 Cr · 10–12 Sep</div></div><div class="trail g">open</div></div>
-    <div class="row"><div class="lead">SHRINGAR</div><div class="main"><div class="t">Shringar House of Mangalsutra</div><div class="s">₹155–165 · ₹401 Cr · 10–12 Sep</div></div><div class="trail dim">upcoming</div></div>
-    <div class="row"><div class="lead">VMSTMT</div><div class="main"><div class="t">VMS TMT</div><div class="s">₹94–99 · ₹148 Cr · 17–19 Sep</div></div><div class="trail dim">upcoming</div></div>
+    <div class="hdr"><span>IPO</span><span class="stamp">NSE</span></div>
+    <table style="margin-top:2px">
+      <tr><th>SYMBOL</th><th>BAND ₹</th><th>SIZE</th><th class="w">DATES · STATUS</th></tr>
+      <tr><td>URBANCO</td><td>98–103</td><td>₹1,900 Cr</td><td class="w">10–12 Sep · <span class="g">open</span></td></tr>
+      <tr><td>SHRINGAR</td><td>155–165</td><td>₹401 Cr</td><td class="w">10–12 Sep · upcoming</td></tr>
+      <tr><td>VMSTMT</td><td>94–99</td><td>₹148 Cr</td><td class="w">17–19 Sep · upcoming</td></tr>
+    </table>
+  </div>
+
+  <!-- RESULTS -->
+  <div class="sec">
+    <div class="hdr"><span>RESULTS</span><span class="stamp">NSE · 15:30</span></div>
+    <table style="margin-top:2px">
+      <tr><th>SYMBOL</th><th>DATE</th><th></th><th class="w">PURPOSE</th></tr>
+      <tr><td>TCS</td><td>9 Oct</td><td></td><td class="w">Q2 results · dividend</td></tr>
+      <tr><td>INFY</td><td>16 Oct</td><td></td><td class="w">Q2 results</td></tr>
+      <tr><td>HDFCBANK</td><td>18 Oct</td><td></td><td class="w">Q2 results</td></tr>
+    </table>
+    <div style="font-size:12px;margin-top:8px" class="g">show all 14</div>
+  </div>
+
+  <!-- DEALS -->
+  <div class="sec">
+    <div class="hdr"><span>DEALS</span><span class="stamp">NSE · 3 Sep</span></div>
+    <table style="margin-top:2px">
+      <tr><th>SYMBOL</th><th>QTY</th><th>PRICE</th><th class="w">CLIENT · SIDE</th></tr>
+      <tr><td>IDEA</td><td>2,10,00,000</td><td>₹8.12</td><td class="w">Goldman Sachs · <span class="g">BUY</span></td></tr>
+      <tr><td>YESBANK</td><td>1,50,00,000</td><td>₹19.40</td><td class="w">Morgan Stanley · <span class="r">SELL</span></td></tr>
+      <tr><td>ZOMATO</td><td>45,00,000</td><td>₹268.70</td><td class="w">SBI MF · <span class="g">BUY</span></td></tr>
+    </table>
+    <div style="font-size:12px;margin-top:8px" class="g">show all 22</div>
+  </div>
+
+  <!-- INSIDER -->
+  <div class="sec">
+    <div class="hdr"><span>INSIDER</span><span class="stamp">NSE · 3 Sep</span></div>
+    <table style="margin-top:2px">
+      <tr><th>SYMBOL</th><th>QTY</th><th>VALUE</th><th class="w">PERSON · TXN</th></tr>
+      <tr><td>WIPRO</td><td>12,00,000</td><td>₹31.1 Cr</td><td class="w">Azim Premji Trust · <span class="r">SELL</span></td></tr>
+      <tr><td>LTIM</td><td>4,000</td><td>₹2.4 Cr</td><td class="w">Sudhir Chaturvedi · <span class="g">BUY</span></td></tr>
+    </table>
+  </div>
+
+  <!-- MACRO -->
+  <div class="sec">
+    <div class="hdr"><span>MACRO</span><span class="stamp">FRED · WB · MOSPI</span></div>
+    <div class="tick"><div class="n"><div class="nm">USD/INR</div><div class="lb">FX</div></div><svg width="80" height="24" viewBox="0 0 80 24"><polyline fill="none" stroke="#E5484D" stroke-width="1.5" points="0,18 8,16 16,15 24,14 32,12 40,13 48,10 56,9 64,7 72,6 80,4"/></svg><div class="p" style="margin-left:14px"><div class="pr">88.14</div><div class="pc r">+0.21%</div></div></div>
+    <table style="margin-top:8px">
+      <tr><th>SERIES</th><th>VALUE</th><th>PREV</th><th class="w">PERIOD</th></tr>
+      <tr><td>CPI inflation</td><td>1.33%</td><td class="dim">1.55%</td><td class="w">Dec 2025 · MOSPI</td></tr>
+      <tr><td>GDP growth</td><td>6.5%</td><td class="dim">8.2%</td><td class="w">2025 · World Bank</td></tr>
+      <tr><td>Goods trade</td><td>−$23.4B</td><td class="dim">−$21.9B</td><td class="w">Jul 2026 · FRED</td></tr>
+    </table>
   </div>
 
   <div class="foot" style="margin-top:28px">as of 15:31 IST · NSE · Yahoo · Stooq · RBI · FRED</div>
