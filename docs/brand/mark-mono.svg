@@ -2,5 +2,7 @@
   <!-- Single-colour FinSwipe mark (Android 13 themed icon layer, favicons). Same geometry as mark.svg. -->
   <path d="M7 46 L50 3 L93 46 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
   <path d="M71 46 L71 92 Q71 96 67 96 L33 96 Q29 96 29 92 L29 46" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
-  <text x="50" y="79" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="24" fill="#FFFFFF">Fin</text>
+  <text x="50" y="62" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#FFFFFF">F</text>
+  <text x="50" y="78" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#FFFFFF">I</text>
+  <text x="50" y="94" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#FFFFFF">N</text>
 </svg>

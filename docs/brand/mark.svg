@@ -1,8 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
-  <!-- FinSwipe mark. Arrow up, "Fin" inside the shaft. Head green, shaft dim, word ink.
+  <!-- FinSwipe mark. Arrow up, F/I/N stacked vertically in the shaft. Head green, shaft dim, word ink.
        Geometry: tip 50,3; shoulders y=46 (45°); shaft 29..71 down to y=96, 4-unit rounded feet.
        Colours are theme.dart: green #3ECF8E, inkDim #9BA09C, ink #E8E6E3. Background transparent. -->
   <path d="M7 46 L50 3 L93 46 Z" fill="#3ECF8E" stroke="#3ECF8E" stroke-width="2" stroke-linejoin="round"/>
   <path d="M71 46 L71 92 Q71 96 67 96 L33 96 Q29 96 29 92 L29 46" fill="none" stroke="#9BA09C" stroke-width="2" stroke-linejoin="round"/>
-  <text x="50" y="79" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="24" fill="#E8E6E3">Fin</text>
+  <text x="50" y="62" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">F</text>
+  <text x="50" y="78" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">I</text>
+  <text x="50" y="94" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">N</text>
 </svg>
