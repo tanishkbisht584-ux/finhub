@@ -358,7 +358,21 @@ class _MarketsBodyState extends State<MarketsBody> {
     final data = widget.data;
     final onFollowMf = widget.onFollowMf;
     final onAddMf = widget.onAddMf;
-    final indices = data.kind('index');
+    final allIdx = data.kind('index');
+    // Global layer (0.32.0): world rows share kind=index, split on meta.
+    final indices = [
+      for (final t in allIdx)
+        if (t.meta['global'] != true) t
+    ];
+    final worldIdx = [
+      for (final t in allIdx)
+        if (t.meta['global'] == true && t.meta['adr'] != true) t
+    ];
+    final adrs = [
+      for (final t in allIdx)
+        if (t.meta['adr'] == true) t
+    ];
+    final predictions = _l((data.blobs['predictions'] as Map?)?['markets']);
     final watch = data.watchlist;
     final mf = data.kind('mf')
       ..sort((a, b) {
@@ -593,6 +607,38 @@ class _MarketsBodyState extends State<MarketsBody> {
           child: _Section('Crypto', [
             for (final t in data.kind('crypto')) _TickRow(t),
           ]),
+        ),
+      if (worldIdx.isNotEmpty)
+        (
+          id: 'global',
+          label: 'GLOBAL',
+          child: _Section('Global', [
+            for (final t in worldIdx) _TickRow(t, spark: t.closes.length > 1),
+            if (adrs.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text('INDIA ADRS (NYSE)', style: monoLabel),
+              for (final t in adrs) _TickRow(t, spark: t.closes.length > 1),
+            ],
+          ]),
+        ),
+      if (predictions.isNotEmpty)
+        (
+          id: 'odds',
+          label: 'ODDS',
+          child: _Section('Odds', [
+            Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('Polymarket odds — crowd bets, not forecasts',
+                    style: mono.copyWith(fontSize: 10))),
+            for (final m in predictions)
+              _LineRow(
+                  lead: '${m['pct']}%',
+                  main: '${m['q'] ?? ''}',
+                  trail: '${m['label'] ?? ''}',
+                  sub: m['end'] == null || '${m['end']}'.isEmpty
+                      ? null
+                      : 'resolves ${m['end']}'),
+          ], stamp: data.blobUpdated['predictions']),
         ),
       if (data.kind('commodity').isNotEmpty)
         (

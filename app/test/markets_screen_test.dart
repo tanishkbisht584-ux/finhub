@@ -92,6 +92,12 @@ final _blobs = <String, dynamic>{
       'title': 'NSE Questions Anant Raj Over Sudden Surge in Trading Volume'}],
     'unexplained': [{'symbol': 'IFCI', 'chg': -3.1}],
   },
+  'predictions': {
+    'markets': [
+      {'q': 'Will the Fed cut 25 bps in September?', 'slug': 'fed-sep',
+       'label': 'Yes', 'pct': 1, 'end': '2026-09-16'},
+    ],
+  },
   'nse_indices': [
     {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46,
      'last': 30532, 'pe': '28', 'advances': '3', 'declines': '7',
@@ -105,6 +111,10 @@ final _blobs = <String, dynamic>{
 final _phase3 = MarketsData(
   ticks: [
     ..._data.ticks,
+    _t('^GSPC', 'index', 'S&P 500', 7716.03, -0.41, cur: '',
+        closes: [7700, 7716], meta: {'global': true}),
+    _t('ADR:INFY', 'index', 'Infosys ADR (NYSE)', 11.75, -2.77, cur: 'USD',
+        meta: {'global': true, 'adr': true}),
     _t('MF:122639', 'mf', 'Parag Parikh Flexi Cap Fund', 90.8656, 0.14,
         meta: {'scheme_code': 122639, 'ret_1y': -1.2, 'category': 'Equity Scheme - Flexi Cap Fund'}),
     _t('MF:120503', 'mf', 'Axis ELSS Tax Saver Fund', 112.22, -0.02,
@@ -136,6 +146,8 @@ void main() {
     for (final h in ['INDICES', 'WATCHLIST', 'FX', 'CRYPTO', 'COMMODITIES']) {
       expect(find.text(h), findsNWidgets(2), reason: h);
     }
+    expect(find.text('GLOBAL'), findsNothing); // no meta.global ticks here
+    expect(find.text('ODDS'), findsNothing);
     expect(find.text('MACRO'), findsNothing); // empty section = no chip either
     for (final h in ['TODAY', 'MOOD', 'MOVES', 'QUAKES', 'BONDS']) {
       expect(find.text(h), findsNothing, reason: '$h needs its blob');
@@ -214,6 +226,12 @@ void main() {
     expect(find.text('+ Add fund'), findsOneWidget);
     expect(find.text('4.33%'), findsOneWidget);
     expect(find.text('-0.25'), findsOneWidget);
+    // Global layer: world rows leave INDICES, form GLOBAL; odds render.
+    expect(find.text('GLOBAL'), findsNWidgets(2));
+    expect(find.text('S&P 500'), findsOneWidget);
+    expect(find.text('INDIA ADRS (NYSE)'), findsOneWidget);
+    expect(find.text('ODDS'), findsNWidgets(2));
+    expect(find.textContaining('Fed cut 25 bps'), findsOneWidget);
     expect(find.text('RESULTS'), findsNWidgets(2));
     expect(find.text('28 Aug'), findsOneWidget);
     expect(find.text('DEALS'), findsNWidgets(2));
