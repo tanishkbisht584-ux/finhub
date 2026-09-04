@@ -444,6 +444,37 @@ def test_personal_alert_engine_unions_followed_cluster_dupes(monkeypatch):
     assert any("cluster_id=in." in p for p in paths)
 
 
+def test_personal_alert_engine_pushes_high_confidence_spikes_unless_opted_out(monkeypatch):
+    """A trending spike (signals.py, confidence high) reaches every user with
+    a token — follows or not — unless alert_settings.keyword_spike is false.
+    Medium-confidence spikes never push."""
+    import run
+
+    def fake_sb(method, path, **kw):
+        if path.startswith("profiles?select"):
+            return [{"id": "u1", "fcm_token": "t1", "alert_settings": {}},
+                    {"id": "u2", "fcm_token": "t2", "alert_settings": {"keyword_spike": False}}]
+        if path.startswith("follows"):
+            return []
+        if path.startswith("market_blobs"):
+            return [{"payload": {"spikes": [
+                {"term": "angel", "confidence": "high", "story_id": 31},
+                {"term": "payrolls", "confidence": "med", "story_id": 32}]}}]
+        if "id=in.(" in path:
+            assert "id=in.(31)" in path and "status=eq.approved" in path
+            return [{"id": 31, "hook": "Angel tax", "headline": "Angel tax scrapped",
+                     "impact_score": 5, "category": "Policy", "sectors": [], "cluster_id": "a"}]
+        return []
+
+    pushed = []
+    monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "in_quiet_hours", lambda now: False)
+    monkeypatch.setattr(run, "send_fcm_token",
+                        lambda tok, title, body, sid, score: pushed.append((tok, sid)) or "sent")
+    assert run.personal_alert_engine() == 1
+    assert pushed == [("t1", 31)]
+
+
 def test_personal_matches_empty_follows():
     from run import personal_matches
     assert personal_matches({"id": 1, "category": None, "sectors": None},

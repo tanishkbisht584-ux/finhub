@@ -926,7 +926,18 @@ def personal_alert_engine(now=None):
     for f in all_follows:
         follows_by_user.setdefault(f["user_id"], []).append(
             (f["target_type"], f["target_id"]))
-    if not follows_by_user:
+    # Keyword-spike alerts (signals.py `trending`, high confidence only) ride
+    # this engine rather than the topic broadcast so the profile's
+    # keyword_spike toggle can opt a user out; the cursor/cap/quiet-hours
+    # logic below dedupes them like any other story.
+    spike_ids = set()
+    try:
+        tr = sb("GET", "market_blobs?select=payload&key=eq.trending")
+        spike_ids = {s["story_id"] for s in ((tr[0]["payload"] if tr else {}) or {}).get("spikes") or []
+                     if s.get("confidence") == "high" and s.get("story_id")}
+    except Exception as e:  # noqa: BLE001
+        print(f"PERSONAL ALERT trending read failed: {str(e)[:80]}")
+    if not follows_by_user and not spike_ids:
         return 0
 
     today = now.astimezone(IST).strftime("%Y-%m-%d")
@@ -949,6 +960,12 @@ def personal_alert_engine(now=None):
         have = {s["id"] for s in stories}
         stories = sorted(stories + [s for s in extra if s["id"] not in have],
                          key=lambda s: s["id"])
+    if spike_ids:
+        have = {s["id"] for s in stories}
+        ids = ",".join(str(i) for i in sorted(spike_ids - have))
+        extra = sb("GET", f"stories?select={sel}&id=in.({ids})"
+                          "&alerted_at=is.null&status=eq.approved") if ids else []
+        stories = sorted(stories + extra, key=lambda s: s["id"])
     if not stories:
         return 0
 
@@ -963,10 +980,11 @@ def personal_alert_engine(now=None):
     quiet = in_quiet_hours(now)
     for p in profiles:
         uid = p["id"]
-        if uid not in follows_by_user:
+        if uid not in follows_by_user and not spike_ids:
             continue
         try:
             settings = p.get("alert_settings") or {}
+            wants_spikes = settings.get("keyword_spike", True)
             pa = settings.get("pa") or {}
             n_today = pa.get("n", 0) if pa.get("d") == today else 0
             cursor = pa.get("cur", 0)
@@ -984,7 +1002,9 @@ def personal_alert_engine(now=None):
                         continue  # cursor still advances: stale news never buzzes later
                     if quiet and (s["impact_score"] or 0) < QUIET_PIERCE_SCORE:
                         continue
-                    if uid not in personal_matches(s, {uid: follows_by_user[uid]}, companies_of):
+                    spike = s["id"] in spike_ids and wants_spikes
+                    if not spike and uid not in personal_matches(
+                            s, {uid: follows_by_user.get(uid, [])}, companies_of):
                         continue
                     result = send_fcm_token(p["fcm_token"], s["hook"] or s["headline"],
                                             s["headline"], s["id"], s["impact_score"])
