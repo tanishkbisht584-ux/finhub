@@ -13,7 +13,8 @@ import ops  # noqa: E402
 
 # groups safe to run from this machine: NSE is Akamai-blocked locally, and the
 # deep fetch lanes take minutes-to-hours — those stay CI-only.
-RUN_NOW = [g for g, _ in mkt.GROUPS if g not in ("nse", "deep_new", "deep_warm", "fundamentals")]
+RUN_NOW = [g for g, _ in mkt.GROUPS
+           if g not in ("nse", "deep_new", "deep_warm", "fundamentals", "polymarket")]
 
 status = cfg("market_status")
 groups_st = status.get("groups") or {}
@@ -200,6 +201,7 @@ with tab_s:
         {"source": "RBI homepage (Current Rates)", "feeds": "benchmark G-Sec yields, policy rates, T-bill cut-offs",
          "freshest": blobs.get("bonds", "—")},
         {"source": "FRED (keyed)", "feeds": "macro series", "freshest": ages.get("macro", "—")},
+        {"source": "Polymarket Gamma (CI-only)", "feeds": "prediction-market odds", "freshest": blobs.get("predictions", "—")},
         {"source": "MOSPI CPI API", "feeds": "India CPI inflation (official, monthly)", "freshest": ages.get("macro", "—")},
         {"source": "Wikidata SPARQL", "feeds": "company alias enrichment (daily)", "freshest": "—"},
         {"source": "Kaggle dump (static)", "feeds": "deep annual history, one-time backfill (src=kaggle)",

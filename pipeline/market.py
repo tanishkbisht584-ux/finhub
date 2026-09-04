@@ -94,7 +94,7 @@ _last_run = {}  # group -> utc datetime of the last attempt (success or not)
 _status = {}    # group -> last attempt outcome; mirrored to app_config `market_status`
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
-INTERVAL = {"fxcom": 15, "crypto": 15, "global": 15, "nse": 60, "bonds": 60, "macro": 24 * 60,
+INTERVAL = {"fxcom": 15, "crypto": 15, "global": 15, "polymarket": 60, "nse": 60, "bonds": 60, "macro": 24 * 60,
             "mf_new": 5, "analysis_new": 5, "deep_new": 5, "screener_px": 60,
             "sentiment": 60, "hazards": 60}
 
@@ -1125,6 +1125,52 @@ def refresh_hazards(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+# ---------- Polymarket prediction odds (G3; CI-only, dev IP refused) ----------
+# One Gamma call for the highest-volume open markets, filtered to themes that
+# move Indian portfolios (Fed, oil, China, tariffs...). GDELT was probed from
+# a runner the same day and 429s there too - buried, do not re-add.
+
+POLY_URL = "https://gamma-api.polymarket.com/markets"
+POLY_THEMES = ("fed", "rate", "recession", "india", "china", "oil", "opec",
+               "tariff", "inflation", "bitcoin", "war", "sanction")
+POLY_CAP = 10
+
+
+def parse_polymarket(rows):
+    out = []
+    for m in rows or []:
+        q = (m.get("question") or "").strip()
+        if not q or not any(t in q.lower() for t in POLY_THEMES):
+            continue
+        try:
+            outcomes = json.loads(m.get("outcomes") or "[]")
+            prices = [float(x) for x in json.loads(m.get("outcomePrices") or "[]")]
+        except (TypeError, ValueError):
+            continue
+        if not outcomes or len(prices) != len(outcomes):
+            continue
+        if outcomes[:2] == ["Yes", "No"]:
+            label, pct = "Yes", round(prices[0] * 100)
+        else:  # multi-outcome: report the current favourite
+            label, pct = max(zip(outcomes, prices), key=lambda x: x[1])[0], \
+                round(max(prices) * 100)
+        out.append({"q": q, "slug": m.get("slug"), "label": label, "pct": pct,
+                    "end": (m.get("endDate") or "")[:10]})
+    return out[:POLY_CAP]
+
+
+def refresh_polymarket(sb, now):
+    r = requests.get(POLY_URL, params={"limit": 100, "active": "true", "closed": "false",
+                                       "order": "volume24hr", "ascending": "false"},
+                     headers=BROWSER_UA, timeout=TIMEOUT)
+    r.raise_for_status()
+    markets = parse_polymarket(r.json())
+    if not markets:
+        raise RuntimeError("Polymarket: no theme-matching markets in the top 100")
+    return write_blobs(sb, [{"key": "predictions", "payload": {"markets": markets},
+                             "updated_at": now.isoformat()}])
+
+
 # ---------- MOSPI CPI (official, replaces FRED's frozen INDCPIALLMINMEI) ----------
 # api.mospi.gov.in is keyless, 10 rows/page, newest month first; its query
 # filters are IGNORED, so page and filter client-side — the All-India /
@@ -1499,6 +1545,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("analysis_new", refresh_analysis_new),
           ("worldmacro", refresh_worldmacro), ("hazards", refresh_hazards),
           ("wikidata", refresh_wikidata), ("cpi", refresh_cpi),
+          ("polymarket", refresh_polymarket),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),

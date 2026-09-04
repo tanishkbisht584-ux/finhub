@@ -268,7 +268,7 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "global", "mf", "mf_new",
-                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi",
+                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
@@ -983,3 +983,47 @@ def test_refresh_macro_scales_trade_series(monkeypatch):
     assert r["price"] == 38.0 and r["prev_close"] == 36.5
     assert r["closes"] == [36.5, 38.0] and r["meta"]["delta"] == 1.5
     assert r["meta"]["units"] == "USD bn"
+
+
+def test_parse_polymarket_filters_themes_and_handles_multi_outcome():
+    rows = [
+        {"question": "Will the Fed decrease interest rates by 25 bps in September?",
+         "slug": "fed-sep", "outcomes": '["Yes", "No"]',
+         "outcomePrices": '["0.0065", "0.9935"]', "endDate": "2026-09-16T00:00:00Z"},
+        {"question": "Who wins the 2026 celebrity dance-off?", "slug": "dance",
+         "outcomes": '["A", "B"]', "outcomePrices": '["0.5", "0.5"]'},
+        {"question": "Highest inflation print of 2026?", "slug": "cpi-race",
+         "outcomes": '["Q3", "Q4"]', "outcomePrices": '["0.3", "0.7"]'},
+        {"question": "Oil above $100?", "slug": "bad", "outcomes": "not json",
+         "outcomePrices": "[]"},
+    ]
+    out = market.parse_polymarket(rows)
+    assert [m["slug"] for m in out] == ["fed-sep", "cpi-race"]
+    assert out[0]["label"] == "Yes" and out[0]["pct"] == 1 and out[0]["end"] == "2026-09-16"
+    assert out[1]["label"] == "Q4" and out[1]["pct"] == 70
+    assert market.parse_polymarket([]) == []
+
+
+def test_refresh_polymarket_writes_blob_or_raises(monkeypatch):
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"question": "Fed rate cut?", "slug": "s", "outcomes": '["Yes", "No"]',
+                     "outcomePrices": '["0.4", "0.6"]', "endDate": "2026-09-16"}]
+
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or 1)
+    assert market.refresh_polymarket(None, NOW) == 1
+    assert written[0]["key"] == "predictions" and written[0]["payload"]["markets"][0]["pct"] == 40
+
+    class Empty(R):
+        def json(self):
+            return []
+
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
+    with pytest.raises(RuntimeError):
+        market.refresh_polymarket(None, NOW)
