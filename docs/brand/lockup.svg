@@ -1,9 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 126" width="100" height="126">
-  <!-- FinSwipe lockup: the mark with SWIPE beneath in mono caps (theme.dart monoLabel: w700, +tracking, inkDim). -->
-  <path d="M7 46 L50 3 L93 46 Z" fill="#3ECF8E" stroke="#3ECF8E" stroke-width="2" stroke-linejoin="round"/>
-  <path d="M71 46 L71 92 Q71 96 67 96 L33 96 Q29 96 29 92 L29 46" fill="none" stroke="#9BA09C" stroke-width="2" stroke-linejoin="round"/>
-  <text x="50" y="62" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">F</text>
-  <text x="50" y="78" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">I</text>
-  <text x="50" y="94" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">N</text>
+  <!-- FinSwipe lockup: refined mark with SWIPE beneath (theme.dart monoLabel: w700, tracked, inkDim). -->
+  <path d="M10 44 L50 4 L90 44 Z" fill="#3ECF8E" stroke="#3ECF8E" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M70 47 L70 91 Q70 97 64 97 L36 97 Q30 97 30 91 L30 47" fill="none" stroke="#9BA09C" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <line x1="36" y1="64" x2="64" y2="64" stroke="#9BA09C" stroke-width="1" opacity="0.28"/>
+  <line x1="36" y1="80.5" x2="64" y2="80.5" stroke="#9BA09C" stroke-width="1" opacity="0.28"/>
+  <text x="50" y="60.5" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">F</text>
+  <text x="50" y="77" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">I</text>
+  <text x="50" y="93.5" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="15" fill="#E8E6E3">N</text>
   <text x="50" y="119" text-anchor="middle" font-family="Consolas,'JetBrains Mono',monospace" font-size="11.5" font-weight="700" letter-spacing="3.2" fill="#9BA09C">SWIPE</text>
 </svg>
