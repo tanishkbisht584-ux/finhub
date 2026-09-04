@@ -268,7 +268,7 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "mf", "mf_new",
-                                             "analysis_new", "worldmacro", "hazards",
+                                             "analysis_new", "worldmacro", "hazards", "wikidata",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
@@ -785,3 +785,61 @@ def test_parse_usgs_and_refresh_hazards_publishes_empty_weeks(monkeypatch):
     assert market.refresh_hazards(None, NOW) == 1
     assert written[0]["payload"] == {"quakes": []}
     assert calls[0]["minmagnitude"] == 4.5 and calls[0]["minlatitude"] == 5
+
+
+# ---------- Wikidata aliases ----------
+
+def _wd(ticker, label, alts=""):
+    return {"ticker": {"value": ticker}, "itemLabel": {"value": label},
+            "alts": {"value": alts}}
+
+
+def test_parse_wikidata_aliases_shapes():
+    payload = {"results": {"bindings": [
+        _wd("SJVN", "SJVN", "Satluj Jal Vidyut Nigam|SJVN Limited|SJVNL"),
+        _wd("bandhanbnk", "Bandhan Bank"),
+        {"itemLabel": {"value": "no ticker row"}},
+    ]}}
+    out = market.parse_wikidata_aliases(payload)
+    assert out["SJVN"] == ["SJVN", "Satluj Jal Vidyut Nigam", "SJVN Limited", "SJVNL"]
+    assert out["BANDHANBNK"] == ["Bandhan Bank"]
+    assert len(out) == 2
+    assert market.parse_wikidata_aliases({}) == {}
+
+
+def test_refresh_wikidata_merges_only_new_and_raises_on_empty(monkeypatch):
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"results": {"bindings": [
+                _wd("SJVN", "SJVN", "Satluj Jal Vidyut Nigam|SJVNL|x"),
+                _wd("TCS", "Tata Consultancy Services", "TCS"),
+            ]}}
+
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    patches = []
+
+    def sb(method, path, **kw):
+        if method == "GET":
+            return [{"id": 1, "name": "SJVN", "nse_symbol": "SJVN",
+                     "aliases": ["sjvnl"]},
+                    {"id": 2, "name": "Tata Consultancy Services", "nse_symbol": "TCS",
+                     "aliases": []},
+                    {"id": 3, "name": "Unknown Co", "nse_symbol": "NOPE", "aliases": []}]
+        patches.append((path, kw["json"]))
+
+    assert market.refresh_wikidata(sb, NOW) == 1
+    # SJVN gains only the long new name: label==name, sjvnl already there, "x" too short.
+    # TCS gains nothing (label==name, alt==symbol) -> no PATCH at all.
+    assert patches == [("companies?id=eq.1",
+                        {"aliases": ["satluj jal vidyut nigam", "sjvnl"]})]
+
+    class Empty(R):
+        def json(self):
+            return {"results": {"bindings": []}}
+
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
+    with pytest.raises(RuntimeError):
+        market.refresh_wikidata(sb, NOW)

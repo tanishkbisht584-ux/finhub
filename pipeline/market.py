@@ -107,7 +107,8 @@ def nav_slot(now):
 
 
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
-              "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0)}
+              "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
+              "wikidata": (3, 0)}
 
 
 def due(group, now):
@@ -1092,6 +1093,58 @@ def refresh_hazards(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+# ---------- Wikidata entity aliases (worldmonitor leftover, 4 Sep 2026) ----------
+# One SPARQL query pulls every company Wikidata knows to be NSE-listed
+# (P414 exchange = Q638740 with a P249 ticker) plus its English altLabels —
+# the alternate names ("Satluj Jal Vidyut Nigam" for SJVN) the AI card
+# matcher misses today. New names merge into companies.aliases, which
+# run.companies_index() already keys — zero matcher changes.
+
+WIKIDATA_SPARQL = """SELECT ?ticker ?itemLabel (GROUP_CONCAT(DISTINCT ?alt; separator="|") AS ?alts)
+WHERE { ?item p:P414 ?ex . ?ex ps:P414 wd:Q638740 . ?ex pq:P249 ?ticker .
+  OPTIONAL { ?item skos:altLabel ?alt . FILTER(LANG(?alt)="en") }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } }
+GROUP BY ?ticker ?itemLabel"""
+WIKIDATA_UA = {"User-Agent": "FinSwipe/1.0 (news pipeline; single daily query)"}
+
+
+def parse_wikidata_aliases(payload):
+    """SPARQL JSON bindings -> {TICKER: [name, alt, ...]} (raw, uncleaned)."""
+    out = {}
+    for b in ((payload or {}).get("results") or {}).get("bindings") or []:
+        ticker = (b.get("ticker") or {}).get("value")
+        if not ticker:
+            continue
+        names = [(b.get("itemLabel") or {}).get("value") or ""]
+        names += ((b.get("alts") or {}).get("value") or "").split("|")
+        out[ticker.upper()] = [n.strip() for n in names if n.strip()]
+    return out
+
+
+def refresh_wikidata(sb, now):
+    r = requests.get("https://query.wikidata.org/sparql",
+                     params={"query": WIKIDATA_SPARQL, "format": "json"},
+                     headers=WIKIDATA_UA, timeout=60)
+    r.raise_for_status()
+    by_ticker = parse_wikidata_aliases(r.json())
+    if not by_ticker:
+        raise RuntimeError("Wikidata returned no NSE-listed companies — query or QID broke")
+    patched = 0
+    for c in sb("GET", "companies?select=id,name,nse_symbol,aliases&nse_symbol=not.is.null"):
+        names = by_ticker.get(c["nse_symbol"].upper())
+        if not names:
+            continue
+        have = {a.casefold() for a in c.get("aliases") or []}
+        have |= {c["name"].casefold(), c["nse_symbol"].casefold()}
+        new = [n.casefold() for n in dict.fromkeys(names)
+               if n.casefold() not in have and 3 < len(n) < 80]
+        if new:
+            sb("PATCH", f"companies?id=eq.{c['id']}",
+               json={"aliases": sorted(set(c.get("aliases") or []) | set(new))})
+            patched += 1
+    return patched
+
+
 # ---------- sentiment composites (P2, worldmonitor study) ----------
 # Editorial scales, not empirical. methodology_version is bumped whenever a
 # component, scale, or weighting changes so clients and history can tell
@@ -1322,6 +1375,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("mf", refresh_mf), ("mf_new", refresh_mf_new),
           ("analysis_new", refresh_analysis_new),
           ("worldmacro", refresh_worldmacro), ("hazards", refresh_hazards),
+          ("wikidata", refresh_wikidata),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),
