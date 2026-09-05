@@ -268,7 +268,7 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "global", "mf", "mf_new",
-                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates", "calendar", "participant_oi", "shipping",
+                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates", "calendar", "participant_oi", "shipping", "monsoon",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
@@ -1189,3 +1189,48 @@ def test_refresh_shipping_publishes_partial_or_raises(monkeypatch):
     monkeypatch.setattr(market.requests, "get", lambda url, **k: Empty(url))
     with pytest.raises(RuntimeError):
         market.refresh_shipping(None, NOW)
+
+
+IMD_HTML = r"""
+"areas": [
+    {"title": "REGION : NORTH WEST INDIA", "id": "0", "color": "#C0C0C0", "info": "-1%",
+     "balloonText": "<h6>REGION : NORTH WEST INDIA<\/h6> <p><em>Departure : -1%<\/br>Actual : 500 mm<\/br>Normal : 505 mm<\/em><\/p>"},
+    {"title": "REGION : SOUTH PENINSULA", "id": "0", "color": "#C0C0C0", "info": "No Data",
+     "balloonText": "<h6>x<\/h6> <p><em>Departure : No Data<\/em><\/p>"},
+    {"title": "GUJARAT REGION      ", "id": "12", "color": "#FFFF01", "info": "-95%",
+     "balloonText": "<h6>GUJARAT REGION<\/h6> <p><em>Departure : -95%<\/br>Actual : 10 mm<\/br>Normal : 200 mm<\/em><\/p>"},
+    {"title": "KERALA", "id": "30", "color": "#0000FF", "info": "+40%"},
+    {"title": "ASSAM & MEGHALAYA", "id": "3", "color": "#FFFF01", "info": "-20%",
+     "balloonText": "<h6>ASSAM & MEGHALAYA<\/h6> <p><em>Departure : -20%<\/br>Actual : 1 mm<\/br>Normal : 2 mm<\/em><\/p>"},
+    {"title": "COUNTRY : INDIA", "id": "0", "color": "#68DE58", "info": "-13%",
+     "balloonText": "<h6>COUNTRY : INDIA<\/h6> <p><em>Departure : -13%<\/br>Actual : 629.7 mm<\/br>Normal : 727.9 mm<\/em><\/p>"}
+]"""
+
+
+def test_parse_imd_country_regions_and_extremes():
+    p = market.parse_imd(IMD_HTML)
+    assert p["country"] == {"dep_pct": -13, "actual_mm": 629.7, "normal_mm": 727.9}
+    assert p["regions"] == [{"name": "North West India", "dep_pct": -1}]  # "No Data" region skipped
+    assert [s["name"] for s in p["worst"]] == ["Gujarat Region", "Assam & Meghalaya", "Kerala"]
+    assert p["best"][0] == {"name": "Kerala", "dep_pct": 40}  # no balloon still counts
+    assert market.parse_imd("") is None and market.parse_imd("<html>maintenance</html>") is None
+
+
+def test_refresh_monsoon_writes_blob_or_raises(monkeypatch):
+    class R:
+        text = IMD_HTML
+
+        def raise_for_status(self): pass
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or 1)
+    assert market.refresh_monsoon(None, NOW) == 1
+    pl = written[0]["payload"]
+    assert pl["country"]["dep_pct"] == -13 and pl["asof"] == "2026-08-22"
+
+    class Empty(R):
+        text = "<html></html>"
+    monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
+    with pytest.raises(RuntimeError):
+        market.refresh_monsoon(None, NOW)

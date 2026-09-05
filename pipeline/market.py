@@ -127,7 +127,8 @@ def nav_slot(now):
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
               "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30),
-              "participant_oi": (19, 0), "shipping": (7, 30)}
+              "participant_oi": (19, 0), "shipping": (7, 30),
+              "monsoon": (9, 0)}
 
 
 def due(group, now):
@@ -1554,6 +1555,56 @@ def refresh_shipping(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+# IMD monsoon: the subdivision map page carries, in a JS array, the cumulative
+# (since 1 June) rainfall departure for the country, 4 regions and 36
+# subdivisions - the number FMCG/agri/rural desks quote. Keyless, plain TLS
+# (probed 5 Sep 2026); IMD's JSON APIs need IP whitelisting, so the page it is.
+
+IMD_URL = "https://mausam.imd.gov.in/responsive/rainfallinformation_msd.php"
+# balloon is optional; [^{}] keeps the lazy match inside one map-area object
+IMD_ROW = re.compile(r'"title":\s*"([^"]+)"[^{}]*?"info":\s*"([^"]*)"(?:[^{}]*?"balloonText":\s*"([^"]*)")?', re.S)
+IMD_TOP = 5
+
+
+def _imd_mm(balloon, label):
+    m = re.search(label + r"\s*:\s*([\d.]+)\s*mm", balloon or "")
+    return float(m.group(1)) if m else None
+
+
+def parse_imd(html):
+    """-> {"country", "regions", "worst", "best"} or None when no country row."""
+    country, regions, subs = None, [], []
+    for title, info, balloon in IMD_ROW.findall(html or ""):
+        title = re.sub(r"\s+", " ", title).strip()
+        m = re.search(r"(-?\d+)%", info or "")
+        if not m:
+            continue
+        dep = int(m.group(1))
+        if title.startswith("COUNTRY :"):
+            country = {"dep_pct": dep, "actual_mm": _imd_mm(balloon, "Actual"),
+                       "normal_mm": _imd_mm(balloon, "Normal")}
+        elif title.startswith("REGION :"):
+            regions.append({"name": title.split(":", 1)[1].strip().title(), "dep_pct": dep})
+        else:
+            subs.append({"name": title.title(), "dep_pct": dep})
+    if not country:
+        return None
+    subs.sort(key=lambda s: s["dep_pct"])
+    return {"country": country, "regions": regions,
+            "worst": subs[:IMD_TOP], "best": subs[::-1][:IMD_TOP]}
+
+
+def refresh_monsoon(sb, now):
+    r = requests.get(IMD_URL, params={"msg": "C"}, headers=BROWSER_UA, timeout=TIMEOUT)
+    r.raise_for_status()
+    parsed = parse_imd(r.text)
+    if not parsed:
+        raise RuntimeError("IMD: no COUNTRY row on the subdivision page (layout changed?)")
+    return write_blobs(sb, [{"key": "monsoon",
+                             "payload": {**parsed, "asof": now.astimezone(IST).date().isoformat()},
+                             "updated_at": now.isoformat()}])
+
+
 # ---------- sentiment composites (P2, worldmonitor study) ----------
 # Editorial scales, not empirical. methodology_version is bumped whenever a
 # component, scale, or weighting changes so clients and history can tell
@@ -1788,7 +1839,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("wikidata", refresh_wikidata), ("cpi", refresh_cpi),
           ("polymarket", refresh_polymarket), ("cb_rates", refresh_cb_rates),
           ("calendar", refresh_calendar), ("participant_oi", refresh_participant_oi),
-          ("shipping", refresh_shipping),
+          ("shipping", refresh_shipping), ("monsoon", refresh_monsoon),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),
