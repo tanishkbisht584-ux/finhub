@@ -1086,15 +1086,137 @@ def parse_worldbank(payload):
     return series, meta.get("lastupdated")
 
 
-def refresh_worldmacro(sb, now):
-    r = requests.get(WB_URL, params={"source": 2, "format": "json", "mrv": 3},
+# --- worldmacro extra jobs (zero-cost sweep #3, 5 Sep 2026). Keyless monthly
+# series riding the same daily slot; each job is its own try/except so one
+# dead upstream can't take down the rest (the refresh_nse_blobs pattern).
+# Buried with evidence from the 5 Sep runner probe: BDI (handybulk publishes a
+# daily change without a dated level) and IBJA gold (ibjarates.com serves its
+# price arrays to residential IPs but strips them for GitHub runners).
+
+JODI_URL = ("https://www.jodidata.org/_resources/files/downloads/oil-data/"
+            "annual-csv/secondary/secondaryyear{year}.csv")
+IMF_GOLD_URL = ("https://api.imf.org/external/sdmx/2.1/data/"
+                "IMF.STA,IRFCL/IND.IRFCLDT1_IRFCL56V_FTO..M")
+FAO_FPI_URL = ("https://www.fao.org/media/docs/worldfoodsituationlibraries/"
+               "default-document-library/food_price_indices_data.csv")
+OZ_PER_TONNE = 32150.75
+
+
+def parse_jodi_demand(text):
+    """India TOTPRODS/TOTDEMO kb/d -> [(period, value)] sorted oldest-first.
+    Months not yet reported carry "-" and are skipped (India lags ~3-6 mo)."""
+    out = []
+    for ln in (text or "").splitlines():
+        p = ln.split(",")
+        if (len(p) >= 6 and p[0] == "IN" and p[2] == "TOTPRODS"
+                and p[3] == "TOTDEMO" and p[4] == "KBD"):
+            try:
+                out.append((p[1], float(p[5])))
+            except ValueError:
+                continue
+    return sorted(set(out))
+
+
+def parse_imf_gold(xml_text):
+    """SDMX structure-specific XML -> [(period 'YYYY-MM', tonnes)] oldest-first.
+    OBS_VALUE is fine troy oz."""
+    import xml.etree.ElementTree as ET
+    out = []
+    for el in ET.fromstring(xml_text).iter():
+        if el.tag.endswith("Obs"):
+            t, v = el.attrib.get("TIME_PERIOD"), el.attrib.get("OBS_VALUE")
+            if t and v:
+                try:
+                    out.append((t.replace("-M", "-"), round(float(v) / OZ_PER_TONNE, 1)))
+                except ValueError:
+                    continue
+    return sorted(out)
+
+
+def parse_fao_fpi(text):
+    """FAO food-price-index CSV -> [(period 'YYYY-MM', index)] oldest-first."""
+    out = []
+    for ln in (text or "").splitlines():
+        p = ln.split(",")
+        if p and re.match(r"^\d{4}-\d{2}$", p[0]) and len(p) > 1:
+            try:
+                out.append((p[0], float(p[1])))
+            except ValueError:
+                continue
+    return sorted(out)
+
+
+def _series_row(symbol, name, vals, units, now, decimals=1):
+    """Monthly [(period, value)] -> one kind=macro quotes row with a 24-month
+    sparkline; renders via the app's _MacroRow with zero Dart changes."""
+    if not vals:
+        return None
+    vals = vals[-24:]
+    (period, price), prev = vals[-1], (vals[-2][1] if len(vals) > 1 else None)
+    delta = round(price - prev, decimals) if prev is not None else None
+    p = Parsed(price, prev, None, f"{period}-01T00:00:00+00:00",
+               [v for _, v in vals])
+    return row(symbol, "macro", name, p, now, currency="", closes=True,
+               meta={"units": units, "period": period, "delta": delta})
+
+
+def _jodi_row(now):
+    vals = []
+    for year in (now.year - 1, now.year):  # two files span the 24-mo window
+        r = requests.get(JODI_URL.format(year=year), headers=BROWSER_UA, timeout=60)
+        if r.status_code == 404:  # January gap: current-year file not yet up
+            continue
+        r.raise_for_status()
+        vals += parse_jodi_demand(r.text)
+    return _series_row("MACRO:JODI_OIL_DEMAND", "India oil demand (JODI)",
+                       sorted(set(vals)), "kb/d", now, decimals=0)
+
+
+def _imf_gold_row(now):
+    r = requests.get(IMF_GOLD_URL, params={"lastNObservations": 25},
                      headers=BROWSER_UA, timeout=TIMEOUT)
     r.raise_for_status()
-    series, asof = parse_worldbank(r.json())
-    if not series:
-        raise RuntimeError("World Bank returned no India series")
-    return write_blobs(sb, [{"key": "macro_context", "payload": {"series": series, "asof": asof},
-                             "updated_at": now.isoformat()}])
+    return _series_row("MACRO:RBI_GOLD_T", "RBI gold reserves (IMF)",
+                       parse_imf_gold(r.text), "tonnes", now)
+
+
+def _fao_row(now):
+    r = requests.get(FAO_FPI_URL, headers=BROWSER_UA, timeout=TIMEOUT)
+    r.raise_for_status()
+    return _series_row("MACRO:FAO_FPI", "FAO food price index",
+                       parse_fao_fpi(r.text), "2014-16=100", now)
+
+
+def refresh_worldmacro(sb, now):
+    wrote, ok, errs = 0, 0, []
+    try:
+        r = requests.get(WB_URL, params={"source": 2, "format": "json", "mrv": 3},
+                         headers=BROWSER_UA, timeout=TIMEOUT)
+        r.raise_for_status()
+        series, asof = parse_worldbank(r.json())
+        if not series:
+            raise RuntimeError("World Bank returned no India series")
+        # write_blobs may suppress an unchanged payload — still a success
+        wrote += write_blobs(sb, [{"key": "macro_context",
+                                   "payload": {"series": series, "asof": asof},
+                                   "updated_at": now.isoformat()}])
+        ok += 1
+    except Exception as e:
+        errs.append(f"wb: {e}")
+    for label, fn in (("jodi", _jodi_row), ("rbi_gold", _imf_gold_row),
+                      ("fao", _fao_row)):
+        try:
+            r_ = fn(now)
+            if r_:
+                wrote += upsert(sb, [r_])
+                ok += 1
+        except Exception as e:
+            errs.append(f"{label}: {e}")
+    if errs:
+        print("MARKET worldmacro partial:", "; ".join(errs))
+        if not ok:
+            raise RuntimeError("worldmacro: all jobs failed: " + "; ".join(errs))
+    return wrote
 
 
 # USGS quakes over the India region, M4.5+, last 7 days. GeoJSON, keyless.
@@ -1538,6 +1660,52 @@ def shape_shipping(chokes, ports):
     return out, plist
 
 
+# Shanghai Shipping Exchange container-freight indices, keyless JSON (probed
+# from a runner 5 Sep 2026). Weekly Friday publication. BDI buried: handybulk
+# publishes a daily change without a dated level.
+SSE_FREIGHT_URL = "https://en.sse.net.cn/currentIndex"
+
+
+def parse_sse_freight(name, payload):
+    d = (payload or {}).get("data") or {}
+    lines = d.get("lineDataList") or []
+    comp = next((ln for ln in lines
+                 if (ln.get("properties") or {}).get("lineName_EN") == "Comprehensive Index"),
+                lines[0] if lines else None)
+    if not comp:
+        return None
+    try:
+        value = float(comp["currentContent"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    try:
+        prev = float(comp.get("lastContent"))
+    except (TypeError, ValueError):
+        prev = None
+    pct = round((value - prev) / prev * 100, 2) if prev else None
+    return {"name": name, "value": value, "prev": prev, "pct": pct,
+            "date": d.get("currentDate")}
+
+
+def refresh_freight():
+    """-> freight payload or None. Separate from PortWatch so either can die
+    alone."""
+    rows = []
+    for idx in ("scfi", "ccfi"):
+        try:
+            r = requests.get(SSE_FREIGHT_URL, params={"indexName": idx},
+                             headers=BROWSER_UA, timeout=TIMEOUT)
+            r.raise_for_status()
+            parsed = parse_sse_freight(idx.upper(), r.json())
+            if parsed:
+                rows.append(parsed)
+        except Exception as e:
+            print(f"MARKET freight {idx}: {e}")
+    if not rows:
+        return None
+    return {"indices": rows, "asof": max(r["date"] for r in rows if r["date"])}
+
+
 def refresh_shipping(sb, now):
     got = {}
     for label, args in (("chokepoints", ("Daily_Chokepoints_Data", CHOKEPOINTS, "date,portid,n_total,n_tanker", 200)),
@@ -1548,12 +1716,19 @@ def refresh_shipping(sb, now):
             print(f"MARKET shipping {label}: {e}")
             got[label] = []
     chokes, plist = shape_shipping(got["chokepoints"], got["ports"])
-    if not chokes and not plist:
-        raise RuntimeError("PortWatch: no chokepoint or port rows")
-    asof = max([c["date"] for c in chokes] + [p["date"] for p in plist])
-    return write_blobs(sb, [{"key": "shipping",
-                             "payload": {"chokepoints": chokes, "ports": plist, "asof": asof},
-                             "updated_at": now.isoformat()}])
+    freight = refresh_freight()
+    if not chokes and not plist and not freight:
+        raise RuntimeError("PortWatch + SSE freight: nothing answered")
+    rows = []
+    if chokes or plist:
+        asof = max([c["date"] for c in chokes] + [p["date"] for p in plist])
+        rows.append({"key": "shipping",
+                     "payload": {"chokepoints": chokes, "ports": plist, "asof": asof},
+                     "updated_at": now.isoformat()})
+    if freight:
+        rows.append({"key": "freight", "payload": freight,
+                     "updated_at": now.isoformat()})
+    return write_blobs(sb, rows)
 
 
 # IMD monsoon: the subdivision map page carries, in a JS array, the cumulative

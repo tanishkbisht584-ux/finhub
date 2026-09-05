@@ -785,6 +785,45 @@ def test_refresh_worldmacro_writes_blob_or_raises(monkeypatch):
         market.refresh_worldmacro(None, NOW)
 
 
+def test_parse_jodi_demand_skips_unreported_months():
+    text = ("IN,2026-02,TOTPRODS,TOTDEMO,KBD,5500.0000,3\n"
+            "IN,2026-03,TOTPRODS,TOTDEMO,KBD,5612.0000,3\n"
+            "IN,2026-04,TOTPRODS,TOTDEMO,KBD,-,3\n"          # not yet reported
+            "IN,2026-03,TOTPRODS,TOTDEMO,KL,900.0,3\n"       # wrong unit
+            "IN,2026-03,GASDIES,TOTDEMO,KBD,1700.0,3\n"      # wrong product
+            "US,2026-03,TOTPRODS,TOTDEMO,KBD,20000.0,3\n")   # wrong country
+    assert market.parse_jodi_demand(text) == [("2026-02", 5500.0), ("2026-03", 5612.0)]
+
+
+def test_parse_imf_gold_converts_oz_to_tonnes():
+    xml = ('<message:StructureSpecificData xmlns:message="urn:x">'
+           '<Series><Obs TIME_PERIOD="2026-M06" OBS_VALUE="28309311.059"/>'
+           '<Obs TIME_PERIOD="2026-M07" OBS_VALUE="28952326.0"/>'
+           '<Obs TIME_PERIOD="2026-M05" OBS_VALUE="bad"/></Series>'
+           '</message:StructureSpecificData>')
+    out = market.parse_imf_gold(xml)
+    assert out == [("2026-06", 880.5), ("2026-07", 900.5)]
+
+
+def test_parse_fao_fpi_takes_dated_rows_only():
+    text = ("Date,Food Price Index,Meat,Dairy\n"
+            "2026-07,130.1,127.0,118.0\n"
+            "2026-08,133.3,127.9,119.2\n"
+            "notes: provisional\n")
+    assert market.parse_fao_fpi(text) == [("2026-07", 130.1), ("2026-08", 133.3)]
+
+
+def test_series_row_shapes_a_macro_quote():
+    r = market._series_row("MACRO:FAO_FPI", "FAO food price index",
+                           [("2026-07", 130.1), ("2026-08", 133.3)],
+                           "2014-16=100", NOW)
+    assert r["symbol"] == "MACRO:FAO_FPI" and r["kind"] == "macro"
+    assert r["price"] == 133.3 and r["prev_close"] == 130.1
+    assert r["closes"] == [130.1, 133.3]
+    assert r["meta"] == {"units": "2014-16=100", "period": "2026-08", "delta": 3.2}
+    assert market._series_row("X", "x", [], "u", NOW) is None
+
+
 def test_parse_usgs_and_refresh_hazards_publishes_empty_weeks(monkeypatch):
     feat = {"type": "Feature", "properties": {"mag": 5.1, "place": "115 km NE of Joshimath, India",
             "time": 1788423396417, "url": "https://earthquake.usgs.gov/x"},
@@ -1213,6 +1252,40 @@ def test_refresh_shipping_publishes_partial_or_raises(monkeypatch):
     monkeypatch.setattr(market.requests, "get", lambda url, **k: Empty(url))
     with pytest.raises(RuntimeError):
         market.refresh_shipping(None, NOW)
+
+
+SSE_JSON = {"data": {"currentDate": "2026-09-04", "lastDate": "2026-08-28",
+                     "lineDataList": [
+                         {"properties": {"lineName_EN": "Europe (Base port)"},
+                          "currentContent": "1200.0", "lastContent": "1180.0"},
+                         {"properties": {"lineName_EN": "Comprehensive Index"},
+                          "currentContent": "3590.02", "lastContent": "3509.50"}]}}
+
+
+def test_parse_sse_freight_picks_the_comprehensive_index():
+    f = market.parse_sse_freight("SCFI", SSE_JSON)
+    assert f == {"name": "SCFI", "value": 3590.02, "prev": 3509.5, "pct": 2.29,
+                 "date": "2026-09-04"}
+    assert market.parse_sse_freight("SCFI", {"data": {}}) is None
+
+
+def test_refresh_shipping_also_writes_freight_when_sse_answers(monkeypatch):
+    class R:
+        def __init__(self, url): self.url = url
+        def raise_for_status(self): pass
+        def json(self):
+            if "currentIndex" in self.url:
+                return SSE_JSON
+            return {"features": [{"attributes": r} for r in _pw_rows("chokepoint6", 3, 50)]}
+    monkeypatch.setattr(market.requests, "get", lambda url, **k: R(url))
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or len(rows))
+    assert market.refresh_shipping(None, NOW) == 2
+    assert [r["key"] for r in written] == ["shipping", "freight"]
+    fr = written[1]["payload"]
+    assert fr["asof"] == "2026-09-04"
+    assert [i["name"] for i in fr["indices"]] == ["SCFI", "CCFI"]
 
 
 IMD_HTML = r"""
