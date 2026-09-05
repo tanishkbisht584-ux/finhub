@@ -1306,6 +1306,7 @@ def test_ops_blob_content_age_grades_frozen_upstreams():
     assert ops.blob_content_age_h("cb_rates", {"rates": {}, "asof": "2026-09-01"}, now) == 36.0
     assert ops.blob_content_age_h("calendar", {"events": [], "asof": "2026-09-01"}, now) == 36.0
     assert ops.blob_content_age_h("participant_oi", {"date": "2026-09-01", "rows": {}}, now) == 36.0
+    assert ops.blob_content_age_h("shipping", {"chokepoints": [], "asof": "2026-09-01"}, now) == 36.0
 
     healthy = {"errors": {}, "private": False, "crash_loop": False, "gh_active": False,
                "approved_age": 0.5, "ingested_age": 0.2, "top_age": 1.0, "flagged_hour": 0,

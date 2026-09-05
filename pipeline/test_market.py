@@ -268,7 +268,7 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "global", "mf", "mf_new",
-                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates", "calendar", "participant_oi",
+                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates", "calendar", "participant_oi", "shipping",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
@@ -1143,3 +1143,49 @@ def test_refresh_participant_oi_steps_back_and_sets_prev(monkeypatch):
     monkeypatch.setattr(market.requests, "get", lambda url, **k: R("x"))
     with pytest.raises(RuntimeError):
         market.refresh_participant_oi(sb, NOW)
+
+
+def _pw_rows(pid, n, total, start_day=1):
+    return [{"portid": pid, "date": f"2026-08-{start_day + i:02d}", "n_total": total, "n_tanker": 1}
+            for i in range(n)]
+
+
+def test_shape_shipping_week_vs_month_and_latest_port():
+    chokes = (_pw_rows("chokepoint6", 30, 20)            # Aug 1-30: 20 a day
+              + _pw_rows("chokepoint6", 7, 10, 31)       # Aug 31-37 (fake days): 10 a day
+              + _pw_rows("chokepoint1", 3, 5)
+              + [{"portid": "chokepoint9", "date": "2026-08-01", "n_total": 1}])
+    chokes[-2]["date"] = 1756598400000  # epoch ms parses too
+    ports = [{"portid": "port776", "date": "2026-08-27", "portcalls": 10, "import": 1.0, "export": 2.0},
+             {"portid": "port776", "date": "2026-08-28", "portcalls": 14, "import": 3.0, "export": 4.0},
+             {"portid": "port999", "date": "2026-08-28", "portcalls": 99}]
+    c, p = market.shape_shipping(chokes, ports)
+    hormuz = next(x for x in c if x["name"] == "Hormuz")
+    assert (hormuz["avg7"], hormuz["avg30"], hormuz["pct"]) == (10.0, 20.0, -50.0)
+    suez = next(x for x in c if x["name"] == "Suez")
+    assert suez["pct"] is None and suez["avg30"] is None and suez["n_total"] == 5
+    assert [x["name"] for x in c] == ["Hormuz", "Suez"]  # unknown chokepoint9 dropped
+    assert p == [{"name": "JNPT", "date": "2026-08-28", "portcalls": 14, "import": 3.0, "export": 4.0}]
+
+
+def test_refresh_shipping_publishes_partial_or_raises(monkeypatch):
+    class R:
+        def __init__(self, layer): self.layer = layer
+        def raise_for_status(self): pass
+        def json(self):
+            if "Ports" in self.layer:
+                raise RuntimeError("ports layer down")
+            return {"features": [{"attributes": r} for r in _pw_rows("chokepoint6", 3, 50)]}
+    monkeypatch.setattr(market.requests, "get", lambda url, **k: R(url))
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or 1)
+    assert market.refresh_shipping(None, NOW) == 1
+    pl = written[0]["payload"]
+    assert pl["ports"] == [] and pl["chokepoints"][0]["n_total"] == 50 and pl["asof"] == "2026-08-03"
+
+    class Empty(R):
+        def json(self): return {"features": []}
+    monkeypatch.setattr(market.requests, "get", lambda url, **k: Empty(url))
+    with pytest.raises(RuntimeError):
+        market.refresh_shipping(None, NOW)

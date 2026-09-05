@@ -127,7 +127,7 @@ def nav_slot(now):
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
               "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30),
-              "participant_oi": (19, 0)}
+              "participant_oi": (19, 0), "shipping": (7, 30)}
 
 
 def due(group, now):
@@ -1478,6 +1478,82 @@ def refresh_participant_oi(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+# IMF PortWatch (keyless ArcGIS): daily transits through the chokepoints that
+# carry India's oil and exports, plus port calls at the big Indian ports. The
+# source lags ~5 days, so the payload carries its own dates and ops budgets
+# 10 days. Latest week vs the prior 30 days is the "is Hormuz quiet" number.
+
+PORTWATCH = "https://services9.arcgis.com/weJ1QsnbMYJlCHdG/arcgis/rest/services/"
+CHOKEPOINTS = {"chokepoint6": "Hormuz", "chokepoint1": "Suez", "chokepoint4": "Bab el-Mandeb",
+               "chokepoint5": "Malacca", "chokepoint7": "Cape of Good Hope"}
+PORTS = {"port776": "JNPT", "port777": "Mundra", "port540": "Kandla",
+         "port1367": "Vizag", "port235": "Chennai"}
+
+
+def _pw_query(layer, ids, fields, n):
+    r = requests.get(PORTWATCH + layer + "/FeatureServer/0/query", headers=BROWSER_UA, timeout=TIMEOUT,
+                     params={"where": "portid IN (" + ",".join(f"'{i}'" for i in ids) + ")",
+                             "outFields": fields, "orderByFields": "date DESC",
+                             "resultRecordCount": n, "f": "json"})
+    r.raise_for_status()
+    return [f.get("attributes") or {} for f in r.json().get("features") or []]
+
+
+def _pw_date(v):
+    """ArcGIS dates arrive as 'YYYY-MM-DD' strings or epoch ms; -> ISO date or None."""
+    if isinstance(v, str):
+        return v[:10] or None
+    try:
+        return datetime.fromtimestamp(v / 1000, tz=timezone.utc).date().isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def shape_shipping(chokes, ports):
+    by = {}
+    for a in chokes:
+        if a.get("n_total") is not None:
+            by.setdefault(a.get("portid"), []).append({**a, "date": _pw_date(a.get("date"))})
+    out = []
+    for pid, name in CHOKEPOINTS.items():
+        rows = sorted(by.get(pid, []), key=lambda r: r["date"] or "", reverse=True)
+        if not rows:
+            continue
+        recent, base = rows[:7], rows[7:37]
+        avg7 = sum(r["n_total"] for r in recent) / len(recent)
+        avg30 = sum(r["n_total"] for r in base) / len(base) if base else None
+        out.append({"name": name, "date": rows[0]["date"], "n_total": rows[0]["n_total"],
+                    "n_tanker": rows[0].get("n_tanker"), "avg7": round(avg7, 1),
+                    "avg30": round(avg30, 1) if avg30 else None,
+                    "pct": round((avg7 / avg30 - 1) * 100, 1) if avg30 else None})
+    latest = {}
+    for a in ports:
+        pid, d = a.get("portid"), _pw_date(a.get("date")) or ""
+        if pid in PORTS and d > (latest.get(pid) or {}).get("date", ""):
+            latest[pid] = {"name": PORTS[pid], "date": d, "portcalls": a.get("portcalls"),
+                           "import": a.get("import"), "export": a.get("export")}
+    plist = sorted(latest.values(), key=lambda p: -(p["portcalls"] or 0))
+    return out, plist
+
+
+def refresh_shipping(sb, now):
+    got = {}
+    for label, args in (("chokepoints", ("Daily_Chokepoints_Data", CHOKEPOINTS, "date,portid,n_total,n_tanker", 200)),
+                        ("ports", ("Daily_Ports_Data", PORTS, "date,portid,portcalls,import,export", 40))):
+        try:
+            got[label] = _pw_query(*args)
+        except Exception as e:  # one dead layer: publish the other
+            print(f"MARKET shipping {label}: {e}")
+            got[label] = []
+    chokes, plist = shape_shipping(got["chokepoints"], got["ports"])
+    if not chokes and not plist:
+        raise RuntimeError("PortWatch: no chokepoint or port rows")
+    asof = max([c["date"] for c in chokes] + [p["date"] for p in plist])
+    return write_blobs(sb, [{"key": "shipping",
+                             "payload": {"chokepoints": chokes, "ports": plist, "asof": asof},
+                             "updated_at": now.isoformat()}])
+
+
 # ---------- sentiment composites (P2, worldmonitor study) ----------
 # Editorial scales, not empirical. methodology_version is bumped whenever a
 # component, scale, or weighting changes so clients and history can tell
@@ -1712,6 +1788,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("wikidata", refresh_wikidata), ("cpi", refresh_cpi),
           ("polymarket", refresh_polymarket), ("cb_rates", refresh_cb_rates),
           ("calendar", refresh_calendar), ("participant_oi", refresh_participant_oi),
+          ("shipping", refresh_shipping),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),
