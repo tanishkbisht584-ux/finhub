@@ -1465,8 +1465,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
   bool? _pendingSave;
   final _shareKey = GlobalKey();
 
-  /// Same PageView-reuse trap _MediaStrip and StoryPager document: without
-  /// this, a save toggled on the last story paints this one's bookmark.
+  /// Same PageView-reuse trap StoryPager documents: without this, a save
+  /// toggled on the last story paints this one's bookmark.
   @override
   void didUpdateWidget(StoryCard old) {
     super.didUpdateWidget(old);
@@ -1804,6 +1804,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
                   .where((s) => s.isNotEmpty)
                   .toList();
               final chips = <Widget>[
+                // The chief editor's one pick per run — finally visible.
+                if (story.isFeatured)
+                  _glanceChip("★ Editor's top story", dot: amber),
                 if ((story.winnersLosers ?? '').isNotEmpty)
                   _glanceChip(story.winnersLosers!),
                 if (story.claimStatus != null)

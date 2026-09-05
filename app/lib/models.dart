@@ -145,7 +145,7 @@ List<({String text, bool isTerm})> glossarySegments(String text,
 const storyCols = 'id,hook,headline,summary,impact_direction,impact_strength,'
     'impact_horizon,impact_score,severity_level,confidence,source_name,'
     'source_url,category,sectors,image_url,video_url,published_at,cluster_id,'
-    'why_it_matters,winners_losers,whats_next,claim_status';
+    'why_it_matters,winners_losers,whats_next,claim_status,is_featured';
 
 class Story {
   final int id;
@@ -193,6 +193,10 @@ class Story {
   final String? whatsNext;
   final String? claimStatus; // confirmed | reported | rumour
 
+  /// The chief editor's one top pick per run (admin can also set it).
+  /// Absent key (old cache rows) = false.
+  final bool isFeatured;
+
   Story.fromJson(Map<String, dynamic> j)
       : id = j['id'],
         hook = j['hook'],
@@ -231,7 +235,8 @@ class Story {
         whyItMatters = j['why_it_matters'],
         winnersLosers = j['winners_losers'],
         whatsNext = j['whats_next'],
-        claimStatus = j['claim_status'];
+        claimStatus = j['claim_status'],
+        isFeatured = j['is_featured'] == true;
 }
 
 class QaSource {

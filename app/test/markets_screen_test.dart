@@ -7,12 +7,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Tick _t(String sym, String kind, String name, double price, double? pct,
-        {String cur = 'INR', List<double> closes = const [], Map? meta,
+        {String cur = 'INR',
+        List<double> closes = const [],
+        Map? meta,
         double? prev}) =>
     Tick.fromJson({
-      'symbol': sym, 'kind': kind, 'name': name, 'price': price,
-      'prev_close': prev, 'change_pct': pct, 'currency': cur, 'closes': closes,
-      'meta': meta, 'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'symbol': sym,
+      'kind': kind,
+      'name': name,
+      'price': price,
+      'prev_close': prev,
+      'change_pct': pct,
+      'currency': cur,
+      'closes': closes,
+      'meta': meta,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
     });
 
 final _data = MarketsData(ticks: [
@@ -26,103 +35,283 @@ final _data = MarketsData(ticks: [
 
 final _blobs = <String, dynamic>{
   'results_calendar': [
-    {'symbol': 'TCS', 'company': 'TCS Ltd', 'date': '2026-08-28', 'purpose': 'Financial Results'},
+    {
+      'symbol': 'TCS',
+      'company': 'TCS Ltd',
+      'date': '2026-08-28',
+      'purpose': 'Financial Results'
+    },
   ],
   'bulk_deals': {
     'as_on': '21-Aug-2026',
     'deals': [
-      {'type': 'block', 'symbol': 'AMAGI', 'name': 'Amagi', 'side': 'BUY', 'qty': 142857,
-       'price': 560.0, 'value': 80000000, 'client': 'NOTRE DAME', 'date': '21-Aug-2026'},
+      {
+        'type': 'block',
+        'symbol': 'AMAGI',
+        'name': 'Amagi',
+        'side': 'BUY',
+        'qty': 142857,
+        'price': 560.0,
+        'value': 80000000,
+        'client': 'NOTRE DAME',
+        'date': '21-Aug-2026'
+      },
     ],
   },
   'insider_trades': [
-    {'symbol': 'TCS', 'person': 'A Person', 'side': 'Buy', 'qty': '100', 'category': 'Promoter',
-     'mode': 'Market', 'date': '20-Aug-2026'},
+    {
+      'symbol': 'TCS',
+      'person': 'A Person',
+      'side': 'Buy',
+      'qty': '100',
+      'category': 'Promoter',
+      'mode': 'Market',
+      'date': '20-Aug-2026'
+    },
   ],
   'flows': {
     'fii': {'buy': 12560.91, 'sell': 13103.62, 'net': -542.71},
     'dii': {'buy': 15258.71, 'sell': 13134.57, 'net': 2124.14},
     'date': '21-Aug-2026',
-    'pcr': 1.08, 'ce_oi': 2708660, 'pe_oi': 2918695, 'expiry': '25-Aug-2026',
-    'underlying': 24252, 'max_oi_strike': 24200,
-    'breadth': {'NIFTY 50': {'adv': 25, 'dec': 24}, 'NIFTY 500': {'adv': 217, 'dec': 276}},
+    'pcr': 1.08,
+    'ce_oi': 2708660,
+    'pe_oi': 2918695,
+    'expiry': '25-Aug-2026',
+    'underlying': 24252,
+    'max_oi_strike': 24200,
+    'breadth': {
+      'NIFTY 50': {'adv': 25, 'dec': 24},
+      'NIFTY 500': {'adv': 217, 'dec': 276}
+    },
   },
   'fno': {
-    'oi_gainers': [{'symbol': 'RELIANCE', 'ltp': 3010.5, 'pct': 1.2, 'oi_pct': 38.2}],
-    'oi_losers': [{'symbol': 'INFY', 'ltp': 1890.0, 'pct': -0.8, 'oi_pct': -12.0}],
-    'gainers': [{'symbol': 'ADANIENT', 'ltp': 3300.0, 'pct': 4.5}],
-    'losers': [{'symbol': 'WIPRO', 'ltp': 240.0, 'pct': -3.2}],
-    'hi52': 34, 'lo52': 12,
+    'oi_gainers': [
+      {'symbol': 'RELIANCE', 'ltp': 3010.5, 'pct': 1.2, 'oi_pct': 38.2}
+    ],
+    'oi_losers': [
+      {'symbol': 'INFY', 'ltp': 1890.0, 'pct': -0.8, 'oi_pct': -12.0}
+    ],
+    'gainers': [
+      {'symbol': 'ADANIENT', 'ltp': 3300.0, 'pct': 4.5}
+    ],
+    'losers': [
+      {'symbol': 'WIPRO', 'ltp': 240.0, 'pct': -3.2}
+    ],
+    'hi52': 34,
+    'lo52': 12,
   },
   'bonds': {
     'yields': [
-      {'tenor': '10Y', 'yield': 6.82, 'prev': 6.85, 'chg_bp': -3.0, 'date': '2026-08-28'},
-      {'tenor': '3Y', 'name': '6.20% GS 2029', 'yield': 6.38, 'prev': null, 'chg_bp': null,
-       'date': '2026-09-03'},
+      {
+        'tenor': '10Y',
+        'yield': 6.82,
+        'prev': 6.85,
+        'chg_bp': -3.0,
+        'date': '2026-08-28'
+      },
+      {
+        'tenor': '3Y',
+        'name': '6.20% GS 2029',
+        'yield': 6.38,
+        'prev': null,
+        'chg_bp': null,
+        'date': '2026-09-03'
+      },
     ],
   },
-  'rbi_rates': {'repo': 5.25, 'sdf': 5.0, 'crr': 3.0, 'tbill_91d': 5.2599, 'asof': '2026-09-03'},
+  'rbi_rates': {
+    'repo': 5.25,
+    'sdf': 5.0,
+    'crr': 3.0,
+    'tbill_91d': 5.2599,
+    'asof': '2026-09-03'
+  },
   'macro_context': {
     'asof': '2026-07-13',
     'series': {
-      'NY.GDP.MKTP.KD.ZG': {'name': 'GDP growth', 'units': '%', 'value': 7.57, 'year': '2025',
-        'prev': 7.1, 'prev_year': '2024'},
-      'BN.CAB.XOKA.GD.ZS': {'name': 'Current account', 'units': '% of GDP', 'value': -0.42,
-        'year': '2025', 'prev': -0.85, 'prev_year': '2024'},
+      'NY.GDP.MKTP.KD.ZG': {
+        'name': 'GDP growth',
+        'units': '%',
+        'value': 7.57,
+        'year': '2025',
+        'prev': 7.1,
+        'prev_year': '2024'
+      },
+      'BN.CAB.XOKA.GD.ZS': {
+        'name': 'Current account',
+        'units': '% of GDP',
+        'value': -0.42,
+        'year': '2025',
+        'prev': -0.85,
+        'prev_year': '2024'
+      },
     },
   },
-  'hazards': {'quakes': [
-    {'mag': 5.1, 'place': '115 km NE of Joshimath, India', 'time': '2026-09-03T08:16:36+00:00',
-     'url': 'https://earthquake.usgs.gov/x', 'lat': 31.2, 'lon': 79.9},
-  ]},
+  'hazards': {
+    'quakes': [
+      {
+        'mag': 5.1,
+        'place': '115 km NE of Joshimath, India',
+        'time': '2026-09-03T08:16:36+00:00',
+        'url': 'https://earthquake.usgs.gov/x',
+        'lat': 31.2,
+        'lon': 79.9
+      },
+    ]
+  },
   'ipos': {
     'current': [
-      {'symbol': 'ABCIPO', 'company': 'ABC Ltd', 'open': '01-Sep-2026', 'close': '03-Sep-2026',
-       'band': '95-100', 'size': '1,200.00', 'series': 'EQ', 'status': 'Open'},
+      {
+        'symbol': 'ABCIPO',
+        'company': 'ABC Ltd',
+        'open': '01-Sep-2026',
+        'close': '03-Sep-2026',
+        'band': '95-100',
+        'size': '1,200.00',
+        'series': 'EQ',
+        'status': 'Open'
+      },
     ],
     'upcoming': [],
   },
-  'market_summary': {'text': 'NIFTY +0.1%, SENSEX -0.0% · FII -2,346 cr / DII +4,977 cr · Mood: neutral (48)'},
-  'fear_greed': {'score': 48, 'label': 'Neutral', 'methodology_version': 1,
-    'components': {'fii': 11, 'vix': 94, 'breadth': 60, 'momentum': 25}},
-  'risk_index': {'score': 44, 'label': 'Elevated', 'methodology_version': 1,
-    'components': {'inr': 50, 'vix': 6, 'news': 33, 'breadth': 40, 'fii_outflow': 89}},
+  'market_summary': {
+    'text':
+        'NIFTY +0.1%, SENSEX -0.0% · FII -2,346 cr / DII +4,977 cr · Mood: neutral (48)'
+  },
+  'fear_greed': {
+    'score': 48,
+    'label': 'Neutral',
+    'methodology_version': 1,
+    'components': {'fii': 11, 'vix': 94, 'breadth': 60, 'momentum': 25}
+  },
+  'risk_index': {
+    'score': 44,
+    'label': 'Elevated',
+    'methodology_version': 1,
+    'components': {
+      'inr': 50,
+      'vix': 6,
+      'news': 33,
+      'breadth': 40,
+      'fii_outflow': 89
+    }
+  },
   'move_context': {
-    'explained': [{'symbol': 'ANANTRAJ', 'chg': 7.67, 'story_id': 97588,
-      'title': 'NSE Questions Anant Raj Over Sudden Surge in Trading Volume'}],
-    'unexplained': [{'symbol': 'IFCI', 'chg': -3.1}],
+    'explained': [
+      {
+        'symbol': 'ANANTRAJ',
+        'chg': 7.67,
+        'story_id': 97588,
+        'title': 'NSE Questions Anant Raj Over Sudden Surge in Trading Volume'
+      }
+    ],
+    'unexplained': [
+      {'symbol': 'IFCI', 'chg': -3.1}
+    ],
   },
   'predictions': {
     'markets': [
-      {'q': 'Will the Fed cut 25 bps in September?', 'slug': 'fed-sep',
-       'label': 'Yes', 'pct': 1, 'end': '2026-09-16'},
+      {
+        'q': 'Will the Fed cut 25 bps in September?',
+        'slug': 'fed-sep',
+        'label': 'Yes',
+        'pct': 1,
+        'end': '2026-09-16'
+      },
     ],
   },
   // Context layer (0.33.0)
-  'calendar': {'asof': '2026-09-05', 'events': [
-    {'date': '2026-09-11', 'name': 'US CPI', 'region': 'US', 'time': '08:30 ET'},
-    {'date': '2026-10-07', 'name': 'RBI MPC decision', 'region': 'IN', 'time': '10:00 IST'},
-  ]},
-  'participant_oi': {'date': '2026-09-04', 'rows': {
-    'FII': {'fut_idx_long': 33502, 'fut_idx_short': 268604, 'net_fut_idx': -235102,
-      'total_long': 5470310, 'total_short': 4814011, 'prev_net_fut_idx': -200000},
-    'DII': {'net_fut_idx': 11369, 'total_long': 1, 'total_short': 2, 'prev_net_fut_idx': null},
-  }},
-  'shipping': {'asof': '2026-08-30',
-    'chokepoints': [{'name': 'Hormuz', 'date': '2026-08-30', 'n_total': 6, 'n_tanker': 2,
-      'avg7': 4.3, 'avg30': 4.9, 'pct': -12.5}],
-    'ports': [{'name': 'JNPT', 'date': '2026-08-28', 'portcalls': 18, 'import': 74605, 'export': 141222}]},
-  'monsoon': {'asof': '2026-09-05', 'country': {'dep_pct': -13, 'actual_mm': 629.7, 'normal_mm': 727.9},
-    'regions': [{'name': 'South Peninsula', 'dep_pct': -26}],
-    'worst': [{'name': 'Rayalaseema', 'dep_pct': -46}], 'best': []},
-  'cb_rates': {'asof': '2026-09-04', 'rates': {
-    'US': {'name': 'Fed funds', 'rate': 3.625, 'asof': '2026-09-01'},
-    'XM': {'name': 'ECB deposit', 'rate': 2.25, 'asof': '2026-09-01'},
-  }},
+  'calendar': {
+    'asof': '2026-09-05',
+    'events': [
+      {
+        'date': '2026-09-11',
+        'name': 'US CPI',
+        'region': 'US',
+        'time': '08:30 ET'
+      },
+      {
+        'date': '2026-10-07',
+        'name': 'RBI MPC decision',
+        'region': 'IN',
+        'time': '10:00 IST'
+      },
+    ]
+  },
+  'participant_oi': {
+    'date': '2026-09-04',
+    'rows': {
+      'FII': {
+        'fut_idx_long': 33502,
+        'fut_idx_short': 268604,
+        'net_fut_idx': -235102,
+        'total_long': 5470310,
+        'total_short': 4814011,
+        'prev_net_fut_idx': -200000
+      },
+      'DII': {
+        'net_fut_idx': 11369,
+        'total_long': 1,
+        'total_short': 2,
+        'prev_net_fut_idx': null
+      },
+    }
+  },
+  'shipping': {
+    'asof': '2026-08-30',
+    'chokepoints': [
+      {
+        'name': 'Hormuz',
+        'date': '2026-08-30',
+        'n_total': 6,
+        'n_tanker': 2,
+        'avg7': 4.3,
+        'avg30': 4.9,
+        'pct': -12.5
+      }
+    ],
+    'ports': [
+      {
+        'name': 'JNPT',
+        'date': '2026-08-28',
+        'portcalls': 18,
+        'import': 74605,
+        'export': 141222
+      }
+    ]
+  },
+  'monsoon': {
+    'asof': '2026-09-05',
+    'country': {'dep_pct': -13, 'actual_mm': 629.7, 'normal_mm': 727.9},
+    'regions': [
+      {'name': 'South Peninsula', 'dep_pct': -26}
+    ],
+    'worst': [
+      {'name': 'Rayalaseema', 'dep_pct': -46}
+    ],
+    'best': []
+  },
+  'cb_rates': {
+    'asof': '2026-09-04',
+    'rates': {
+      'US': {'name': 'Fed funds', 'rate': 3.625, 'asof': '2026-09-01'},
+      'XM': {'name': 'ECB deposit', 'rate': 2.25, 'asof': '2026-09-01'},
+    }
+  },
   'nse_indices': [
-    {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46,
-     'last': 30532, 'pe': '28', 'advances': '3', 'declines': '7',
-     'pct_30d': 1.8, 'pct_1y': -4.2, 'year_high': 37200, 'year_low': 28100},
+    {
+      'index': 'NIFTY IT',
+      'group': 'SECTORAL INDICES',
+      'pct': -0.46,
+      'last': 30532,
+      'pe': '28',
+      'advances': '3',
+      'declines': '7',
+      'pct_30d': 1.8,
+      'pct_1y': -4.2,
+      'year_high': 37200,
+      'year_low': 28100
+    },
     {'index': 'NIFTY 100', 'group': 'BROAD MARKET INDICES', 'pct': 0.02},
     for (var i = 1; i <= 7; i++)
       {'index': 'NIFTY THEME $i', 'group': 'THEMATIC INDICES', 'pct': 0.5},
@@ -132,16 +321,21 @@ final _blobs = <String, dynamic>{
 final _phase3 = MarketsData(
   ticks: [
     ..._data.ticks,
-    _t('^GSPC', 'index', 'S&P 500', 7716.03, -0.41, cur: '',
-        closes: [7700, 7716], meta: {'global': true}),
-    _t('ADR:INFY', 'index', 'Infosys ADR (NYSE)', 11.75, -2.77, cur: 'USD',
-        meta: {'global': true, 'adr': true}),
-    _t('MF:122639', 'mf', 'Parag Parikh Flexi Cap Fund', 90.8656, 0.14,
-        meta: {'scheme_code': 122639, 'ret_1y': -1.2, 'category': 'Equity Scheme - Flexi Cap Fund'}),
+    _t('^GSPC', 'index', 'S&P 500', 7716.03, -0.41,
+        cur: '', closes: [7700, 7716], meta: {'global': true}),
+    _t('ADR:INFY', 'index', 'Infosys ADR (NYSE)', 11.75, -2.77,
+        cur: 'USD', meta: {'global': true, 'adr': true}),
+    _t('MF:122639', 'mf', 'Parag Parikh Flexi Cap Fund', 90.8656, 0.14, meta: {
+      'scheme_code': 122639,
+      'ret_1y': -1.2,
+      'category': 'Equity Scheme - Flexi Cap Fund'
+    }),
     _t('MF:120503', 'mf', 'Axis ELSS Tax Saver Fund', 112.22, -0.02,
         meta: {'scheme_code': 120503, 'ret_1y': 8.0}),
-    _t('MACRO:FEDFUNDS', 'macro', 'US Fed funds rate', 4.33, null, cur: '',
-        prev: 4.58, closes: [4.58, 4.33],
+    _t('MACRO:FEDFUNDS', 'macro', 'US Fed funds rate', 4.33, null,
+        cur: '',
+        prev: 4.58,
+        closes: [4.58, 4.33],
         meta: {'units': '%', 'delta': -0.25, 'period': '2026-08-01'}),
   ],
   watchlist: const [],
@@ -154,7 +348,8 @@ Widget _app(MarketsData d, {void Function(int, bool)? onFollow}) => MaterialApp(
     home: Scaffold(body: MarketsBody(d, onFollowMf: onFollow, onAddMf: () {})));
 
 Future<void> _toEnd(WidgetTester tester) async {
-  await tester.drag(find.byKey(const Key('marketsScroll')), const Offset(0, -6000));
+  await tester.drag(
+      find.byKey(const Key('marketsScroll')), const Offset(0, -6000));
   await tester.pump();
 }
 
@@ -164,14 +359,30 @@ void main() {
       (tester) async {
     await tester.pumpWidget(_app(_data));
     // Each heading appears twice: ribbon chip + section header.
-    for (final h in ['SESSIONS', 'INDICES', 'WATCHLIST', 'FX', 'CRYPTO', 'COMMODITIES']) {
+    for (final h in [
+      'SESSIONS',
+      'INDICES',
+      'WATCHLIST',
+      'FX',
+      'CRYPTO',
+      'COMMODITIES'
+    ]) {
       expect(find.text(h), findsNWidgets(2), reason: h);
     }
     expect(find.text('GLOBAL'), findsNothing); // no meta.global ticks here
     expect(find.text('ODDS'), findsNothing);
     expect(find.text('MACRO'), findsNothing); // empty section = no chip either
-    for (final h in ['TODAY', 'MOOD', 'MOVES', 'QUAKES', 'BONDS', 'CALENDAR', 'POSITIONING',
-        'SHIPPING', 'MONSOON']) {
+    for (final h in [
+      'TODAY',
+      'MOOD',
+      'MOVES',
+      'QUAKES',
+      'BONDS',
+      'CALENDAR',
+      'POSITIONING',
+      'SHIPPING',
+      'MONSOON'
+    ]) {
       expect(find.text(h), findsNothing, reason: '$h needs its blob');
     }
     expect(find.text('NIFTY 50'), findsOneWidget);
@@ -181,6 +392,7 @@ void main() {
     expect(find.text('\$4,624.10'), findsOneWidget);
     expect(find.text('intl spot × USD/INR, ex-duty'), findsOneWidget);
     expect(find.textContaining('Nothing followed yet'), findsOneWidget);
+    expect(find.text('SEARCH'), findsOneWidget); // stock search door
     await _toEnd(tester); // the footer sits below the test viewport
     expect(find.textContaining('as of'), findsOneWidget);
     expect(find.textContaining('stale'), findsNothing);
@@ -190,7 +402,8 @@ void main() {
       (tester) async {
     ticks.value = {'TCS': _t('TCS', 'equity', 'TCS', 2302, 0.17)};
     final d = MarketsData(ticks: _data.ticks, watchlist: [
-      Company.fromJson({'id': 1, 'name': 'Tata Consultancy', 'nse_symbol': 'TCS'}),
+      Company.fromJson(
+          {'id': 1, 'name': 'Tata Consultancy', 'nse_symbol': 'TCS'}),
       Company.fromJson({'id': 2, 'name': 'Infosys', 'nse_symbol': 'INFY'}),
     ]);
     await tester.pumpWidget(_app(d));
@@ -201,10 +414,12 @@ void main() {
     ticks.value = {};
   });
 
-  testWidgets('phase 3 sections: MF (followed first, star toggles), economy, '
+  testWidgets(
+      'phase 3 sections: MF (followed first, star toggles), economy, '
       'NSE lists, sector tiles', (tester) async {
     final toggles = <(int, bool)>[];
-    await tester.pumpWidget(_app(_phase3, onFollow: (c, f) => toggles.add((c, f))));
+    await tester
+        .pumpWidget(_app(_phase3, onFollow: (c, f) => toggles.add((c, f))));
     // Sectors open the tab: heatmap first, watchlist right below. (Two
     // matches per heading: ribbon chip first in the tree, header second.)
     expect(find.text('SECTORS'), findsNWidgets(2));
@@ -214,8 +429,10 @@ void main() {
       expect(find.text(h), findsNWidgets(2), reason: h);
     }
     expect(find.textContaining('Mood: neutral (48)'), findsOneWidget);
-    expect(tester.getTopLeft(find.text('FLOWS').last).dy <
-        tester.getTopLeft(find.text('TODAY').last).dy, isTrue);
+    expect(
+        tester.getTopLeft(find.text('FLOWS').last).dy <
+            tester.getTopLeft(find.text('TODAY').last).dy,
+        isTrue);
     expect(find.text('Fear & Greed'), findsOneWidget);
     expect(find.text('Neutral'), findsOneWidget);
     expect(find.text('India VIX'), findsNWidgets(2)); // F&G and risk components
@@ -224,15 +441,16 @@ void main() {
     expect(find.text('▲7.67%'), findsOneWidget);
     expect(find.text('No news we carry'), findsOneWidget);
     expect(find.text('IT'), findsOneWidget); // NIFTY prefix dropped
-    expect(find.text('100'), findsNWidgets(2)); // broad market tile + insider qty cell
+    expect(find.text('100'),
+        findsNWidgets(2)); // broad market tile + insider qty cell
     expect(
         tester.getTopLeft(find.text('SECTORS').last).dy <
             tester.getTopLeft(find.text('WATCHLIST').last).dy,
         isTrue);
     // Everything lays out eagerly now, so the rest is visible to finders
     // without scrolling; only taps need the widget on screen.
-    expect(find.text('−₹543 Cr'), findsOneWidget);       // FII net, red side
-    expect(find.text('+₹2,124 Cr'), findsOneWidget);     // DII net
+    expect(find.text('−₹543 Cr'), findsOneWidget); // FII net, red side
+    expect(find.text('+₹2,124 Cr'), findsOneWidget); // DII net
     expect(find.text('PCR 1.08'), findsOneWidget);
     expect(find.text('25↑ 24↓'), findsOneWidget);
     // Followed scheme (Axis) sorts above the default (Parag) despite the alphabet.
@@ -332,7 +550,8 @@ void main() {
     expect(find.text('QUAKES'), findsNWidgets(2));
     expect(find.text('M5.1'), findsOneWidget);
     expect(find.text('09-03'), findsOneWidget);
-    expect(find.textContaining('ABC Ltd · 01-Sep-2026–03-Sep-2026 · Open'), findsOneWidget);
+    expect(find.textContaining('ABC Ltd · 01-Sep-2026–03-Sep-2026 · Open'),
+        findsOneWidget);
   });
 
   testWidgets('ribbon search filters headings and jumps on tap',
@@ -376,8 +595,8 @@ void main() {
     expect(find.text('NIFTY IT'), findsOneWidget); // sheet title
     expect(find.text('P/E'), findsOneWidget);
     expect(find.text('3↑ 7↓'), findsOneWidget);
-    expect(find.text('▲1.80%'), findsOneWidget);          // 30d
-    expect(find.text('▼4.20%'), findsOneWidget);          // 1y
+    expect(find.text('▲1.80%'), findsOneWidget); // 30d
+    expect(find.text('▼4.20%'), findsOneWidget); // 1y
     expect(find.text('37,200 / 28,100'), findsOneWidget); // 52w
   });
 
@@ -392,7 +611,8 @@ void main() {
     expect(lines.length, 2);
     expect(lines[0], 'Board meeting 28 Aug — Financial Results');
     expect(lines[1], startsWith('Insider buy: A Person 100'));
-    expect(companyEventLines(_blobs, 'AMAGI').single, contains('Block BUY 1,42,857 @ ₹560.00'));
+    expect(companyEventLines(_blobs, 'AMAGI').single,
+        contains('Block BUY 1,42,857 @ ₹560.00'));
     expect(companyEventLines(const {}, 'TCS'), isEmpty);
   });
 
@@ -407,15 +627,26 @@ void main() {
 void mergeMarketsTests() {
   test('mergeMarkets overrides changed rows and keeps the rest', () {
     final prev = MarketsData(
-      ticks: [_t('^NSEI', 'index', 'NIFTY 50', 24252, 0.08), _t('bitcoin', 'crypto', 'Bitcoin', 7395017, -0.19)],
+      ticks: [
+        _t('^NSEI', 'index', 'NIFTY 50', 24252, 0.08),
+        _t('bitcoin', 'crypto', 'Bitcoin', 7395017, -0.19)
+      ],
       watchlist: const [],
-      blobs: const {'flows': {'pcr': 1.08}, 'fno': {'hi52': 34}},
-      blobUpdated: {'flows': DateTime.utc(2026, 9, 2, 9), 'fno': DateTime.utc(2026, 9, 2, 9)},
+      blobs: const {
+        'flows': {'pcr': 1.08},
+        'fno': {'hi52': 34}
+      },
+      blobUpdated: {
+        'flows': DateTime.utc(2026, 9, 2, 9),
+        'fno': DateTime.utc(2026, 9, 2, 9)
+      },
     );
     final merged = mergeMarkets(
       prev,
       [_t('^NSEI', 'index', 'NIFTY 50', 24300, 0.28)],
-      {'flows': {'pcr': 1.11}},
+      {
+        'flows': {'pcr': 1.11}
+      },
       {'flows': DateTime.utc(2026, 9, 2, 10)},
       const [],
       const {},
@@ -430,17 +661,20 @@ void mergeMarketsTests() {
   });
 
   test('mergeMarkets with nothing fresh keeps the previous picture', () {
-    final prev = MarketsData(
-        ticks: [_t('^NSEI', 'index', 'NIFTY 50', 24252, 0.08)],
-        watchlist: const [],
-        blobs: const {'bonds': {'yields': []}},
-        blobUpdated: const {});
-    final merged = mergeMarkets(prev, const [], const {}, const {}, const [], const {});
+    final prev = MarketsData(ticks: [
+      _t('^NSEI', 'index', 'NIFTY 50', 24252, 0.08)
+    ], watchlist: const [], blobs: const {
+      'bonds': {'yields': []}
+    }, blobUpdated: const {});
+    final merged =
+        mergeMarkets(prev, const [], const {}, const {}, const [], const {});
     expect(merged.ticks.single.price, 24252);
     expect(merged.blobs['bonds'], isNotNull);
   });
 
-  testWidgets('context layer: calendar, positioning, shipping, monsoon, CB rates', (tester) async {
+  testWidgets(
+      'context layer: calendar, positioning, shipping, monsoon, CB rates',
+      (tester) async {
     await tester.pumpWidget(_app(_phase3));
     for (final h in ['CALENDAR', 'POSITIONING', 'SHIPPING', 'MONSOON']) {
       expect(find.text(h), findsNWidgets(2), reason: h); // chip + header

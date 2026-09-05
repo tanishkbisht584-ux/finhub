@@ -50,8 +50,7 @@ void main() {
     unusualStoryIds.value = {};
   });
 
-  testWidgets('all fields render: bold line + merged chip row',
-      (tester) async {
+  testWidgets('all fields render: bold line + merged chip row', (tester) async {
     followedCompanyIds.value = {100}; // _s computes company id = 100*id + i
     await _pumpCard(
         tester,
@@ -75,9 +74,23 @@ void main() {
     expect(find.byType(Wrap), findsOneWidget);
   });
 
+  testWidgets('featured story carries the editor chip', (tester) async {
+    final s = Story.fromJson({
+      'id': 9,
+      'headline': 'Headline 9',
+      'source_name': 'ET',
+      'sectors': const [],
+      'is_featured': true,
+    });
+    expect(s.isFeatured, isTrue);
+    await _pumpCard(tester, s);
+    expect(find.text("★ Editor's top story"), findsOneWidget);
+  });
+
   testWidgets('NULL fields render nothing extra', (tester) async {
     await _pumpCard(tester, _s(2));
     expect(find.textContaining('watchlist'), findsNothing);
+    expect(find.textContaining('top story'), findsNothing);
     expect(find.text('confirmed'), findsNothing);
     expect(find.text('reported'), findsNothing);
     expect(find.text('rumour'), findsNothing);
@@ -102,8 +115,8 @@ void main() {
             claim: 'confirmed',
             symbols: ['TCS']));
     // The summary Text is clamped when glance lines are present.
-    final summary = tester.widget<Text>(
-        find.textContaining('A sentence about the story.').first);
+    final summary = tester
+        .widget<Text>(find.textContaining('A sentence about the story.').first);
     expect(summary.maxLines, isNotNull);
     // And nothing overflowed (an overflow throws during layout).
     expect(tester.takeException(), isNull);
