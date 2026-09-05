@@ -89,6 +89,16 @@ Future<void> loadEnabledCategories() async {
   }
 }
 
+/// Onboarding hands the interest picks straight to the feed filter, so
+/// "your feed learns from this" is true from the first scroll. All-or-none
+/// picks mean no narrowing — leave the default.
+Future<void> setInitialCategories(Set<String> cats) async {
+  if (cats.isEmpty || cats.length >= feedCategories.length) return;
+  enabledCategories.value = {...cats};
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setStringList(_categoriesPrefsKey, cats.toList()..sort());
+}
+
 Future<void> toggleCategory(String cat) async {
   final next = {...enabledCategories.value};
   next.contains(cat) ? next.remove(cat) : next.add(cat);
@@ -602,9 +612,17 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   bool _loadingMore = false;
   Timer? _freshTimer;
 
+  /// One-time gesture coach marks over the first feed this install sees.
+  bool _showHints = false;
+
   @override
   void initState() {
     super.initState();
+    SharedPreferences.getInstance().then((p) {
+      if (!(p.getBool('gesture_hints_v1') ?? false) && mounted) {
+        setState(() => _showHints = true);
+      }
+    });
     pendingStory.addListener(_rebuild);
     enabledCategories.addListener(_onFilterChanged);
     minImpact.addListener(_onFilterChanged);
@@ -728,8 +746,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
 
   /// Clusters already represented in the feed — a fresh sibling of one of
   /// these is a duplicate card, not news.
-  Set<String> _feedClusters() =>
-      {for (final s in _feed) if (s.clusterId != null) s.clusterId!};
+  Set<String> _feedClusters() => {
+        for (final s in _feed)
+          if (s.clusterId != null) s.clusterId!
+      };
 
   /// What the PageView actually shows: one card per cluster, then the
   /// reader's filters. _feed itself stays RAW (siblings kept) so the
@@ -801,8 +821,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       // very next swipe, seamlessly — never a jump, never behind the reader.
       int? anchorId;
       final shown = _shownStories();
-      final entries =
-          feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
+      final entries = feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
       final page = _pc.hasClients ? _pc.page?.round() : null;
       if (page != null && shown.isNotEmpty) {
         final i = page.clamp(0, entries.length - 1);
@@ -873,8 +892,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
         _seeded(list);
         _recordSeen();
         final shown = _shownStories();
-        final entries =
-            feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
+        final entries = feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
         // A short visible list can't reach onPageChanged's load trigger (one
         // card can't swipe at all), so pull older pages until the filter has
         // enough to show or the 48h window is drained. Each round either grows
@@ -993,6 +1011,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                         top: cachedAt != null ? 8 : inset + 8,
                         right: 16,
                         child: const FeedFilterButton()),
+                    if (_showHints && entries.isNotEmpty)
+                      GestureHints(onDismiss: () {
+                        setState(() => _showHints = false);
+                        SharedPreferences.getInstance()
+                            .then((p) => p.setBool('gesture_hints_v1', true));
+                      }),
                   ]),
                 ),
               ]);
@@ -1093,12 +1117,10 @@ class _RecapPage extends StatelessWidget {
             return Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('${mover.symbol} ',
-                    style: mono.copyWith(fontSize: 11.5)),
+                Text('${mover.symbol} ', style: mono.copyWith(fontSize: 11.5)),
                 Text(fmtPct(mover.pct, decimals: 1),
                     style: mono.copyWith(
-                        fontSize: 11.5,
-                        color: mover.pct >= 0 ? green : red)),
+                        fontSize: 11.5, color: mover.pct >= 0 ? green : red)),
                 Text(' — the biggest mover you read.',
                     style: mono.copyWith(fontSize: 11.5)),
               ]),
@@ -1119,31 +1141,34 @@ class LiveButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
       valueListenable: liveMode,
-      builder: (context, on, _) => GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          liveMode.value = !on;
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          height: 44,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: on
-                ? red.withValues(alpha: 0.18)
-                : surface.withValues(alpha: 0.96),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: on ? red : border, width: on ? 1.5 : 1),
+      builder: (context, on, _) => Tooltip(
+        message: 'LIVE — refresh every 15s. Tap to switch to a calmer 90s.',
+        child: GestureDetector(
+          onTap: () {
+            HapticFeedback.selectionClick();
+            liveMode.value = !on;
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: on
+                  ? red.withValues(alpha: 0.18)
+                  : surface.withValues(alpha: 0.96),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(color: on ? red : border, width: on ? 1.5 : 1),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.sensors, size: 16, color: on ? red : inkDim),
+              const SizedBox(width: 5),
+              Text('LIVE',
+                  style: mono.copyWith(
+                      fontSize: 10.5,
+                      color: on ? red : inkDim,
+                      fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
+            ]),
           ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.sensors, size: 16, color: on ? red : inkDim),
-            const SizedBox(width: 5),
-            Text('LIVE',
-                style: mono.copyWith(
-                    fontSize: 10.5,
-                    color: on ? red : inkDim,
-                    fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
-          ]),
         ),
       ),
     );
@@ -1192,6 +1217,64 @@ class FeedFilterButton extends StatelessWidget {
   }
 }
 
+/// One-time coach marks: the feed carries six invisible gestures and only
+/// "Read more" advertises itself. Full-screen scrim over the first card,
+/// dismissed by any tap, never shown again (gesture_hints_v1 pref).
+class GestureHints extends StatelessWidget {
+  const GestureHints({super.key, required this.onDismiss});
+  final VoidCallback onDismiss;
+
+  static const _hints = [
+    ('swipe left', 'the full story'),
+    ('double-tap', 'save it'),
+    ('hold the bookmark, slide', 'saved · watchlist'),
+    ('tap IMPACT or SHORT/LONG', 'filter the feed'),
+    ('LIVE', 'refreshing every 15s · tap to calm it'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onDismiss,
+        child: Container(
+          color: bg.withValues(alpha: 0.88),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 36),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('THE MOVES',
+                  style: mono.copyWith(
+                      fontSize: 12, fontWeight: FontWeight.w700, color: green)),
+              const SizedBox(height: 18),
+              for (final (gesture, effect) in _hints)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text.rich(TextSpan(children: [
+                    TextSpan(
+                        text: gesture,
+                        style: mono.copyWith(
+                            fontSize: 13,
+                            color: ink,
+                            fontWeight: FontWeight.w700)),
+                    TextSpan(
+                        text: ' — $effect',
+                        style: mono.copyWith(fontSize: 13, color: inkDim)),
+                  ])),
+                ),
+              const SizedBox(height: 14),
+              filterPill('GOT IT', true, green, onDismiss),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// The one pill treatment every filter surface wears (tint glow, mono label,
 /// 140ms ease) — the dial sheet and both ledger-line mini sheets share it.
 Widget filterPill(String label, bool on, Color tint, VoidCallback onTap,
@@ -1219,8 +1302,8 @@ Widget filterPill(String label, bool on, Color tint, VoidCallback onTap,
 
 /// Shared dressing for the clay-black filter sheets: square corners, mono
 /// header, one Wrap of pills.
-void showPillSheet(BuildContext context, String header,
-    Widget Function(BuildContext) pills) {
+void showPillSheet(
+    BuildContext context, String header, Widget Function(BuildContext) pills) {
   showModalBottomSheet(
     context: context,
     backgroundColor: bg,
@@ -1253,7 +1336,7 @@ void showFeedFilterSheet(BuildContext context) {
     builder: (_) => ValueListenableBuilder<Set<String>>(
       valueListenable: enabledCategories,
       builder: (context, enabled, _) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
           child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1276,40 +1359,31 @@ void showFeedFilterSheet(BuildContext context) {
                     filterPill(
                         c, enabled.contains(c), green, () => toggleCategory(c)),
                 ]),
-                // ponytail: the sheet isn't scrollable — dozens of mutes
-                // would overflow; wrap in SingleChildScrollView when a real
-                // user gets there.
                 ValueListenableBuilder<Set<String>>(
                   valueListenable: mutedSources,
                   builder: (context, srcs, _) =>
                       ValueListenableBuilder<Set<String>>(
                     valueListenable: mutedSymbols,
-                    builder: (context, syms, _) =>
-                        srcs.isEmpty && syms.isEmpty
-                            ? const SizedBox.shrink()
-                            : Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                    const SizedBox(height: 18),
-                                    Text('MUTED — TAP TO UNMUTE',
-                                        style: mono.copyWith(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700)),
-                                    const SizedBox(height: 10),
-                                    Wrap(
-                                        spacing: 8,
-                                        runSpacing: 8,
-                                        children: [
-                                          for (final p in srcs.toList()
-                                            ..sort())
-                                            filterPill(p.toUpperCase(), true,
-                                                red, () => toggleMuteSource(p)),
-                                          for (final s in syms.toList()
-                                            ..sort())
-                                            filterPill(s, true, red,
-                                                () => toggleMuteSymbol(s)),
-                                        ]),
-                                  ]),
+                    builder: (context, syms, _) => srcs.isEmpty && syms.isEmpty
+                        ? const SizedBox.shrink()
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                                const SizedBox(height: 18),
+                                Text('MUTED — TAP TO UNMUTE',
+                                    style: mono.copyWith(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 10),
+                                Wrap(spacing: 8, runSpacing: 8, children: [
+                                  for (final p in srcs.toList()..sort())
+                                    filterPill(p.toUpperCase(), true, red,
+                                        () => toggleMuteSource(p)),
+                                  for (final s in syms.toList()..sort())
+                                    filterPill(s, true, red,
+                                        () => toggleMuteSymbol(s)),
+                                ]),
+                              ]),
                   ),
                 ),
               ]),
@@ -1454,7 +1528,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(term.toUpperCase(),
-                  style: mono.copyWith(fontSize: 12, fontWeight: FontWeight.w700)),
+                  style:
+                      mono.copyWith(fontSize: 12, fontWeight: FontWeight.w700)),
               const SizedBox(height: 10),
               FutureBuilder<String?>(
                 future: _define(term),
@@ -1912,9 +1987,9 @@ class _StoryCardState extends ConsumerState<StoryCard>
                                               builder: (_) =>
                                                   StockScreen(company: c))),
                                       child: Container(
-                                        // Taller than the inert sector chips and
-                                        // carrying the ↗ — this one navigates,
-                                        // and nothing else distinguished them.
+                                        // Bordered + ↗ = tappable; sectors
+                                        // below render as plain text so only
+                                        // navigating chips look like buttons.
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 8, vertical: 8),
                                         decoration: BoxDecoration(
@@ -1947,7 +2022,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
                                                     ],
                                                     const SizedBox(width: 3),
                                                     const Icon(
-                                                        Icons.north_east_rounded,
+                                                        Icons
+                                                            .north_east_rounded,
                                                         size: 10,
                                                         color: inkDim),
                                                   ]);
@@ -1959,18 +2035,16 @@ class _StoryCardState extends ConsumerState<StoryCard>
                         ],
                         if (story.sectors.isNotEmpty) ...[
                           const SizedBox(height: 14),
+                          // Plain text, no border — sectors are metadata, and
+                          // a bordered chip here impersonates the company
+                          // chips above, which do navigate.
                           Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
+                            spacing: 12,
+                            runSpacing: 6,
                             children: story.sectors
-                                .map((s) => Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                          border: Border.all(color: border)),
-                                      child: Text(s,
-                                          style: mono.copyWith(fontSize: 12)),
-                                    ))
+                                .map((s) => Text(s,
+                                    style: mono.copyWith(
+                                        fontSize: 11, color: inkDim)))
                                 .toList(),
                           ),
                         ],
@@ -2137,7 +2211,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
                       style: mono.copyWith(
                           fontSize: 10, color: i == 0 ? green : inkDim)),
                   title: Row(children: [
-                    OutletMark(name: o.name, url: o.url, color: inkDim, size: 18),
+                    OutletMark(
+                        name: o.name, url: o.url, color: inkDim, size: 18),
                     const SizedBox(width: 8),
                     Flexible(
                       child: Text(o.name,
@@ -2188,7 +2263,7 @@ class _StoryCardState extends ConsumerState<StoryCard>
       ),
       const SizedBox(height: 12),
       _railButton(
-        icon: Icons.volume_off_outlined,
+        icon: Icons.block_outlined,
         tint: inkDim,
         onTap: _showMuteSheet,
       ),
@@ -2225,8 +2300,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
             toggleMuteSource(pub);
             Navigator.pop(sheet);
           }),
-        for (final c in widget.story.companies
-            .where((c) => c.nseSymbol.isNotEmpty))
+        for (final c
+            in widget.story.companies.where((c) => c.nseSymbol.isNotEmpty))
           filterPill('MUTE ${c.nseSymbol}', false, red, () {
             toggleMuteSymbol(c.nseSymbol);
             Navigator.pop(sheet);
@@ -2307,7 +2382,8 @@ class OutletMark extends StatelessWidget {
       child: icon == null
           ? monogram()
           : Image.network(icon,
-              key: const ValueKey('outlet-favicon'), // tests count hero images by type
+              key: const ValueKey(
+                  'outlet-favicon'), // tests count hero images by type
               width: size * 0.6,
               height: size * 0.6,
               cacheWidth: 64,
@@ -2382,8 +2458,8 @@ class _CardHeroState extends State<_CardHero> {
   /// Tap target around one half of the ledger line, padded toward the 44px
   /// row height — the text alone is not thumb-sized.
   Widget _ledgerTap(Widget label, VoidCallback open) {
-    final padded =
-        Padding(padding: const EdgeInsets.symmetric(vertical: 13), child: label);
+    final padded = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 13), child: label);
     if (!widget.interactive) return padded;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -2982,7 +3058,8 @@ class DeepReadPages extends StatelessWidget {
     }
     // Past the last AI page sits the glossary, when the read carries one —
     // print-dress "In plain words" box, static text from the cached payload.
-    final onGlossary = read.glossary.isNotEmpty && pageIndex >= read.pages.length;
+    final onGlossary =
+        read.glossary.isNotEmpty && pageIndex >= read.pages.length;
     final page = onGlossary
         ? null
         : read.pages[pageIndex.clamp(0, read.pages.length - 1)];
@@ -3032,12 +3109,11 @@ class DeepReadPages extends StatelessWidget {
                         for (final e in read.glossary) ...[
                           Text(e.term,
                               style: serif.copyWith(
-                                  fontSize: 16.5,
-                                  fontWeight: FontWeight.w700)),
+                                  fontSize: 16.5, fontWeight: FontWeight.w700)),
                           const SizedBox(height: 2),
                           Text(e.definition,
-                              style: serif.copyWith(
-                                  fontSize: 15.5, height: 1.5)),
+                              style:
+                                  serif.copyWith(fontSize: 15.5, height: 1.5)),
                           const SizedBox(height: 14),
                         ],
                       ],
@@ -3240,29 +3316,29 @@ class _TrendingStripState extends State<_TrendingStrip> {
     return Padding(
       padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
       child: SizedBox(
-      height: 36,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        children: [
-          Center(child: Text('TRENDING', style: monoLabel)),
-          const SizedBox(width: 10),
-          for (final s in _spikes)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Center(
-                child: InkWell(
-                  onTap: () {
-                    homeTab.value = 0;
-                    pendingStory.value = (s['story_id'] as num?)?.toInt();
-                  },
-                  child: _glanceChip('#${s['term']} · ${s['outlets']}',
-                      dot: s['confidence'] == 'high' ? green : null),
+        height: 36,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          children: [
+            Center(child: Text('TRENDING', style: monoLabel)),
+            const SizedBox(width: 10),
+            for (final s in _spikes)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Center(
+                  child: InkWell(
+                    onTap: () {
+                      homeTab.value = 0;
+                      pendingStory.value = (s['story_id'] as num?)?.toInt();
+                    },
+                    child: _glanceChip('#${s['term']} · ${s['outlets']}',
+                        dot: s['confidence'] == 'high' ? green : null),
+                  ),
                 ),
               ),
-            ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }

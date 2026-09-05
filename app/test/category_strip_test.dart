@@ -29,7 +29,7 @@ Story _s(int id, String? cat, {int? impact, String? horizon}) =>
 
 void main() {
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'gesture_hints_v1': true});
     enabledCategories.value = {...feedCategories};
     minImpact.value = 0;
     horizonFilter.value = 'all';

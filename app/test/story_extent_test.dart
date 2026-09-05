@@ -73,7 +73,7 @@ void main() {
         });
 
     Future<void> pumpFeed(WidgetTester tester, Story s) async {
-      SharedPreferences.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({'gesture_hints_v1': true});
       await tester.pumpWidget(ProviderScope(
         overrides: [
           storiesProvider.overrideWith((_) async => [s])

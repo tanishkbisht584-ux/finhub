@@ -83,9 +83,38 @@ class _SignInScreenState extends State<SignInScreen> {
                   : const Text('Continue with Google'),
             ),
             const SizedBox(height: 32),
-            Text('Not investment advice · Terms · Privacy · v$appVersion',
-                textAlign: TextAlign.center,
-                style: mono.copyWith(fontSize: 11)),
+            // Terms/Privacy become links once their URLs exist (theme.dart).
+            Wrap(
+              alignment: WrapAlignment.center,
+              children: [
+                Text('Not investment advice · ',
+                    style: mono.copyWith(fontSize: 11)),
+                GestureDetector(
+                  onTap: kTermsUrl.isEmpty
+                      ? null
+                      : () => openExternal(context, kTermsUrl),
+                  child: Text('Terms',
+                      style: mono.copyWith(
+                          fontSize: 11,
+                          decoration: kTermsUrl.isEmpty
+                              ? null
+                              : TextDecoration.underline)),
+                ),
+                Text(' · ', style: mono.copyWith(fontSize: 11)),
+                GestureDetector(
+                  onTap: kPrivacyUrl.isEmpty
+                      ? null
+                      : () => openExternal(context, kPrivacyUrl),
+                  child: Text('Privacy',
+                      style: mono.copyWith(
+                          fontSize: 11,
+                          decoration: kPrivacyUrl.isEmpty
+                              ? null
+                              : TextDecoration.underline)),
+                ),
+                Text(' · v$appVersion', style: mono.copyWith(fontSize: 11)),
+              ],
+            ),
           ],
         ),
       ),

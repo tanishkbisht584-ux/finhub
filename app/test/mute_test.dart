@@ -51,7 +51,7 @@ void main() {
 
   group('mute flow', () {
     setUp(() {
-      SharedPreferences.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({'gesture_hints_v1': true});
       enabledCategories.value = {...feedCategories};
       minImpact.value = 0;
       horizonFilter.value = 'all';
@@ -72,7 +72,7 @@ void main() {
       await tester.pump();
       expect(find.text('Hook 1'), findsOneWidget);
 
-      await tester.tap(find.byIcon(Icons.volume_off_outlined).first);
+      await tester.tap(find.byIcon(Icons.block_outlined).first);
       // Single taps sit behind the card's 300ms double-tap arena, then the
       // sheet's entrance animation needs settling.
       await tester.pump(const Duration(milliseconds: 350));

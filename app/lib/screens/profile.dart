@@ -2,6 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../theme.dart';
+import 'saved.dart';
+import 'watchlist.dart';
+
+/// Same plain Scaffold wrapper the feed's hold-ribbon uses (main.dart).
+void _pushPlain(BuildContext context, Widget body) {
+  Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+            appBar: AppBar(
+                backgroundColor: bg,
+                surfaceTintColor: bg,
+                elevation: 0,
+                leading: const BackButton(color: ink)),
+            body: body,
+          )));
+}
 
 /// Spread-merges [current] with [key]: [value], leaving every other key —
 /// notably the pipeline's `pa` per-user counters living in the same jsonb —
@@ -53,6 +68,37 @@ class ProfileScreen extends StatelessWidget {
           Text('APP', style: monoLabel),
           const SizedBox(height: 8),
           const Divider(height: 1),
+          // The labeled doors to Saved/Watchlist — the feed's hold-gestures
+          // stay as shortcuts, but these are the ones people can find.
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Saved stories', style: serif.copyWith(fontSize: 15)),
+            trailing: const Icon(Icons.chevron_right, color: inkDim, size: 20),
+            onTap: () => _pushPlain(context, const SavedScreen()),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Watchlist', style: serif.copyWith(fontSize: 15)),
+            trailing: const Icon(Icons.chevron_right, color: inkDim, size: 20),
+            onTap: () => _pushPlain(context, const WatchlistScreen()),
+          ),
+          if (kTermsUrl.isNotEmpty)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text('Terms', style: serif.copyWith(fontSize: 15)),
+              trailing:
+                  const Icon(Icons.chevron_right, color: inkDim, size: 20),
+              onTap: () => openExternal(context, kTermsUrl),
+            ),
+          if (kPrivacyUrl.isNotEmpty)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title:
+                  Text('Privacy policy', style: serif.copyWith(fontSize: 15)),
+              trailing:
+                  const Icon(Icons.chevron_right, color: inkDim, size: 20),
+              onTap: () => openExternal(context, kPrivacyUrl),
+            ),
           const SizedBox(height: 24),
           OutlinedButton(
             onPressed: () => _signOut(context),

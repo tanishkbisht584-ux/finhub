@@ -4,6 +4,11 @@ import 'package:url_launcher/url_launcher.dart';
 /// Build stamp, injected with --dart-define=APP_VERSION at build time.
 const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
 
+/// Legal pages. Empty until the Play listing's URLs exist — every render
+/// site guards on isNotEmpty so no dead link ever ships.
+const kTermsUrl = '';
+const kPrivacyUrl = '';
+
 /// launchUrl throws synchronously on a malformed stored URL and with a
 /// PlatformException when nothing handles the scheme; every tap site was bare,
 /// so a bad row made taps die silently. One guarded door for all of them.

@@ -86,8 +86,10 @@ void main() {
 
   group('FeedScreen', () {
     setUp(() {
-      SharedPreferences.setMockInitialValues(
-          {'feed_last_seen_v1': _t(10).toIso8601String()});
+      SharedPreferences.setMockInitialValues({
+        'feed_last_seen_v1': _t(10).toIso8601String(),
+        'gesture_hints_v1': true,
+      });
       enabledCategories.value = {...feedCategories};
       minImpact.value = 0;
       horizonFilter.value = 'all';
@@ -128,7 +130,7 @@ void main() {
 
     testWidgets('no stamp, no divider — and the visit stamps the newest',
         (tester) async {
-      SharedPreferences.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({'gesture_hints_v1': true});
       await pumpFeed(tester, [_s(1, _t(12)), _s(2, _t(11))]);
       await swipeUp(tester);
       expect(find.text("That's everything new"), findsNothing);

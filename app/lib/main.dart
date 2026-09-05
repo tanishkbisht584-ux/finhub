@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'tts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -72,13 +73,20 @@ Future<void> _maybeSpeak(RemoteMessage m) async {
 // listener instead, not through this flag.
 bool _fcmTokenSaved = false;
 
-/// Cold-start swipe intro: once per process, whatever screen AuthGate lands
-/// on first (sign-in when signed out, interests/feed when signed in).
+/// Cold-start swipe intro: once per install (persisted), whatever screen
+/// AuthGate lands on first (sign-in when signed out, interests/feed when
+/// signed in). Loaded from prefs in main(); process flag covers this session.
 bool _introShown = false;
 
 Widget _withIntro(Widget screen) => _introShown
     ? screen
-    : SwipeIntro(onDone: () => _introShown = true, child: screen);
+    : SwipeIntro(
+        onDone: () {
+          _introShown = true;
+          SharedPreferences.getInstance()
+              .then((p) => p.setBool('intro_seen_v1', true));
+        },
+        child: screen);
 
 /// The pipeline needs the device token to send personalized alerts.
 Future<void> _saveFcmToken() async {
@@ -105,6 +113,9 @@ Future<void> main() async {
     // Bounded to 4 s and never throws — defaults are the compiled values.
     await loadRemoteConfig();
     liveMode.value = remoteConfig.liveDefault;
+    _introShown =
+        (await SharedPreferences.getInstance()).getBool('intro_seen_v1') ??
+            false;
   } catch (_) {
     // A broken build (missing --dart-define) or hostile boot environment:
     // a message beats the native crash screen.

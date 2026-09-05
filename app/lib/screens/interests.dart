@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../theme.dart';
+import 'feed.dart' show setInitialCategories;
 
 /// Spec §8 screen 1: sign-in -> pick >=3 interests -> feed, under 60 seconds.
 /// The pipeline's category enum verbatim (ai.py CATEGORIES) — a follow row on
@@ -44,6 +45,8 @@ class _InterestsScreenState extends State<InterestsScreen> {
       // The feed must never be gated on this write landing — interests can
       // be re-derived from behavior later; a stuck onboarding cannot.
     }
+    // Local, must land even when the network write above didn't.
+    await setInitialCategories(_picked);
     widget.onDone();
   }
 

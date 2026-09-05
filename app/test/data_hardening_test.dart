@@ -28,7 +28,8 @@ void main() {
 
   test('corrupt feed cache returns null and clears itself', () async {
     for (final garbage in ['not json', '{"a":1}', '[1,2,3]']) {
-      SharedPreferences.setMockInitialValues({'feed_cache_v1': garbage});
+      SharedPreferences.setMockInitialValues(
+          {'feed_cache_v1': garbage, 'gesture_hints_v1': true});
       expect(await FeedCache.load(), isNull);
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('feed_cache_v1'), isNull,
