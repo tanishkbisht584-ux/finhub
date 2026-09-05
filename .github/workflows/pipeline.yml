@@ -46,6 +46,9 @@ jobs:
           NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
           MARKETAUX_API_KEY: ${{ secrets.MARKETAUX_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          # optional (5 Sep 2026): r/IndianStreetBets ticker-mention blob; unset = group skips
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           # Stay resident ~5.5h polling every 90s, then exit; the queued run
           # (concurrency group, cancel-in-progress: false) takes over, so
           # coverage is continuous regardless of when the cron is honoured.

@@ -1,7 +1,8 @@
 name: probe
 # One-shot NSE endpoint probe (manual only): prints the response shapes that
 # can't be verified from the dev machine (NSE Akamai-blocks it). No secrets,
-# no writes — read pipeline/probe_nse.py.
+# no writes — read pipeline/probe_nse.py. The Reddit step is the one
+# exception: it reads two optional secrets (a free Reddit script app).
 on:
   workflow_dispatch:
 
@@ -23,3 +24,9 @@ jobs:
         continue-on-error: true
       - run: python probe_global.py
         working-directory: pipeline
+        continue-on-error: true
+      - run: python probe_reddit.py
+        working-directory: pipeline
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}

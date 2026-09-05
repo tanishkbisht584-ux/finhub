@@ -36,6 +36,11 @@ PROBES = {
     "FRED_API_KEY": lambda k: requests.get(
         "https://api.stlouisfed.org/fred/series",
         params={"series_id": "FEDFUNDS", "api_key": k, "file_type": "json"}, timeout=30),
+    # needs the id alongside: a token call is the only way to prove the pair
+    "REDDIT_CLIENT_SECRET": lambda k: requests.post(
+        "https://www.reddit.com/api/v1/access_token",
+        auth=(os.environ.get("REDDIT_CLIENT_ID", ""), k), data={"grant_type": "client_credentials"},
+        headers={"User-Agent": "finswipe/0.1 (by u/finswipe)"}, timeout=30),
 }
 
 

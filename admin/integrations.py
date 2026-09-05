@@ -81,6 +81,14 @@ SECRETS = [
     dict(name="FRED_API_KEY", group="FRED", shape="list", probe="FRED_API_KEY",
          targets={"env": True, "gh": True}, readers="pipeline market.py macro series (CI) — first key only",
          console="https://fredaccount.stlouisfed.org/apikeys", note="Free, generous; one key is plenty."),
+    dict(name="REDDIT_CLIENT_ID", group="Reddit", shape="single", probe=None,
+         targets={"env": True, "gh": True}, readers="pipeline market.py reddit group (CI) + probe workflow",
+         console="https://www.reddit.com/prefs/apps",
+         note="Create a 'script' app; the id is the short string under the app name. Free, 100 req/10 min."),
+    dict(name="REDDIT_CLIENT_SECRET", group="Reddit", shape="single", probe="REDDIT_CLIENT_SECRET",
+         targets={"env": True, "gh": True}, readers="pipeline market.py reddit group (CI) + probe workflow",
+         console="https://www.reddit.com/prefs/apps",
+         note="The app's secret; the probe does a client_credentials token call with id + secret."),
 ]
 # build-time only — shown for completeness, not editable here
 BUILD_TIME = [
