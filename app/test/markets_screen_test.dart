@@ -98,6 +98,27 @@ final _blobs = <String, dynamic>{
        'label': 'Yes', 'pct': 1, 'end': '2026-09-16'},
     ],
   },
+  // Context layer (0.33.0)
+  'calendar': {'asof': '2026-09-05', 'events': [
+    {'date': '2026-09-11', 'name': 'US CPI', 'region': 'US', 'time': '08:30 ET'},
+    {'date': '2026-10-07', 'name': 'RBI MPC decision', 'region': 'IN', 'time': '10:00 IST'},
+  ]},
+  'participant_oi': {'date': '2026-09-04', 'rows': {
+    'FII': {'fut_idx_long': 33502, 'fut_idx_short': 268604, 'net_fut_idx': -235102,
+      'total_long': 5470310, 'total_short': 4814011, 'prev_net_fut_idx': -200000},
+    'DII': {'net_fut_idx': 11369, 'total_long': 1, 'total_short': 2, 'prev_net_fut_idx': null},
+  }},
+  'shipping': {'asof': '2026-08-30',
+    'chokepoints': [{'name': 'Hormuz', 'date': '2026-08-30', 'n_total': 6, 'n_tanker': 2,
+      'avg7': 4.3, 'avg30': 4.9, 'pct': -12.5}],
+    'ports': [{'name': 'JNPT', 'date': '2026-08-28', 'portcalls': 18, 'import': 74605, 'export': 141222}]},
+  'monsoon': {'asof': '2026-09-05', 'country': {'dep_pct': -13, 'actual_mm': 629.7, 'normal_mm': 727.9},
+    'regions': [{'name': 'South Peninsula', 'dep_pct': -26}],
+    'worst': [{'name': 'Rayalaseema', 'dep_pct': -46}], 'best': []},
+  'cb_rates': {'asof': '2026-09-04', 'rates': {
+    'US': {'name': 'Fed funds', 'rate': 3.625, 'asof': '2026-09-01'},
+    'XM': {'name': 'ECB deposit', 'rate': 2.25, 'asof': '2026-09-01'},
+  }},
   'nse_indices': [
     {'index': 'NIFTY IT', 'group': 'SECTORAL INDICES', 'pct': -0.46,
      'last': 30532, 'pe': '28', 'advances': '3', 'declines': '7',
@@ -143,13 +164,14 @@ void main() {
       (tester) async {
     await tester.pumpWidget(_app(_data));
     // Each heading appears twice: ribbon chip + section header.
-    for (final h in ['INDICES', 'WATCHLIST', 'FX', 'CRYPTO', 'COMMODITIES']) {
+    for (final h in ['SESSIONS', 'INDICES', 'WATCHLIST', 'FX', 'CRYPTO', 'COMMODITIES']) {
       expect(find.text(h), findsNWidgets(2), reason: h);
     }
     expect(find.text('GLOBAL'), findsNothing); // no meta.global ticks here
     expect(find.text('ODDS'), findsNothing);
     expect(find.text('MACRO'), findsNothing); // empty section = no chip either
-    for (final h in ['TODAY', 'MOOD', 'MOVES', 'QUAKES', 'BONDS']) {
+    for (final h in ['TODAY', 'MOOD', 'MOVES', 'QUAKES', 'BONDS', 'CALENDAR', 'POSITIONING',
+        'SHIPPING', 'MONSOON']) {
       expect(find.text(h), findsNothing, reason: '$h needs its blob');
     }
     expect(find.text('NIFTY 50'), findsOneWidget);
@@ -246,7 +268,7 @@ void main() {
         tester.widget<Text>(find.text(label).first).style?.fontWeight;
     await tester.pumpWidget(_app(_phase3));
     // Before any scroll the first section owns the ribbon.
-    expect(chipWeight('SECTORS'), FontWeight.w700);
+    expect(chipWeight('SESSIONS'), FontWeight.w700);
     // Scrolling to the very bottom hands the ribbon to the last section.
     await _toEnd(tester);
     await tester.pumpAndSettle();
@@ -402,5 +424,29 @@ void mergeMarketsTests() {
     final merged = mergeMarkets(prev, const [], const {}, const {}, const [], const {});
     expect(merged.ticks.single.price, 24252);
     expect(merged.blobs['bonds'], isNotNull);
+  });
+
+  testWidgets('context layer: calendar, positioning, shipping, monsoon, CB rates', (tester) async {
+    await tester.pumpWidget(_app(_phase3));
+    for (final h in ['CALENDAR', 'POSITIONING', 'SHIPPING', 'MONSOON']) {
+      expect(find.text(h), findsNWidgets(2), reason: h); // chip + header
+    }
+    expect(find.text('US CPI'), findsOneWidget);
+    expect(find.text('11 Sep'), findsOneWidget);
+    expect(find.text('net index futures'), findsNWidgets(2)); // FII + DII rows
+    expect(find.text('-2,35,102'), findsOneWidget);
+    expect(find.textContaining('Δ -35,102 d/d'), findsOneWidget);
+    expect(find.text('Hormuz'), findsOneWidget);
+    expect(find.text('−12.5% vs 30d'), findsOneWidget);
+    expect(find.text('JNPT port calls'), findsOneWidget);
+    expect(find.text('−13%'), findsOneWidget);
+    expect(find.text('Rayalaseema'), findsOneWidget);
+    expect(find.text('ECB deposit'), findsOneWidget);
+    expect(find.text('2.25%'), findsOneWidget);
+    // Sessions is always there, first, and every venue has a row.
+    expect(find.text('SESSIONS'), findsNWidgets(2));
+    for (final v in ['NSE', 'LONDON', 'NEW YORK', 'TOKYO', 'HONG KONG']) {
+      expect(find.text(v), findsOneWidget, reason: v);
+    }
   });
 }

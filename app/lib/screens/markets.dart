@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models.dart';
 import '../remote_config.dart';
 import '../section_ribbon.dart';
+import '../sessions.dart';
 import '../theme.dart';
 import '../ticks.dart';
 import 'feed.dart' show homeTab, marketsTab, filterPill, pendingStory;
@@ -411,7 +412,23 @@ class _MarketsBodyState extends State<MarketsBody> {
             ?.cast<String, dynamic>() ??
         const {};
     final quakes = _l((data.blobs['hazards'] as Map?)?['quakes']);
+    // Context layer (0.33.0): calendar, positioning, shipping, monsoon, CB rates.
+    final calendar = _l((data.blobs['calendar'] as Map?)?['events']);
+    final poiBlob =
+        (data.blobs['participant_oi'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final poi = (poiBlob['rows'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final shipping =
+        (data.blobs['shipping'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final chokes = _l(shipping['chokepoints']);
+    final ports = _l(shipping['ports']);
+    final monsoon =
+        (data.blobs['monsoon'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final cb = ((data.blobs['cb_rates'] as Map?)?['rates'] as Map?)
+            ?.cast<String, dynamic>() ??
+        const {};
     return [
+      // Always first: which bells are ringing right now (client-side clock).
+      (id: 'sessions', label: 'SESSIONS', child: const _Sessions()),
       if (idxGroups.isNotEmpty)
         (
           id: 'sectors',
@@ -513,6 +530,21 @@ class _MarketsBodyState extends State<MarketsBody> {
                 child: Text(summary, style: serif.copyWith(fontSize: 14))),
           ], stamp: data.blobUpdated['market_summary']),
         ),
+      if (calendar.isNotEmpty)
+        (
+          id: 'calendar',
+          label: 'CALENDAR',
+          child: _Section('Calendar', [  // next 45 days: RBI/MOSPI rule + FRED release dates
+            _Collapsible([
+              for (final e in calendar)
+                _LineRow(
+                    lead: _dmy(e['date']),
+                    main: '${e['name'] ?? ''}',
+                    trail: '${e['region'] ?? ''}',
+                    sub: e['time']?.toString()),
+            ]),
+          ]),
+        ),
       if (fg != null)
         (
           id: 'mood',
@@ -592,6 +624,21 @@ class _MarketsBodyState extends State<MarketsBody> {
             ]),
           ], stamp: data.blobUpdated['fno']),
         ),
+      if (poi.isNotEmpty)
+        (
+          id: 'positioning',
+          label: 'POSITIONING',
+          child: _Section('Positioning', [
+            Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                    'NSE participant-wise F&O open interest · ${_dmy(poiBlob['date'])}',
+                    style: mono.copyWith(fontSize: 10))),
+            for (final who in const ['FII', 'DII', 'Pro', 'Client'])
+              if (poi[who] is Map)
+                _poiRow(who, (poi[who] as Map).cast<String, dynamic>()),
+          ]),
+        ),
       if (data.kind('fx').isNotEmpty)
         (
           id: 'fx',
@@ -649,6 +696,32 @@ class _MarketsBodyState extends State<MarketsBody> {
               _TickRow(t, spark: t.closes.length > 1),
           ]),
         ),
+      if (chokes.isNotEmpty || ports.isNotEmpty)
+        (
+          id: 'shipping',
+          label: 'SHIPPING',
+          child: _Section('Shipping', [
+            Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('IMF PortWatch · daily transits, published ~5 days behind',
+                    style: mono.copyWith(fontSize: 10))),
+            for (final c in chokes)
+              _LineRow(
+                  lead: '${c['n_total'] ?? ''}',
+                  main: '${c['name'] ?? ''}',
+                  trail: c['pct'] == null
+                      ? ''
+                      : '${(c['pct'] as num) >= 0 ? '+' : '−'}${(c['pct'] as num).abs()}% vs 30d',
+                  trailColor: c['pct'] == null ? null : ((c['pct'] as num) >= 0 ? green : red),
+                  sub: 'tankers ${c['n_tanker'] ?? '—'} · ${_dmy(c['date'])}'),
+            for (final p in ports)
+              _LineRow(
+                  lead: '${p['portcalls'] ?? ''}',
+                  main: '${p['name'] ?? ''} port calls',
+                  trail: '',
+                  sub: 'in ${_kt(p['import'])} · out ${_kt(p['export'])} · ${_dmy(p['date'])}'),
+          ]),
+        ),
       if (mf.isNotEmpty || onAddMf != null)
         (
           id: 'mf',
@@ -664,7 +737,7 @@ class _MarketsBodyState extends State<MarketsBody> {
                   child: Text('+ Add fund',
                       style: mono.copyWith(fontSize: 12, color: green)))),
         ),
-      if (bonds.isNotEmpty || rbi.isNotEmpty)
+      if (bonds.isNotEmpty || rbi.isNotEmpty || cb.isNotEmpty)
         (
           id: 'bonds',
           label: 'BONDS',
@@ -713,6 +786,20 @@ class _MarketsBodyState extends State<MarketsBody> {
                     main: label,
                     trail: '${fmtNum((rbi[key] as num).toDouble())}%',
                     sub: rbi['asof'] == null ? null : '${rbi['asof']}'),
+            // The world's policy rates (BIS), under RBI's own box.
+            for (final (key, label) in const [
+              ('US', 'Fed funds'),
+              ('XM', 'ECB deposit'),
+              ('GB', 'BoE bank rate'),
+              ('JP', 'BoJ policy'),
+              ('CN', 'PBoC 1y LPR'),
+            ])
+              if (cb[key] is Map)
+                _LineRow(
+                    lead: key == 'XM' ? 'EU' : key,
+                    main: label,
+                    trail: '${fmtNum(((cb[key] as Map)['rate'] as num).toDouble())}%',
+                    sub: '${(cb[key] as Map)['asof'] ?? ''}'),
           ], stamp: data.blobUpdated['bonds']),
         ),
       if (ipos.isNotEmpty)
@@ -771,6 +858,24 @@ class _MarketsBodyState extends State<MarketsBody> {
                   trail: '${q['time']}'.length >= 10 ? '${q['time']}'.substring(5, 10) : '',
                   trailColor: ((q['mag'] as num?) ?? 0) >= 6 ? red : null),
           ], stamp: data.blobUpdated['hazards']),
+        ),
+      if (monsoon['country'] is Map)
+        (
+          id: 'monsoon',
+          label: 'MONSOON',
+          child: _Section('Monsoon', [
+            Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('IMD · rainfall since 1 June vs normal · ${_dmy(monsoon['asof'])}',
+                    style: mono.copyWith(fontSize: 10))),
+            _depRow('India', (monsoon['country'] as Map).cast<String, dynamic>(), country: true),
+            for (final r in _l(monsoon['regions'])) _depRow('${r['name']}', r),
+            if (_l(monsoon['worst']).isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text('MOST DEFICIENT', style: monoLabel),
+              for (final r in _l(monsoon['worst'])) _depRow('${r['name']}', r),
+            ],
+          ]),
         ),
       if (results.isNotEmpty)
         (
@@ -935,6 +1040,72 @@ List<Widget> _gaugeRows(String name, Map<String, dynamic> g, Color? color) {
       _LineRow(lead: '', main: _componentNames[e.key] ?? e.key,
           trail: '${e.value}'),
   ];
+}
+
+/// Tonnes -> "123k t" for port throughput.
+String _kt(Object? v) => '${(((v as num?)?.toDouble() ?? 0) / 1000).toStringAsFixed(0)}k t';
+
+/// One participant's net index-futures stance, day-over-day when we have it.
+Widget _poiRow(String who, Map<String, dynamic> r) {
+  final net = ((r['net_fut_idx'] ?? 0) as num).toDouble();
+  final prev = (r['prev_net_fut_idx'] as num?)?.toDouble();
+  final d = prev == null ? null : net - prev;
+  return _LineRow(
+      lead: who,
+      main: 'net index futures',
+      trail: '${net >= 0 ? '+' : ''}${fmtNum(net, decimals: 0)}',
+      trailColor: net >= 0 ? green : red,
+      sub: [
+        if (d != null) 'Δ ${d >= 0 ? '+' : ''}${fmtNum(d, decimals: 0)} d/d',
+        'long ${fmtNum(((r['total_long'] ?? 0) as num).toDouble(), decimals: 0)} · short ${fmtNum(((r['total_short'] ?? 0) as num).toDouble(), decimals: 0)}',
+      ].join(' · '));
+}
+
+/// IMD departure row: red past -19% (deficient), green past +19% (excess).
+Widget _depRow(String name, Map<String, dynamic> r, {bool country = false}) {
+  final dep = ((r['dep_pct'] ?? 0) as num).toInt();
+  return _LineRow(
+      lead: country ? 'INDIA' : '',
+      main: name,
+      trail: '${dep >= 0 ? '+' : '−'}${dep.abs()}%',
+      trailColor: dep < -19 ? red : dep > 19 ? green : null,
+      sub: country && r['actual_mm'] != null
+          ? 'actual ${r['actual_mm']} mm · normal ${r['normal_mm']} mm'
+          : null);
+}
+
+/// Which venues are trading right now; a minute timer keeps the bells honest.
+class _Sessions extends StatefulWidget {
+  const _Sessions();
+
+  @override
+  State<_Sessions> createState() => _SessionsState();
+}
+
+class _SessionsState extends State<_Sessions> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(minutes: 1), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _Section('Sessions', [
+        for (final s in sessionStates(DateTime.now().toUtc()))
+          _LineRow(
+              lead: s.name,
+              main: s.note,
+              trail: '●',
+              trailColor: s.open ? green : inkDim),
+      ]);
 }
 
 Widget _moveRow(Map<String, dynamic> m, String main) {
