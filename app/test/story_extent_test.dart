@@ -10,16 +10,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-Outlet _o(String name, String headline, String at) => Outlet.fromJson(
-    {'source_name': name, 'source_url': '', 'published_at': at, 'headline': headline});
+Outlet _o(String name, String headline, String at) => Outlet.fromJson({
+      'source_name': name,
+      'source_url': '',
+      'published_at': at,
+      'headline': headline
+    });
 
 void main() {
   group('glossarySegments', () {
     test('marks whole-word hits case-insensitively', () {
-      final segs = glossarySegments('RBI cut the Repo Rate by 25 basis points.');
+      final segs =
+          glossarySegments('RBI cut the Repo Rate by 25 basis points.');
       final terms = [for (final s in segs.where((s) => s.isTerm)) s.text];
       expect(terms, ['Repo Rate', 'basis points']);
-      expect(segs.map((s) => s.text).join(), 'RBI cut the Repo Rate by 25 basis points.');
+      expect(segs.map((s) => s.text).join(),
+          'RBI cut the Repo Rate by 25 basis points.');
     });
 
     test('no partial-word matches', () {
@@ -37,14 +43,26 @@ void main() {
     test('empty text -> no segments', () {
       expect(glossarySegments(''), isEmpty);
     });
+
+    test('trader terms match (OI, RSI-14, P/E) but not inside words', () {
+      final segs =
+          glossarySegments('Max OI at 24800; RSI-14 cooling, P/E premium.');
+      final terms = [for (final s in segs.where((s) => s.isTerm)) s.text];
+      expect(terms, ['OI', 'RSI', 'P/E']);
+      // "oi" must not fire inside "coin", nor "sma" inside "small".
+      expect(
+          glossarySegments('small coin toss').where((s) => s.isTerm), isEmpty);
+    });
   });
 
   group('storyTimeline', () {
     test('sorts oldest first, dedupes by headline not newsroom', () {
       final t = storyTimeline([
         _o('Mint', 'RBI cuts rates', '2026-08-28T10:00:00Z'),
-        _o('ET', 'RBI cuts rates', '2026-08-28T09:00:00Z'), // same wording, later dupe
-        _o('ET', 'Banks pass on the cut', '2026-08-28T12:00:00Z'), // same paper, new episode
+        _o('ET', 'RBI cuts rates',
+            '2026-08-28T09:00:00Z'), // same wording, later dupe
+        _o('ET', 'Banks pass on the cut',
+            '2026-08-28T12:00:00Z'), // same paper, new episode
       ]);
       expect([for (final e in t) e.headline],
           ['RBI cuts rates', 'Banks pass on the cut']);
@@ -53,7 +71,8 @@ void main() {
 
     test('entries without headlines (old cache) are dropped', () {
       final t = storyTimeline([
-        Outlet.fromJson({'source_name': 'ET', 'published_at': '2026-08-28T09:00:00Z'}),
+        Outlet.fromJson(
+            {'source_name': 'ET', 'published_at': '2026-08-28T09:00:00Z'}),
         _o('Mint', 'A development', '2026-08-28T10:00:00Z'),
       ]);
       expect(t.length, 1);

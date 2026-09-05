@@ -511,6 +511,13 @@ const DEFINE_TERMS = new Set([
   "qoq", "capex", "upper circuit", "lower circuit", "f&o", "derivatives",
   "margin call", "market cap", "pe ratio", "book value", "face value",
   "dividend yield", "sip", "elss", "reit", "invit", "esop", "arbitrage",
+  // Markets/Stock-page jargon (2026-09-05): the tap-to-explain layer now
+  // covers KvTable metric names and section footnotes too.
+  "pcr", "open interest", "oi", "g-sec", "t-bill", "roce", "roe", "opm",
+  "rsi", "macd", "sma", "golden cross", "death cross", "advance decline",
+  "beta", "cagr", "promoter pledge", "vix", "lpr", "breadth", "bulk deal",
+  "block deal", "circuit filter", "oversubscription", "grey market",
+  "p/e", "p/b",
 ]);
 
 async function questionHash(norm: string): Promise<string> {

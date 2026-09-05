@@ -10,16 +10,17 @@ void main() {
       expect(p.filters, isNotEmpty);
       expect(cols.contains(p.sortCol), isTrue, reason: p.name);
       for (final f in p.filters) {
-        expect(cols.contains(f.metric), isTrue, reason: '${p.name}:${f.metric}');
+        expect(cols.contains(f.metric), isTrue,
+            reason: '${p.name}:${f.metric}');
       }
     }
     final value = screenPresets.firstWhere((p) => p.name == 'VALUE');
-    expect(value.filters,
-        contains((metric: 'pe', gte: false, value: 15.0)));
+    expect(value.filters, contains((metric: 'pe', gte: false, value: 15.0)));
     expect(value.sortCol, 'pe');
     expect(value.asc, isTrue);
     // DEBT-FREE SMALLCAP needs two bounds on mcap_cr — filters must be a list
-    final small = screenPresets.firstWhere((p) => p.name == 'DEBT-FREE SMALLCAP');
+    final small =
+        screenPresets.firstWhere((p) => p.name == 'DEBT-FREE SMALLCAP');
     expect(small.filters.where((f) => f.metric == 'mcap_cr').length, 2);
   });
 
@@ -64,8 +65,20 @@ void main() {
 
   group('ScreensBody', () {
     final rows = [
-      {'symbol': 'TCS', 'name': 'TCS Ltd', 'price': 2302.0, 'pe': 14.2, 'roe': 22.0},
-      {'symbol': 'INFY', 'name': 'Infosys Ltd', 'price': 1400.0, 'pe': 18.0, 'roe': 25.0},
+      {
+        'symbol': 'TCS',
+        'name': 'TCS Ltd',
+        'price': 2302.0,
+        'pe': 14.2,
+        'roe': 22.0
+      },
+      {
+        'symbol': 'INFY',
+        'name': 'Infosys Ltd',
+        'price': 1400.0,
+        'pe': 18.0,
+        'roe': 25.0
+      },
     ];
     const filters = [(metric: 'pe', gte: false, value: 15.0)];
 
@@ -114,6 +127,17 @@ void main() {
       expect(find.text('MY VALUE'), findsOneWidget);
       await t.tap(find.text('BANKS'));
       expect(loaded, 1);
+    });
+
+    testWidgets('preset blurb renders above the body', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: ScreensBody(rows,
+                  filters: filters,
+                  sortCol: 'pe',
+                  onRemoveFilter: (_) {},
+                  blurb: presetBlurbs['COMPOUNDERS']))));
+      expect(find.textContaining('profits compounding'), findsOneWidget);
     });
   });
 }

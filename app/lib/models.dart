@@ -38,14 +38,82 @@ List<Outlet> storyTimeline(List<Outlet> group) {
 /// and the sheet shows nothing. Longest-first so "reverse repo" wins over
 /// "repo rate"'s prefix.
 const glossaryTerms = [
-  'reverse repo', 'repo rate', 'basis points', 'rights issue', 'bonus issue',
-  'stock split', 'open offer', 'anchor investor', 'green shoe', 'listing gains',
-  'promoter holding', 'stake sale', 'upper circuit', 'lower circuit',
-  'margin call', 'market cap', 'pe ratio', 'book value', 'face value',
-  'dividend yield', 'delisting', 'buyback', 'pledge', 'arbitrage', 'lock-in',
-  'crr', 'slr', 'mclr', 'qip', 'ofs', 'fpo', 'gmp', 'fii', 'dii', 'nbfc',
-  'npa', 'casa', 'ebitda', 'pat', 'yoy', 'qoq', 'capex', 'f&o', 'derivatives',
-  'sip', 'elss', 'reit', 'invit', 'esop',
+  'reverse repo',
+  'repo rate',
+  'basis points',
+  'rights issue',
+  'bonus issue',
+  'stock split',
+  'open offer',
+  'anchor investor',
+  'green shoe',
+  'listing gains',
+  'promoter holding',
+  'promoter pledge',
+  'stake sale',
+  'upper circuit',
+  'lower circuit',
+  'circuit filter',
+  'margin call',
+  'market cap',
+  'pe ratio',
+  'book value',
+  'face value',
+  'dividend yield',
+  'open interest',
+  'golden cross',
+  'death cross',
+  'advance decline',
+  'grey market',
+  'bulk deal',
+  'block deal',
+  'oversubscription',
+  'delisting',
+  'buyback',
+  'pledge',
+  'arbitrage',
+  'lock-in',
+  'breadth',
+  'crr',
+  'slr',
+  'mclr',
+  'qip',
+  'ofs',
+  'fpo',
+  'gmp',
+  'fii',
+  'dii',
+  'nbfc',
+  'npa',
+  'casa',
+  'ebitda',
+  'pat',
+  'yoy',
+  'qoq',
+  'capex',
+  'f&o',
+  'derivatives',
+  'sip',
+  'elss',
+  'reit',
+  'invit',
+  'esop',
+  'pcr',
+  'oi',
+  'g-sec',
+  't-bill',
+  'roce',
+  'roe',
+  'opm',
+  'rsi',
+  'macd',
+  'sma',
+  'beta',
+  'cagr',
+  'vix',
+  'lpr',
+  'p/e',
+  'p/b',
 ];
 
 /// Split [text] into segments, marking case-insensitive whole-word hits of
@@ -60,7 +128,9 @@ List<({String text, bool isTerm})> glossarySegments(String text,
   final out = <({String text, bool isTerm})>[];
   var at = 0;
   for (final m in pattern.allMatches(text)) {
-    if (m.start > at) out.add((text: text.substring(at, m.start), isTerm: false));
+    if (m.start > at) {
+      out.add((text: text.substring(at, m.start), isTerm: false));
+    }
     out.add((text: text.substring(m.start, m.end), isTerm: true));
     at = m.end;
   }
@@ -266,7 +336,8 @@ class Quote {
       if (c == null) continue;
       closes.add((c as num).toDouble());
       times.add(i < rawTimes.length
-          ? DateTime.fromMillisecondsSinceEpoch((rawTimes[i] as num).toInt() * 1000)
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (rawTimes[i] as num).toInt() * 1000)
           : DateTime.fromMillisecondsSinceEpoch(0));
     }
     return Quote._fields(
@@ -380,7 +451,12 @@ String fmtPct(double? p, {int decimals = 2}) => p == null
 /// rest. Decimals scale with magnitude: 0.6018 · 95.71 · 24,252 · 1,42,290.
 String fmtNum(double v, {bool indian = true, int? decimals}) {
   final a = v.abs();
-  final d = decimals ?? (a < 1 ? 4 : a >= 10000 ? 0 : 2);
+  final d = decimals ??
+      (a < 1
+          ? 4
+          : a >= 10000
+              ? 0
+              : 2);
   final fixed = a.toStringAsFixed(d);
   final dot = fixed.indexOf('.');
   final whole = dot < 0 ? fixed : fixed.substring(0, dot);
@@ -397,8 +473,8 @@ String fmtNum(double v, {bool indian = true, int? decimals}) {
     if (head.isNotEmpty) parts.insert(0, head);
     grouped = '${parts.join(',')},$tail';
   } else {
-    grouped = whole.replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
+    grouped =
+        whole.replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
   }
   return '${v < 0 ? '-' : ''}$grouped$frac';
 }
@@ -440,10 +516,29 @@ List<String> companyEventLines(Map<String, dynamic> blobs, String symbol) {
 String dmy(Object? iso) {
   final d = DateTime.tryParse('$iso');
   if (d == null) return '$iso';
-  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const m = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec'
+  ];
   return '${d.day} ${m[d.month - 1]}';
 }
 
 /// One row of a labelled four-column table (KvTable): metric · value ·
 /// third · read, with a tone (-1 red, 0 ink, +1 green) for the read cell.
-typedef KvRow = ({String metric, String value, String third, String read, int tone});
+typedef KvRow = ({
+  String metric,
+  String value,
+  String third,
+  String read,
+  int tone
+});

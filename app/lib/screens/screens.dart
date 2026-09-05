@@ -14,76 +14,200 @@ import 'stock.dart';
 /// <=50 rows back. Metrics are rebuilt daily by pipeline/fundamentals.py.
 
 typedef ScreenFilter = ({String metric, bool gte, double value});
-typedef ScreenPreset = ({String name, List<ScreenFilter> filters, String sortCol, bool asc});
+typedef ScreenPreset = ({
+  String name,
+  List<ScreenFilter> filters,
+  String sortCol,
+  bool asc
+});
 
 /// Column, chip label, curated threshold pills (label, gte, value).
 /// ponytail: pill thresholds only; add a TextField row when someone asks
 /// for PE < 17.3.
-typedef MetricDef = ({String col, String label, String unit, List<(String, bool, double)> choices});
+typedef MetricDef = ({
+  String col,
+  String label,
+  String unit,
+  List<(String, bool, double)> choices
+});
 
 const List<MetricDef> metricDefs = [
-  (col: 'pe', label: 'PE', unit: '', choices: [
-    ('≤ 10', false, 10), ('≤ 15', false, 15), ('≤ 25', false, 25), ('≥ 25', true, 25)]),
-  (col: 'pb', label: 'PB', unit: '', choices: [
-    ('≤ 1', false, 1), ('≤ 3', false, 3), ('≥ 3', true, 3)]),
-  (col: 'mcap_cr', label: 'MCAP', unit: ' CR', choices: [
-    ('≥ 300', true, 300), ('≥ 500', true, 500), ('≥ 5000', true, 5000),
-    ('≤ 5000', false, 5000), ('≥ 20000', true, 20000)]),
-  (col: 'div_yield', label: 'DIV YIELD', unit: '%', choices: [
-    ('≥ 1', true, 1), ('≥ 3', true, 3), ('≥ 5', true, 5)]),
-  (col: 'roe', label: 'ROE', unit: '%', choices: [
-    ('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 20', true, 20)]),
-  (col: 'roce', label: 'ROCE', unit: '%', choices: [
-    ('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 20', true, 20)]),
-  (col: 'de', label: 'DEBT/EQ', unit: '', choices: [
-    ('≤ 0.1', false, 0.1), ('≤ 0.3', false, 0.3), ('≤ 1', false, 1)]),
-  (col: 'opm', label: 'OPM', unit: '%', choices: [
-    ('≥ 10', true, 10), ('≥ 20', true, 20)]),
-  (col: 'sales_cagr_3y', label: 'SALES 3Y', unit: '%', choices: [
-    ('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 25', true, 25)]),
-  (col: 'profit_cagr_3y', label: 'PROFIT 3Y', unit: '%', choices: [
-    ('≥ 10', true, 10), ('≥ 20', true, 20)]),
-  (col: 'sales_cagr_5y', label: 'SALES 5Y', unit: '%', choices: [
-    ('≥ 10', true, 10), ('≥ 15', true, 15)]),
-  (col: 'profit_cagr_5y', label: 'PROFIT 5Y', unit: '%', choices: [
-    ('≥ 15', true, 15), ('≥ 25', true, 25)]),
-  (col: 'promoter_pct', label: 'PROMOTER', unit: '%', choices: [
-    ('≥ 50', true, 50), ('≥ 60', true, 60), ('≥ 75', true, 75)]),
+  (
+    col: 'pe',
+    label: 'PE',
+    unit: '',
+    choices: [
+      ('≤ 10', false, 10),
+      ('≤ 15', false, 15),
+      ('≤ 25', false, 25),
+      ('≥ 25', true, 25)
+    ]
+  ),
+  (
+    col: 'pb',
+    label: 'PB',
+    unit: '',
+    choices: [('≤ 1', false, 1), ('≤ 3', false, 3), ('≥ 3', true, 3)]
+  ),
+  (
+    col: 'mcap_cr',
+    label: 'MCAP',
+    unit: ' CR',
+    choices: [
+      ('≥ 300', true, 300),
+      ('≥ 500', true, 500),
+      ('≥ 5000', true, 5000),
+      ('≤ 5000', false, 5000),
+      ('≥ 20000', true, 20000)
+    ]
+  ),
+  (
+    col: 'div_yield',
+    label: 'DIV YIELD',
+    unit: '%',
+    choices: [('≥ 1', true, 1), ('≥ 3', true, 3), ('≥ 5', true, 5)]
+  ),
+  (
+    col: 'roe',
+    label: 'ROE',
+    unit: '%',
+    choices: [('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 20', true, 20)]
+  ),
+  (
+    col: 'roce',
+    label: 'ROCE',
+    unit: '%',
+    choices: [('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 20', true, 20)]
+  ),
+  (
+    col: 'de',
+    label: 'DEBT/EQ',
+    unit: '',
+    choices: [('≤ 0.1', false, 0.1), ('≤ 0.3', false, 0.3), ('≤ 1', false, 1)]
+  ),
+  (
+    col: 'opm',
+    label: 'OPM',
+    unit: '%',
+    choices: [('≥ 10', true, 10), ('≥ 20', true, 20)]
+  ),
+  (
+    col: 'sales_cagr_3y',
+    label: 'SALES 3Y',
+    unit: '%',
+    choices: [('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 25', true, 25)]
+  ),
+  (
+    col: 'profit_cagr_3y',
+    label: 'PROFIT 3Y',
+    unit: '%',
+    choices: [('≥ 10', true, 10), ('≥ 20', true, 20)]
+  ),
+  (
+    col: 'sales_cagr_5y',
+    label: 'SALES 5Y',
+    unit: '%',
+    choices: [('≥ 10', true, 10), ('≥ 15', true, 15)]
+  ),
+  (
+    col: 'profit_cagr_5y',
+    label: 'PROFIT 5Y',
+    unit: '%',
+    choices: [('≥ 15', true, 15), ('≥ 25', true, 25)]
+  ),
+  (
+    col: 'promoter_pct',
+    label: 'PROMOTER',
+    unit: '%',
+    choices: [('≥ 50', true, 50), ('≥ 60', true, 60), ('≥ 75', true, 75)]
+  ),
 ];
 
 const List<ScreenPreset> screenPresets = [
-  (name: 'VALUE', sortCol: 'pe', asc: true, filters: [
-    (metric: 'pe', gte: false, value: 15.0),
-    (metric: 'roe', gte: true, value: 15.0),
-    (metric: 'de', gte: false, value: 0.5),
-    (metric: 'mcap_cr', gte: true, value: 500.0)]),
-  (name: 'COMPOUNDERS', sortCol: 'profit_cagr_5y', asc: false, filters: [
-    (metric: 'roe', gte: true, value: 20.0),
-    (metric: 'roce', gte: true, value: 20.0),
-    (metric: 'profit_cagr_5y', gte: true, value: 15.0),
-    (metric: 'de', gte: false, value: 0.3)]),
-  (name: 'DIVIDEND', sortCol: 'div_yield', asc: false, filters: [
-    (metric: 'div_yield', gte: true, value: 3.0),
-    (metric: 'roe', gte: true, value: 12.0),
-    (metric: 'de', gte: false, value: 1.0)]),
-  (name: 'GROWTH', sortCol: 'profit_cagr_3y', asc: false, filters: [
-    (metric: 'sales_cagr_3y', gte: true, value: 15.0),
-    (metric: 'profit_cagr_3y', gte: true, value: 20.0),
-    (metric: 'pe', gte: false, value: 30.0)]),
-  (name: 'DEBT-FREE SMALLCAP', sortCol: 'roe', asc: false, filters: [
-    (metric: 'de', gte: false, value: 0.1),
-    (metric: 'mcap_cr', gte: true, value: 300.0),
-    (metric: 'mcap_cr', gte: false, value: 5000.0),
-    (metric: 'roe', gte: true, value: 15.0)]),
-  (name: 'PROMOTER HEAVY', sortCol: 'mcap_cr', asc: false, filters: [
-    (metric: 'promoter_pct', gte: true, value: 60.0),
-    (metric: 'roe', gte: true, value: 15.0),
-    (metric: 'pe', gte: false, value: 25.0)]),
+  (
+    name: 'VALUE',
+    sortCol: 'pe',
+    asc: true,
+    filters: [
+      (metric: 'pe', gte: false, value: 15.0),
+      (metric: 'roe', gte: true, value: 15.0),
+      (metric: 'de', gte: false, value: 0.5),
+      (metric: 'mcap_cr', gte: true, value: 500.0)
+    ]
+  ),
+  (
+    name: 'COMPOUNDERS',
+    sortCol: 'profit_cagr_5y',
+    asc: false,
+    filters: [
+      (metric: 'roe', gte: true, value: 20.0),
+      (metric: 'roce', gte: true, value: 20.0),
+      (metric: 'profit_cagr_5y', gte: true, value: 15.0),
+      (metric: 'de', gte: false, value: 0.3)
+    ]
+  ),
+  (
+    name: 'DIVIDEND',
+    sortCol: 'div_yield',
+    asc: false,
+    filters: [
+      (metric: 'div_yield', gte: true, value: 3.0),
+      (metric: 'roe', gte: true, value: 12.0),
+      (metric: 'de', gte: false, value: 1.0)
+    ]
+  ),
+  (
+    name: 'GROWTH',
+    sortCol: 'profit_cagr_3y',
+    asc: false,
+    filters: [
+      (metric: 'sales_cagr_3y', gte: true, value: 15.0),
+      (metric: 'profit_cagr_3y', gte: true, value: 20.0),
+      (metric: 'pe', gte: false, value: 30.0)
+    ]
+  ),
+  (
+    name: 'DEBT-FREE SMALLCAP',
+    sortCol: 'roe',
+    asc: false,
+    filters: [
+      (metric: 'de', gte: false, value: 0.1),
+      (metric: 'mcap_cr', gte: true, value: 300.0),
+      (metric: 'mcap_cr', gte: false, value: 5000.0),
+      (metric: 'roe', gte: true, value: 15.0)
+    ]
+  ),
+  (
+    name: 'PROMOTER HEAVY',
+    sortCol: 'mcap_cr',
+    asc: false,
+    filters: [
+      (metric: 'promoter_pct', gte: true, value: 60.0),
+      (metric: 'roe', gte: true, value: 15.0),
+      (metric: 'pe', gte: false, value: 25.0)
+    ]
+  ),
 ];
+
+/// Plain-words line per preset — what the screen hunts, for readers the pill
+/// names alone don't reach. The filter pills below it spell the exact cuts.
+const presetBlurbs = {
+  'VALUE': 'cheap earnings · solid returns · low debt',
+  'COMPOUNDERS': 'high ROE/ROCE, profits compounding for 5 years',
+  'DIVIDEND': 'pays ≥3% yield without wrecking the balance sheet',
+  'GROWTH': 'sales and profits accelerating, P/E still sane',
+  'DEBT-FREE SMALLCAP': 'small companies, near-zero debt, real returns',
+  'PROMOTER HEAVY': 'founders own ≥60% — skin in the game',
+};
 
 // ---------- saved screens (SharedPreferences, same pattern as feed filters) ----------
 
-typedef SavedScreen = ({String name, List<ScreenFilter> filters, String sortCol, bool asc});
+typedef SavedScreen = ({
+  String name,
+  List<ScreenFilter> filters,
+  String sortCol,
+  bool asc
+});
 
 String encodeScreen(SavedScreen s) => jsonEncode({
       'name': s.name,
@@ -132,12 +256,12 @@ Future<void> persistSavedScreens(List<SavedScreen> screens) async {
 
 MetricDef _def(String col) => metricDefs.firstWhere((m) => m.col == col);
 
-String _trim(double v) =>
-    v == v.roundToDouble() ? '${v.round()}' : '$v';
+String _trim(double v) => v == v.roundToDouble() ? '${v.round()}' : '$v';
 
 String filterLabel(ScreenFilter f) {
   final d = _def(f.metric);
-  return '${d.label} ${f.gte ? '≥' : '≤'} ${_trim(f.value)}${d.unit}'.trimRight();
+  return '${d.label} ${f.gte ? '≥' : '≤'} ${_trim(f.value)}${d.unit}'
+      .trimRight();
 }
 
 /// 'PE 14.2' · 'ROE 22%' · 'MCAP 2,800 CR' — the result-row trail bits.
@@ -166,7 +290,8 @@ class ScreensBody extends StatelessWidget {
       this.onTapRow,
       this.savedNames = const [],
       this.onLoadSaved,
-      this.updatedAt});
+      this.updatedAt,
+      this.blurb});
   final List<Map<String, dynamic>> rows;
   final List<ScreenFilter> filters;
   final String sortCol;
@@ -179,9 +304,16 @@ class ScreensBody extends StatelessWidget {
   final void Function(int index)? onLoadSaved;
   final DateTime? updatedAt;
 
+  /// One plain-words line under a preset's title — what this screen hunts.
+  final String? blurb;
+
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(20), children: [
+      if (blurb != null) ...[
+        Text(blurb!, style: mono.copyWith(fontSize: 10.5, color: inkDim)),
+        const SizedBox(height: 12),
+      ],
       if (savedNames.isNotEmpty && onLoadSaved != null) ...[
         Text('SAVED', style: mono.copyWith(fontSize: 10, color: inkDim)),
         const SizedBox(height: 6),
@@ -194,11 +326,13 @@ class ScreensBody extends StatelessWidget {
       ],
       Wrap(spacing: 6, runSpacing: 6, children: [
         for (final f in filters)
-          filterPill(filterLabel(f), true, green, () => onRemoveFilter(f), fontSize: 10),
+          filterPill(filterLabel(f), true, green, () => onRemoveFilter(f),
+              fontSize: 10),
         if (onAddFilter != null)
           filterPill('+ FILTER', false, green, onAddFilter!, fontSize: 10),
         if (onSort != null)
-          filterPill('SORT · ${_def(sortCol).label}', false, amber, onSort!, fontSize: 10),
+          filterPill('SORT · ${_def(sortCol).label}', false, amber, onSort!,
+              fontSize: 10),
         if (onSave != null && filters.isNotEmpty)
           filterPill('SAVE', false, inkDim, onSave!, fontSize: 10),
       ]),
@@ -263,7 +397,20 @@ class ScreensBody extends StatelessWidget {
 }
 
 String fmtDayShort(DateTime t) {
-  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const m = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec'
+  ];
   final ist = t.toUtc().add(const Duration(hours: 5, minutes: 30));
   return '${ist.day} ${m[ist.month - 1]}';
 }
@@ -414,12 +561,15 @@ class _ScreensScreenState extends State<ScreensScreen> {
                             decoration: InputDecoration(
                                 isDense: true,
                                 hintText: 'custom…',
-                                hintStyle: mono.copyWith(
-                                    fontSize: 12, color: inkDim)),
+                                hintStyle:
+                                    mono.copyWith(fontSize: 12, color: inkDim)),
                           ),
                         ),
                         const SizedBox(width: 10),
-                        for (final (label, gte) in const [('≥', true), ('≤', false)])
+                        for (final (label, gte) in const [
+                          ('≥', true),
+                          ('≤', false)
+                        ])
                           Padding(
                             padding: const EdgeInsets.only(right: 6),
                             child: filterPill(label, false, amber, () {
@@ -464,8 +614,8 @@ class _ScreensScreenState extends State<ScreensScreen> {
           .maybeSingle();
       if (row == null || !mounted) return;
       Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) =>
-              StockScreen(company: Company.fromJson(Map<String, dynamic>.from(row)))));
+          builder: (_) => StockScreen(
+              company: Company.fromJson(Map<String, dynamic>.from(row)))));
     } catch (_) {}
   }
 
@@ -495,13 +645,13 @@ class _ScreensScreenState extends State<ScreensScreen> {
                   filters: _filters,
                   sortCol: _sortCol,
                   updatedAt: stamp,
+                  blurb: presetBlurbs[widget.preset?.name],
                   savedNames: [for (final s in _saved) s.name],
                   onLoadSaved: _saved.isEmpty ? null : _loadSaved,
                   onRemoveFilter: (f) {
-                    setState(() => _filters =
-                        [..._filters.where((x) => x != f)]);
-                    _run();
-                  },
+                  setState(() => _filters = [..._filters.where((x) => x != f)]);
+                  _run();
+                },
                   onAddFilter: _addFilter,
                   onSort: _pickSort,
                   onSave: widget.preset == null ? _save : null,

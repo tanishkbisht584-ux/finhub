@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
@@ -12,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../analytics.dart';
 import '../feed_cache.dart';
 import '../follows.dart';
+import '../glossary.dart';
 import '../models.dart';
 import '../publishers.dart';
 import '../remote_config.dart';
@@ -1401,12 +1401,19 @@ void showImpactSheet(BuildContext context) {
     (context) => ValueListenableBuilder<int>(
       valueListenable: minImpact,
       builder: (context, minImp, _) =>
-          Wrap(spacing: 8, runSpacing: 8, children: [
-        filterPill('ANY', minImp == 0, green, () => setMinImpact(0)),
-        filterPill('4+', minImp == 4, amber, () => setMinImpact(4)),
-        filterPill('6+', minImp == 6, amber, () => setMinImpact(6)),
-        // 8+ burns ember, same as the card's IMPACT line
-        filterPill('8+', minImp == 8, red, () => setMinImpact(8)),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          filterPill('ANY', minImp == 0, green, () => setMinImpact(0)),
+          filterPill('4+', minImp == 4, amber, () => setMinImpact(4)),
+          filterPill('6+', minImp == 6, amber, () => setMinImpact(6)),
+          // 8+ burns ember, same as the card's IMPACT line
+          filterPill('8+', minImp == 8, red, () => setMinImpact(8)),
+        ]),
+        const SizedBox(height: 10),
+        Text(
+            'IMPACT scores how much a story can move money — '
+            '1 is routine, 10 moves the whole market.',
+            style: mono.copyWith(fontSize: 10.5, color: inkDim)),
       ]),
     ),
   );
@@ -1419,11 +1426,18 @@ void showHorizonSheet(BuildContext context) {
     'HORIZON',
     (context) => ValueListenableBuilder<String>(
       valueListenable: horizonFilter,
-      builder: (context, h, _) => Wrap(spacing: 8, runSpacing: 8, children: [
-        filterPill('ALL', h == 'all', green, () => setHorizonFilter('all')),
-        filterPill(
-            'SHORT', h == 'short', green, () => setHorizonFilter('short')),
-        filterPill('LONG', h == 'long', green, () => setHorizonFilter('long')),
+      builder: (context, h, _) =>
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          filterPill('ALL', h == 'all', green, () => setHorizonFilter('all')),
+          filterPill(
+              'SHORT', h == 'short', green, () => setHorizonFilter('short')),
+          filterPill(
+              'LONG', h == 'long', green, () => setHorizonFilter('long')),
+        ]),
+        const SizedBox(height: 10),
+        Text('SHORT plays out in days; LONG over quarters.',
+            style: mono.copyWith(fontSize: 10.5, color: inkDim)),
       ]),
     ),
   );
@@ -1481,99 +1495,11 @@ class _StoryCardState extends ConsumerState<StoryCard>
   late final AnimationController _palette = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 200));
 
-  /// Recognizers behind the summary's tappable glossary terms — rebuilt per
-  /// build, disposed here (the State owns them; DeepReadPages stays static).
-  final _termTaps = <TapGestureRecognizer>[];
-
-  /// term -> definition, once per session across all cards. The qa function's
-  /// qa_cache makes the fetch itself a once-ever cost globally.
-  static final _termDefs = <String, String>{};
-
   @override
   void dispose() {
     _burst.dispose();
     _palette.dispose();
-    for (final r in _termTaps) {
-      r.dispose();
-    }
     super.dispose();
-  }
-
-  Future<String?> _define(String term) async {
-    final key = term.toLowerCase();
-    if (_termDefs.containsKey(key)) return _termDefs[key];
-    try {
-      final res = await Supabase.instance.client.functions
-          .invoke('qa', body: {'question': term, 'mode': 'define'});
-      final a = QaAnswer.fromJson(Map<String, dynamic>.from(res.data));
-      final def =
-          a.sections.isNotEmpty ? a.sections.first.body : a.whatsHappening;
-      if (def.trim().isEmpty) return null;
-      return _termDefs[key] = def;
-    } catch (_) {
-      return null; // a failed lookup shows the honest fallback, never an error
-    }
-  }
-
-  void _showDefinition(String term) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: bg,
-      shape: const RoundedRectangleBorder(),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(term.toUpperCase(),
-                  style:
-                      mono.copyWith(fontSize: 12, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 10),
-              FutureBuilder<String?>(
-                future: _define(term),
-                builder: (_, snap) => Text(
-                    snap.connectionState != ConnectionState.done
-                        ? 'Looking it up…'
-                        : snap.data ??
-                            'No definition right now — try asking in Ask.',
-                    style: const TextStyle(fontSize: 15, height: 1.5)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Summary as spans with tappable glossary terms (dotted underline). Old
-  /// recognizers are disposed on every rebuild; share capture renders the
-  /// plain text instead so underlines never bake into the PNG.
-  List<InlineSpan> _summarySpans(TextStyle base) {
-    for (final r in _termTaps) {
-      r.dispose();
-    }
-    _termTaps.clear();
-    return [
-      for (final seg in glossarySegments(story.summary ?? ''))
-        if (seg.isTerm)
-          TextSpan(
-            text: seg.text,
-            style: base.copyWith(
-                decoration: TextDecoration.underline,
-                decorationStyle: TextDecorationStyle.dotted,
-                decorationColor: inkDim),
-            recognizer: () {
-              final r = TapGestureRecognizer()
-                ..onTap = () => _showDefinition(seg.text);
-              _termTaps.add(r);
-              return r;
-            }(),
-          )
-        else
-          TextSpan(text: seg.text, style: base),
-    ];
   }
 
   bool _isSavedNow() {
@@ -1967,8 +1893,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
                                           ? TextOverflow.ellipsis
                                           : null,
                                       style: base)
-                                  : Text.rich(
-                                      TextSpan(children: _summarySpans(base)),
+                                  : GlossaryText(story.summary ?? '',
+                                      style: base,
                                       maxLines: _hasGlanceLines ? 5 : null,
                                       overflow: _hasGlanceLines
                                           ? TextOverflow.ellipsis

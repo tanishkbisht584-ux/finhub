@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'glossary.dart';
 import 'heat.dart';
 import 'models.dart';
 import 'theme.dart';
@@ -50,7 +51,10 @@ class LedgerSection extends StatelessWidget {
           if (footnote != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(footnote!, style: mono.copyWith(fontSize: 10)),
+              // Glossary-aware: footnotes are where FII/OI/G-Sec first hit a
+              // reader — the same dotted-underline define the card summary has.
+              child:
+                  GlossaryText(footnote!, style: mono.copyWith(fontSize: 10)),
             ),
         ],
       );
@@ -105,24 +109,23 @@ class LedgerRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: mono.copyWith(fontSize: 12, color: ink))),
         Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(main,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: serif.copyWith(fontSize: 13)),
-                if (sub != null && sub!.isNotEmpty)
-                  Text(sub!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: mono.copyWith(fontSize: 10)),
-                if (bar != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 5, right: 12),
-                    child: miniBar(bar!, color: barColor, track: barTrack),
-                  ),
-              ]),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(main,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: serif.copyWith(fontSize: 13)),
+            if (sub != null && sub!.isNotEmpty)
+              Text(sub!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: mono.copyWith(fontSize: 10)),
+            if (bar != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 5, right: 12),
+                child: miniBar(bar!, color: barColor, track: barTrack),
+              ),
+          ]),
         ),
         if (trail != null) ...[
           const SizedBox(width: 8),
@@ -130,8 +133,8 @@ class LedgerRow extends StatelessWidget {
               width: 84,
               child: Text(trail!,
                   textAlign: TextAlign.end,
-                  style: mono.copyWith(
-                      fontSize: 12, color: trailColor ?? ink))),
+                  style:
+                      mono.copyWith(fontSize: 12, color: trailColor ?? ink))),
         ],
       ]),
     );
@@ -230,8 +233,8 @@ class HeatCell extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
       decoration: BoxDecoration(
           color: heatColor(pct, scale: scale),
-          border: Border.all(
-              color: neutral ? border : c.withValues(alpha: 0.45))),
+          border:
+              Border.all(color: neutral ? border : c.withValues(alpha: 0.45))),
       child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -246,8 +249,8 @@ class HeatCell extends StatelessWidget {
                     (pct == null
                         ? '—'
                         : '${pct! > 0 ? '+' : pct! < 0 ? '−' : ''}${pct!.abs().toStringAsFixed(2)}%'),
-                style: mono.copyWith(
-                    fontSize: 13, color: neutral ? inkDim : c)),
+                style:
+                    mono.copyWith(fontSize: 13, color: neutral ? inkDim : c)),
             if (bar != null) ...[
               const SizedBox(height: 5),
               miniBar(bar!, color: barColor, track: barTrack),
@@ -285,7 +288,10 @@ class ScaleBar extends StatelessWidget {
           final w = c.maxWidth;
           return Stack(clipBehavior: Clip.none, children: [
             Positioned(
-                top: 4, left: 0, right: 0, height: height,
+                top: 4,
+                left: 0,
+                right: 0,
+                height: height,
                 child: const ColoredBox(color: border)),
             for (final z in zones)
               Positioned(
@@ -335,8 +341,7 @@ class _CollapsibleState extends State<Collapsible> {
 
   @override
   Widget build(BuildContext context) {
-    final rows =
-        _all ? widget.rows : widget.rows.take(widget.initial).toList();
+    final rows = _all ? widget.rows : widget.rows.take(widget.initial).toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       ...rows,
       if (!_all && widget.rows.length > widget.initial)
@@ -356,13 +361,20 @@ class KvTable extends StatelessWidget {
   final List<String> columns; // 4 headers
   final List<KvRow> rows;
 
-  static Color toneColor(int tone) => tone > 0 ? green : tone < 0 ? red : ink;
+  static Color toneColor(int tone) => tone > 0
+      ? green
+      : tone < 0
+          ? red
+          : ink;
 
   @override
   Widget build(BuildContext context) {
     if (rows.isEmpty) return const SizedBox.shrink();
     Widget cell(String s,
-            {bool head = false, bool right = true, Color? color, bool wrap = false}) =>
+            {bool head = false,
+            bool right = true,
+            Color? color,
+            bool wrap = false}) =>
         Container(
           constraints: const BoxConstraints(minHeight: 28),
           alignment: right ? Alignment.centerRight : Alignment.centerLeft,
@@ -376,8 +388,11 @@ class KvTable extends StatelessWidget {
                   letterSpacing: head ? 0.6 : 0,
                   color: color ?? (head ? inkDim : ink))),
         );
-    Color valueColor(String v) =>
-        v.startsWith('+') ? green : v.startsWith('−') ? red : ink;
+    Color valueColor(String v) => v.startsWith('+')
+        ? green
+        : v.startsWith('−')
+            ? red
+            : ink;
     return Table(
       columnWidths: const {
         0: FixedColumnWidth(92),
@@ -401,7 +416,16 @@ class KvTable extends StatelessWidget {
         ),
         for (final r in rows)
           TableRow(children: [
-            cell(r.metric, right: false),
+            // Metric names are the app's densest jargon (RSI-14, ROCE, OI) —
+            // glossary-aware so a beginner can tap any of them.
+            Container(
+              constraints: const BoxConstraints(minHeight: 28),
+              alignment: Alignment.centerLeft,
+              child: GlossaryText(r.metric,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: mono.copyWith(fontSize: 11, color: ink)),
+            ),
             cell(r.value, color: valueColor(r.value)),
             cell(r.third, color: inkDim),
             Padding(
