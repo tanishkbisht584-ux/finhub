@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+import statistics
 import time
 from collections import namedtuple
 from datetime import date as _date, datetime, timedelta, timezone
@@ -1612,7 +1613,7 @@ def refresh_monsoon(sb, now):
 # one is missing (an exchange holiday without VIX must not fake a score) —
 # a score needs at least two real components or it is an anecdote.
 
-FG_VERSION = 1
+FG_VERSION = 2  # v2 (2026-09-05): + pcr, fii_pos, nifty_gold
 RISK_VERSION = 1
 
 
@@ -1633,7 +1634,17 @@ def _blend(comp, labels):
     return {"score": score, "label": label, "components": comp}
 
 
-def compute_fear_greed(q, flows, fno):
+def _rel_return_pct(a, b):
+    """1-window relative return of series a over series b, in %; None unless
+    both carry >=10 real closes."""
+    a = [c for c in a or [] if c]
+    b = [c for c in b or [] if c]
+    if len(a) < 10 or len(b) < 10 or not a[0] or not b[0]:
+        return None
+    return (a[-1] / a[0] - b[-1] / b[0]) * 100
+
+
+def compute_fear_greed(q, flows, fno, poi=None):
     """q: symbol -> quotes row. 0 = extreme fear, 100 = extreme greed."""
     b = ((flows or {}).get("breadth") or {}).get("NIFTY 500") or {}
     adv, dec = b.get("adv"), b.get("dec")
@@ -1641,6 +1652,11 @@ def compute_fear_greed(q, flows, fno):
     n = q.get("^NSEI") or {}
     closes = [c for c in n.get("closes") or [] if c]
     mean = sum(closes) / len(closes) if len(closes) >= 10 else None
+    # FII index-futures tilt, self-normalized to position size so contract-
+    # count regime changes don't move the bounds.
+    fii_row = ((poi or {}).get("rows") or {}).get("FII") or {}
+    fl, fs = fii_row.get("fut_idx_long"), fii_row.get("fut_idx_short")
+    fii_ratio = (fl - fs) / (fl + fs) if fl is not None and fs is not None and fl + fs else None
     comp = {
         "vix": _scale((q.get("^INDIAVIX") or {}).get("price"), 26, 10),  # calm=greed
         "breadth": round(adv / (adv + dec) * 100)
@@ -1649,10 +1665,58 @@ def compute_fear_greed(q, flows, fno):
         "hi_lo": round(hi / (hi + lo) * 100) if hi is not None and lo is not None and hi + lo else None,
         "momentum": _scale((n["price"] - mean) / mean * 100, -3, 3)
                     if mean and n.get("price") else None,
+        # v2: heavy put writing = bullish conviction (Indian OI convention);
+        # 0.7-1.5 is the observed NIFTY index-PCR band.
+        "pcr": _scale((flows or {}).get("pcr"), 0.7, 1.5),
+        "fii_pos": _scale(fii_ratio, -0.6, 0.6),
+        # v2: risk appetite — equities outperforming gold over the window =
+        # greed (the CNN stocks-vs-bonds analog with instruments we hold).
+        "nifty_gold": _scale(_rel_return_pct(n.get("closes"),
+                                             (q.get("GC=F") or {}).get("closes")),
+                             -5, 5),
     }
     out = _blend(comp, ((24, "Extreme fear"), (44, "Fear"), (55, "Neutral"),
                         (75, "Greed"), (100, "Extreme greed")))
     return {**out, "methodology_version": FG_VERSION} if out else None
+
+
+# Correlation matrix assets: symbol -> short display name. All six store
+# ~22 daily closes (indices/fx/commodities); BTC is out until refresh_crypto
+# attaches closes to the bitcoin row.
+CORR_ASSETS = (("^NSEI", "NIFTY"), ("^GSPC", "S&P 500"), ("GC=F", "Gold"),
+               ("USDINR=X", "USD/INR"), ("CL=F", "Crude"), ("DX-Y.NYB", "DXY"))
+
+
+def compute_correlations(q):
+    """Pairwise Pearson over daily pct-returns from quotes closes. Assets with
+    <10 usable returns are dropped; needs >=2 assets or returns None.
+    ponytail: closes arrays are date-less, so IN/US holiday offsets can skew a
+    pair by <=1 day — upgrade path is storing dated closes."""
+    series = {}
+    for sym, name in CORR_ASSETS:
+        closes = [c for c in (q.get(sym) or {}).get("closes") or [] if c]
+        rets = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+        if len(rets) >= 10:
+            series[name] = rets
+    if len(series) < 2:
+        return None
+    names = [name for _, name in CORR_ASSETS if name in series]
+    matrix = []
+    for a in names:
+        row = []
+        for b in names:
+            if a == b:
+                row.append(1.0)
+                continue
+            ra, rb = series[a], series[b]
+            n = min(len(ra), len(rb))  # trim both to the common tail
+            try:
+                row.append(round(statistics.correlation(ra[-n:], rb[-n:]), 2))
+            except statistics.StatisticsError:  # constant series
+                row.append(None)
+        matrix.append(row)
+    return {"assets": names, "matrix": matrix,
+            "window_d": min(len(v) for v in series.values())}
 
 
 def compute_risk_index(q, flows, trending):
@@ -1702,16 +1766,19 @@ def refresh_sentiment(sb, now):
     already carry graded freshness, and a stable score must suppress its
     write (write_blobs) rather than heartbeat a new timestamp every hour."""
     q = {r["symbol"]: r for r in
-         sb("GET", "quotes?select=symbol,price,change_pct,closes&kind=in.(index,fx)")}
+         sb("GET", "quotes?select=symbol,price,change_pct,closes&kind=in.(index,fx,commodity)")}
     blobs = {r["key"]: r["payload"] for r in
-             sb("GET", "market_blobs?select=key,payload&key=in.(flows,fno,trending,move_context)")}
-    fg = compute_fear_greed(q, blobs.get("flows"), blobs.get("fno"))
+             sb("GET", "market_blobs?select=key,payload&key=in.(flows,fno,trending,move_context,participant_oi)")}
+    fg = compute_fear_greed(q, blobs.get("flows"), blobs.get("fno"),
+                            blobs.get("participant_oi"))
     risk = compute_risk_index(q, blobs.get("flows"), blobs.get("trending"))
     text = market_summary_text(q, blobs.get("flows"), fg, blobs.get("move_context"))
+    corr = compute_correlations(q)
     ts = now.isoformat()
     rows = ([{"key": "fear_greed", "payload": fg, "updated_at": ts}] if fg else []) + \
            ([{"key": "risk_index", "payload": risk, "updated_at": ts}] if risk else []) + \
-           ([{"key": "market_summary", "payload": {"text": text}, "updated_at": ts}] if text else [])
+           ([{"key": "market_summary", "payload": {"text": text}, "updated_at": ts}] if text else []) + \
+           ([{"key": "correlation", "payload": corr, "updated_at": ts}] if corr else [])
     return write_blobs(sb, rows)
 
 
