@@ -181,8 +181,37 @@ final _blobs = <String, dynamic>{
   'fear_greed': {
     'score': 48,
     'label': 'Neutral',
-    'methodology_version': 1,
-    'components': {'fii': 11, 'vix': 94, 'breadth': 60, 'momentum': 25}
+    'methodology_version': 2,
+    'components': {
+      'fii': 11,
+      'vix': 94,
+      'breadth': 60,
+      'momentum': 25,
+      'pcr': 50,
+      'fii_pos': 71,
+      'nifty_gold': 57,
+    }
+  },
+  'correlation': {
+    'assets': ['NIFTY', 'Gold', 'USD/INR'],
+    'matrix': [
+      [1.0, 0.62, -0.41],
+      [0.62, 1.0, -0.18],
+      [-0.41, -0.18, 1.0],
+    ],
+    'window_d': 21,
+  },
+  'freight': {
+    'indices': [
+      {
+        'name': 'SCFI',
+        'value': 3590.02,
+        'prev': 3509.5,
+        'pct': 2.29,
+        'date': '2026-09-04'
+      },
+    ],
+    'asof': '2026-09-04',
   },
   'risk_index': {
     'score': 44,
@@ -437,6 +466,14 @@ void main() {
     expect(find.text('Neutral'), findsOneWidget);
     expect(find.text('India VIX'), findsNWidgets(2)); // F&G and risk components
     expect(find.text('Elevated'), findsOneWidget);
+    // F&G v2 components + the cross-asset correlation grid inside MOOD
+    expect(find.text('Put/call ratio'), findsOneWidget);
+    expect(find.text('NIFTY vs gold'), findsOneWidget);
+    expect(find.text('CROSS-ASSET · 1M'), findsOneWidget);
+    expect(find.text('0.62'), findsNWidgets(2)); // symmetric matrix cell
+    // freight rides the SHIPPING section
+    expect(find.text('SCFI'), findsOneWidget);
+    expect(find.textContaining('w/w +2.29%'), findsOneWidget);
     expect(find.text('ANANTRAJ'), findsOneWidget);
     expect(find.text('▲7.67%'), findsOneWidget);
     expect(find.text('No news we carry'), findsOneWidget);

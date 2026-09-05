@@ -378,6 +378,7 @@ class _MarketsBodyState extends State<MarketsBody> {
         '${(data.blobs['market_summary'] as Map?)?['text'] ?? ''}'.trim();
     final fg = (data.blobs['fear_greed'] as Map?)?.cast<String, dynamic>();
     final risk = (data.blobs['risk_index'] as Map?)?.cast<String, dynamic>();
+    final corr = (data.blobs['correlation'] as Map?)?.cast<String, dynamic>();
     final moves =
         (data.blobs['move_context'] as Map?)?.cast<String, dynamic>() ??
             const {};
@@ -400,6 +401,8 @@ class _MarketsBodyState extends State<MarketsBody> {
         (data.blobs['shipping'] as Map?)?.cast<String, dynamic>() ?? const {};
     final chokes = _l(shipping['chokepoints']);
     final ports = _l(shipping['ports']);
+    final freight =
+        _l(((data.blobs['freight'] as Map?) ?? const {})['indices']);
     final monsoon =
         (data.blobs['monsoon'] as Map?)?.cast<String, dynamic>() ?? const {};
     final cb = ((data.blobs['cb_rates'] as Map?)?['rates'] as Map?)
@@ -586,6 +589,11 @@ class _MarketsBodyState extends State<MarketsBody> {
                               ? amber
                               : green,
                       lowIsRed: false),
+                if (corr != null) ...[
+                  const SizedBox(height: 12),
+                  _groupLabel('CROSS-ASSET · 1M'),
+                  _corrGrid(corr),
+                ],
               ]),
         ),
       if (explained.isNotEmpty || unexplained.isNotEmpty)
@@ -727,14 +735,27 @@ class _MarketsBodyState extends State<MarketsBody> {
               _TickRow(t, spark: t.closes.length > 1),
           ]),
         ),
-      if (chokes.isNotEmpty || ports.isNotEmpty)
+      if (chokes.isNotEmpty || ports.isNotEmpty || freight.isNotEmpty)
         (
           id: 'shipping',
           label: 'SHIPPING',
           child: LedgerSection('Shipping',
               footnote:
-                  'IMF PortWatch · daily transits, published ~5 days behind',
+                  'IMF PortWatch ~5d behind · SCFI/CCFI weekly, Shanghai Shipping Exchange',
               children: [
+                if (freight.isNotEmpty) ...[
+                  for (final f in freight)
+                    LedgerRow(
+                        lead: '${f['name'] ?? ''}',
+                        main: 'Container freight',
+                        trail: '${f['value'] ?? ''}',
+                        trailColor: f['pct'] == null
+                            ? null
+                            : ((f['pct'] as num) >= 0 ? green : red),
+                        sub: f['pct'] == null
+                            ? dmy(f['date'])
+                            : 'w/w ${(f['pct'] as num) >= 0 ? '+' : '−'}${(f['pct'] as num).abs()}% · ${dmy(f['date'])}'),
+                ],
                 for (final c in chokes)
                   LedgerRow(
                       lead: '${c['n_total'] ?? ''}',
@@ -1159,7 +1180,58 @@ const _componentNames = {
   'fii_outflow': 'FII selling',
   'inr': 'Rupee',
   'news': 'News spikes',
+  // fear&greed v2 (pipeline FG_VERSION 2)
+  'pcr': 'Put/call ratio',
+  'fii_pos': 'FII index futures',
+  'nifty_gold': 'NIFTY vs gold',
 };
+
+/// Cross-asset correlation heat grid from the `correlation` blob: labelled
+/// rows × columns of Pearson r over ~1 month of daily returns.
+Widget _corrGrid(Map<String, dynamic> corr) {
+  final names = (corr['assets'] as List?)?.cast<String>() ?? const [];
+  final matrix = (corr['matrix'] as List?) ?? const [];
+  if (names.length < 2 || matrix.length != names.length) {
+    return const SizedBox.shrink();
+  }
+  return Column(children: [
+    const SizedBox(height: 6),
+    Row(children: [
+      const SizedBox(width: 56),
+      for (final n in names) ...[
+        const SizedBox(width: 6),
+        Expanded(
+            child: Text(n,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: mono.copyWith(fontSize: 9))),
+      ],
+    ]),
+    const SizedBox(height: 6),
+    for (var i = 0; i < names.length; i++) ...[
+      Row(children: [
+        SizedBox(
+            width: 56,
+            child: Text(names[i],
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: mono.copyWith(fontSize: 10))),
+        for (var j = 0; j < names.length; j++) ...[
+          const SizedBox(width: 6),
+          Expanded(child: Builder(builder: (_) {
+            final r = ((matrix[i] as List?)?[j] as num?)?.toDouble();
+            return HeatCell('', r,
+                scale: 1,
+                height: 28,
+                pctText: r == null ? '—' : r.toStringAsFixed(2));
+          })),
+        ],
+      ]),
+      const SizedBox(height: 6),
+    ],
+  ]);
+}
 
 /// Score row + a 0-100 scale bar, then one bar row per component.
 /// [lowIsRed] flips the zone colours: fear is low on Fear & Greed, risk is high.
