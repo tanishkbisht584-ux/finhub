@@ -224,7 +224,7 @@ void main() {
     expect(find.text('▲7.67%'), findsOneWidget);
     expect(find.text('No news we carry'), findsOneWidget);
     expect(find.text('IT'), findsOneWidget); // NIFTY prefix dropped
-    expect(find.text('100'), findsOneWidget); // broad market renders too now
+    expect(find.text('100'), findsNWidgets(2)); // broad market tile + insider qty cell
     expect(
         tester.getTopLeft(find.text('SECTORS').last).dy <
             tester.getTopLeft(find.text('WATCHLIST').last).dy,
@@ -257,9 +257,9 @@ void main() {
     expect(find.text('RESULTS'), findsNWidgets(2));
     expect(find.text('28 Aug'), findsOneWidget);
     expect(find.text('DEALS'), findsNWidgets(2));
-    expect(find.text('BUY ₹8.0 Cr'), findsOneWidget);
+    expect(find.textContaining('BUY ₹8.0 Cr'), findsOneWidget);
     expect(find.textContaining('NSE · '), findsWidgets); // blob stamp on deals
-    expect(find.text('A Person'), findsOneWidget);
+    expect(find.textContaining('A Person'), findsOneWidget);
   });
 
   testWidgets('ribbon chip tracks the scroll and taps jump to the section',
@@ -313,7 +313,8 @@ void main() {
     expect(find.text('+38.2% OI'), findsOneWidget);
     expect(find.text('−12.0% OI'), findsOneWidget);
     expect(find.text('34↑ 12↓'), findsOneWidget);
-    expect(find.text('top gainer'), findsOneWidget);
+    expect(find.text('ADANIENT'), findsOneWidget); // heat grid tile
+    expect(find.text('+4.50%'), findsOneWidget);
     expect(find.text('6.82%'), findsOneWidget);
     expect(find.text('−3.0 bp · 2026-08-28'), findsOneWidget);
     // 0.31.0: named benchmark G-Secs, the curve (2+ points), RBI policy box
@@ -325,15 +326,13 @@ void main() {
     // World Bank rows ride the MACRO section; quakes get their own
     expect(find.text('GDP growth'), findsOneWidget);
     expect(find.text('prev 2024: 7.10'), findsOneWidget);
+    expect(find.text('2025'), findsWidgets); // YEAR column
     expect(find.textContaining('% of GDP · prev 2024: '), findsOneWidget);
     expect(find.textContaining('0.85'), findsOneWidget);
     expect(find.text('QUAKES'), findsNWidgets(2));
     expect(find.text('M5.1'), findsOneWidget);
     expect(find.text('09-03'), findsOneWidget);
-    expect(find.text('ABC Ltd'), findsOneWidget);
-    expect(find.text('Open'), findsOneWidget);
-    expect(find.text('₹95-100 · 1,200.00 · 01-Sep-2026–03-Sep-2026'),
-        findsOneWidget);
+    expect(find.textContaining('ABC Ltd · 01-Sep-2026–03-Sep-2026 · Open'), findsOneWidget);
   });
 
   testWidgets('ribbon search filters headings and jumps on tap',
@@ -352,6 +351,21 @@ void main() {
     final header = tester.getTopLeft(find.text('CRYPTO').last);
     expect(header.dy, greaterThanOrEqualTo(0));
     expect(header.dy, lessThan(600));
+  });
+
+  testWidgets('sector horizon pills re-tint and re-sort tiles', (tester) async {
+    await tester.pumpWidget(_app(_phase3));
+    await tester.pump();
+    expect(find.text('1D'), findsOneWidget);
+    // Today: IT is the only sectoral tile and reads its day change.
+    expect(find.text('−0.46%'), findsOneWidget);
+    await tester.tap(find.text('30D'));
+    await tester.pump();
+    expect(find.text('+1.80%'), findsOneWidget); // pct_30d
+    expect(find.text('−0.46%'), findsNothing);
+    await tester.tap(find.text('1Y'));
+    await tester.pump();
+    expect(find.text('−4.20%'), findsOneWidget); // pct_1y
   });
 
   testWidgets('tapping a sector tile opens the full NSE row in a sheet',

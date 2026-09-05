@@ -6,6 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../charts.dart';
+import '../heat.dart';
+import '../ledger.dart';
 import '../models.dart';
 import '../remote_config.dart';
 import '../section_ribbon.dart';
@@ -308,51 +311,16 @@ class MarketsBody extends StatefulWidget {
 }
 
 class _MarketsBodyState extends State<MarketsBody> {
-  final _keys = <String, GlobalKey>{};
-  final _active = ValueNotifier<String>('');
-  List<String> _ids = const [];
-  bool _jumping = false;
-  GlobalKey _key(String id) => _keys.putIfAbsent(id, GlobalKey.new);
+  final _tracker = SectionTracker();
+
+  /// SECTORS horizon: which nse_indices field tints the tiles.
+  String _horizon = 'pct';
+  static const _horizons = [('pct', '1D', 3.0), ('pct_30d', '30D', 10.0), ('pct_1y', '1Y', 30.0)];
 
   @override
   void dispose() {
-    _active.dispose();
+    _tracker.dispose();
     super.dispose();
-  }
-
-  /// Which section owns the viewport: the last one whose header has scrolled
-  /// to within 80px of the top. At the very bottom the last section wins even
-  /// if it never reaches the top.
-  bool _track(ScrollUpdateNotification n) {
-    if (_jumping || n.metrics.axis != Axis.vertical) return false;
-    final viewport = n.context?.findRenderObject() as RenderBox?;
-    if (viewport == null) return false;
-    final threshold = viewport.localToGlobal(Offset.zero).dy + 80;
-    String? current;
-    for (final id in _ids) {
-      final box = _keys[id]?.currentContext?.findRenderObject() as RenderBox?;
-      if (box == null || !box.attached) continue;
-      if (box.localToGlobal(Offset.zero).dy <= threshold) {
-        current = id;
-      } else {
-        break;
-      }
-    }
-    if (n.metrics.pixels >= n.metrics.maxScrollExtent - 4 && _ids.isNotEmpty) {
-      current = _ids.last;
-    }
-    if (current != null && current != _active.value) _active.value = current;
-    return false;
-  }
-
-  Future<void> _jump(String id) async {
-    _active.value = id;
-    final ctx = _keys[id]?.currentContext;
-    if (ctx == null) return;
-    _jumping = true; // don't let en-route sections flicker the ribbon
-    await Scrollable.ensureVisible(ctx,
-        duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-    _jumping = false;
   }
 
   List<_Sec> _sections() {
@@ -426,6 +394,7 @@ class _MarketsBodyState extends State<MarketsBody> {
     final cb = ((data.blobs['cb_rates'] as Map?)?['rates'] as Map?)
             ?.cast<String, dynamic>() ??
         const {};
+    final scale = _horizons.firstWhere((h) => h.$1 == _horizon).$3;
     return [
       // Always first: which bells are ringing right now (client-side clock).
       (id: 'sessions', label: 'SESSIONS', child: const _Sessions()),
@@ -433,22 +402,40 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'sectors',
           label: 'SECTORS',
-          child: _Section('Sectors', [
-            for (final (key, label) in const [
-              ('SECTORAL INDICES', 'SECTORAL'),
-              ('BROAD MARKET INDICES', 'BROAD MARKET'),
-              ('THEMATIC INDICES', 'THEMATIC'),
-              ('STRATEGY INDICES', 'STRATEGY'),
-            ])
-              if (idxGroups[key] != null)
-                _HeatGroup(label, idxGroups[key]!,
-                    expanded: key == 'SECTORAL INDICES'),
-          ], stamp: data.blobUpdated['nse_indices']),
+          child: LedgerSection('Sectors',
+              stamp: data.blobUpdated['nse_indices'],
+              action: Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  for (final (key, label, _) in _horizons)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: filterPill(label, _horizon == key, green,
+                          () => setState(() => _horizon = key), fontSize: 9),
+                    ),
+                ]),
+              ),
+              footnote: 'tap a tile for P/E, breadth, 52-wk',
+              children: [
+                for (final (key, label) in const [
+                  ('SECTORAL INDICES', 'SECTORAL'),
+                  ('BROAD MARKET INDICES', 'BROAD MARKET'),
+                  ('THEMATIC INDICES', 'THEMATIC'),
+                  ('STRATEGY INDICES', 'STRATEGY'),
+                ])
+                  if (idxGroups[key] != null)
+                    _HeatGroup(label, idxGroups[key]!,
+                        field: _horizon,
+                        scale: scale,
+                        expanded: key == 'SECTORAL INDICES'),
+                const SizedBox(height: 10),
+                _heatLegend(scale),
+              ]),
         ),
       (
         id: 'watch',
         label: 'WATCHLIST',
-        child: _Section('Watchlist', [
+        child: LedgerSection('Watchlist', children: [
           if (watch.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 10),
@@ -469,31 +456,30 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'screens',
           label: 'SCREENS',
-          child: _Section('Screens', [
-            const SizedBox(height: 10),
-            Builder(
-              builder: (context) => Wrap(spacing: 8, runSpacing: 8, children: [
-                for (final p in screenPresets)
-                  filterPill(p.name, false, green, () {
-                    Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => ScreensScreen(preset: p)));
-                  }, fontSize: 10),
-                filterPill('CUSTOM', false, amber, () {
-                  Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const ScreensScreen()));
-                }, fontSize: 10),
+          child: LedgerSection('Screens',
+              footnote: 'filter every covered stock by fundamentals · rebuilt daily',
+              children: [
+                const SizedBox(height: 10),
+                Builder(
+                  builder: (context) => Wrap(spacing: 8, runSpacing: 8, children: [
+                    for (final p in screenPresets)
+                      filterPill(p.name, false, green, () {
+                        Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => ScreensScreen(preset: p)));
+                      }, fontSize: 10),
+                    filterPill('CUSTOM', false, amber, () {
+                      Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const ScreensScreen()));
+                    }, fontSize: 10),
+                  ]),
+                ),
               ]),
-            ),
-            const SizedBox(height: 4),
-            Text('filter every covered stock by fundamentals · rebuilt daily',
-                style: mono.copyWith(fontSize: 10)),
-          ]),
         ),
       if (indices.isNotEmpty)
         (
           id: 'indices',
           label: 'INDICES',
-          child: _Section('Indices', [
+          child: LedgerSection('Indices', children: [
             for (final t in indices) _TickRow(t, spark: true),
           ]),
         ),
@@ -501,149 +487,136 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'flows',
           label: 'FLOWS',
-          child: _Section('Flows', [
+          child: LedgerSection('Flows', stamp: data.blobUpdated['flows'], children: [
             for (final side in ['fii', 'dii'])
               if (flows[side] is Map)
-                _flowRow(side.toUpperCase(),
+                ..._flowRows(side.toUpperCase(),
                     (flows[side] as Map).cast<String, dynamic>(),
                     flows['date']?.toString()),
             if (flows['breadth'] is Map)
               for (final e in (flows['breadth'] as Map).entries)
-                _LineRow(
-                    lead: e.key.toString().replaceFirst('NIFTY ', 'N'),
-                    main: 'advance / decline',
-                    trail: '${e.value['adv']}↑ ${e.value['dec']}↓',
-                    trailColor: ((e.value['adv'] as num?) ?? 0) >=
-                            ((e.value['dec'] as num?) ?? 0)
-                        ? green
-                        : red),
-          ], stamp: data.blobUpdated['flows']),
+                _breadthRow(e.key.toString().replaceFirst('NIFTY ', 'N'),
+                    (e.value['adv'] as num?) ?? 0, (e.value['dec'] as num?) ?? 0),
+          ]),
         ),
       // One no-AI line after the flows (the heatmap keeps opening the tab): index moves, FII/DII, top mover, mood.
       if (summary.isNotEmpty)
         (
           id: 'today',
           label: 'TODAY',
-          child: _Section('Today', [
+          child: LedgerSection('Today', stamp: data.blobUpdated['market_summary'], children: [
             Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: Text(summary, style: serif.copyWith(fontSize: 14))),
-          ], stamp: data.blobUpdated['market_summary']),
+          ]),
         ),
       if (calendar.isNotEmpty)
         (
           id: 'calendar',
           label: 'CALENDAR',
-          child: _Section('Calendar', [  // next 45 days: RBI/MOSPI rule + FRED release dates
-            _Collapsible([
-              for (final e in calendar)
-                _LineRow(
-                    lead: _dmy(e['date']),
-                    main: '${e['name'] ?? ''}',
-                    trail: '${e['region'] ?? ''}',
-                    sub: e['time']?.toString()),
-            ]),
-          ]),
+          child: LedgerSection('Calendar',
+              footnote: 'next 45 days · RBI/MOSPI rule + FRED release dates',
+              children: [
+                Collapsible([
+                  KvTable(const ['DATE', 'REGION', 'TIME', 'EVENT'], [
+                    for (final e in calendar)
+                      (
+                        metric: dmy(e['date']),
+                        value: '${e['region'] ?? ''}',
+                        third: '${e['time'] ?? ''}',
+                        read: '${e['name'] ?? ''}',
+                        tone: 0,
+                      ),
+                  ]),
+                ], initial: 1),
+              ]),
         ),
       if (fg != null)
         (
           id: 'mood',
           label: 'MOOD',
-          child: _Section('Mood', [
+          child: LedgerSection('Mood', footnote: '0–100 · pipeline methodology', children: [
             ..._gaugeRows('Fear & Greed', fg,
-                (fg['score'] as num) < 44 ? red : (fg['score'] as num) > 55 ? green : null),
+                (fg['score'] as num) < 44 ? red : (fg['score'] as num) > 55 ? green : amber,
+                lowIsRed: true),
             if (risk != null)
               ..._gaugeRows('Risk index', risk,
-                  risk['label'] == 'High' ? red : risk['label'] == 'Elevated' ? amber : green),
+                  risk['label'] == 'High' ? red : risk['label'] == 'Elevated' ? amber : green,
+                  lowIsRed: false),
           ]),
         ),
       if (explained.isNotEmpty || unexplained.isNotEmpty)
         (
           id: 'moves',
           label: 'MOVES',
-          child: _Section('Moves', [
-            _Collapsible([
+          child: LedgerSection('Moves', stamp: data.blobUpdated['move_context'], children: [
+            Collapsible([
               for (final m in explained)
-                InkWell(
-                    onTap: () {
-                      homeTab.value = 0;
-                      pendingStory.value = (m['story_id'] as num?)?.toInt();
-                    },
-                    child: _moveRow(m, '${m['title'] ?? ''}')),
+                _moveRow(m, '${m['title'] ?? ''}', onTap: () {
+                  homeTab.value = 0;
+                  pendingStory.value = (m['story_id'] as num?)?.toInt();
+                }),
               for (final m in unexplained) _moveRow(m, 'No news we carry'),
             ]),
-          ], stamp: data.blobUpdated['move_context']),
+          ]),
         ),
       if (fno.isNotEmpty || flows['pcr'] != null)
         (
           id: 'fno',
           label: 'F&O',
-          child: _Section('F&O', [
-            if (flows['pcr'] != null)
-              _LineRow(
-                  lead: 'NIFTY',
-                  main: 'options · exp ${flows['expiry'] ?? ''}',
+          child: LedgerSection('F&O', stamp: data.blobUpdated['fno'], children: [
+            if (flows['pcr'] != null) ...[
+              LedgerRow(
+                  main: 'NIFTY put/call ratio',
                   trail: 'PCR ${flows['pcr']}',
                   trailColor: (flows['pcr'] as num) >= 1 ? green : red,
                   sub:
-                      'max OI at ${fmtNum(((flows['max_oi_strike'] ?? 0) as num).toDouble(), decimals: 0)} · spot ${fmtNum(((flows['underlying'] ?? 0) as num).toDouble(), decimals: 0)}'),
+                      'exp ${flows['expiry'] ?? ''} · max OI at ${fmtNum(((flows['max_oi_strike'] ?? 0) as num).toDouble(), decimals: 0)} · spot ${fmtNum(((flows['underlying'] ?? 0) as num).toDouble(), decimals: 0)}'),
+              const SizedBox(height: 6),
+              ScaleBar((flows['pcr'] as num).toDouble(),
+                  min: 0.5, max: 1.5, marks: const [(1.0, '1.0')]),
+              const SizedBox(height: 6),
+            ],
             if (fno['hi52'] != null || fno['lo52'] != null)
-              _LineRow(
-                  lead: '52W',
-                  main: 'new highs / lows',
-                  trail: '${fno['hi52'] ?? '—'}↑ ${fno['lo52'] ?? '—'}↓'),
-            _Collapsible([
-              for (final r in _l(fno['oi_gainers']))
-                _LineRow(
-                    lead: '${r['symbol']}',
-                    main: 'OI build-up',
-                    trail: _oiTrail(r['oi_pct'] as num?),
-                    trailColor: green,
-                    sub: _fnoSub(r)),
-              for (final r in _l(fno['oi_losers']))
-                _LineRow(
-                    lead: '${r['symbol']}',
-                    main: 'OI unwinding',
-                    trail: _oiTrail(r['oi_pct'] as num?),
-                    trailColor: red,
-                    sub: _fnoSub(r)),
-              for (final r in _l(fno['gainers']))
-                _LineRow(
-                    lead: '${r['symbol']}',
-                    main: 'top gainer',
-                    trail: fmtPct((r['pct'] as num?)?.toDouble()),
-                    trailColor: green,
-                    sub: _fnoSub(r)),
-              for (final r in _l(fno['losers']))
-                _LineRow(
-                    lead: '${r['symbol']}',
-                    main: 'top loser',
-                    trail: fmtPct((r['pct'] as num?)?.toDouble()),
-                    trailColor: red,
-                    sub: _fnoSub(r)),
-            ]),
-          ], stamp: data.blobUpdated['fno']),
+              _breadthRow('52W', (fno['hi52'] as num?) ?? 0, (fno['lo52'] as num?) ?? 0,
+                  main: 'new highs / lows'),
+            for (final (key, label) in const [('gainers', 'TOP GAINERS'), ('losers', 'TOP LOSERS')])
+              if (_l(fno[key]).isNotEmpty) ...[
+                _groupLabel(label),
+                StatGrid([
+                  for (final r in _l(fno[key]).take(6))
+                    HeatCell('${r['symbol']}', (r['pct'] as num?)?.toDouble(),
+                        sub: r['ltp'] == null ? null : '₹${fmtNum((r['ltp'] as num).toDouble())}'),
+                ]),
+              ],
+            if (_l(fno['oi_gainers']).isNotEmpty || _l(fno['oi_losers']).isNotEmpty) ...[
+              _groupLabel('OPEN INTEREST'),
+              Collapsible([
+                KvTable(const ['SYMBOL', 'LTP', 'OI', 'PRICE · READ'], [
+                  for (final r in _l(fno['oi_gainers'])) _oiRow(r, 'build-up'),
+                  for (final r in _l(fno['oi_losers'])) _oiRow(r, 'unwinding'),
+                ]),
+              ], initial: 1),
+            ],
+          ]),
         ),
       if (poi.isNotEmpty)
         (
           id: 'positioning',
           label: 'POSITIONING',
-          child: _Section('Positioning', [
-            Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                    'NSE participant-wise F&O open interest · ${_dmy(poiBlob['date'])}',
-                    style: mono.copyWith(fontSize: 10))),
-            for (final who in const ['FII', 'DII', 'Pro', 'Client'])
-              if (poi[who] is Map)
-                _poiRow(who, (poi[who] as Map).cast<String, dynamic>()),
-          ]),
+          child: LedgerSection('Positioning',
+              footnote: 'NSE participant-wise F&O open interest · ${dmy(poiBlob['date'])}',
+              children: [
+                for (final who in const ['FII', 'DII', 'Pro', 'Client'])
+                  if (poi[who] is Map)
+                    _poiRow(who, (poi[who] as Map).cast<String, dynamic>()),
+              ]),
         ),
       if (data.kind('fx').isNotEmpty)
         (
           id: 'fx',
           label: 'FX',
-          child: _Section('FX', [
+          child: LedgerSection('FX', children: [
             for (final t in data.kind('fx')) _TickRow(t, spark: true),
           ]),
         ),
@@ -651,7 +624,7 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'crypto',
           label: 'CRYPTO',
-          child: _Section('Crypto', [
+          child: LedgerSection('Crypto', children: [
             for (final t in data.kind('crypto')) _TickRow(t),
           ]),
         ),
@@ -659,7 +632,7 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'global',
           label: 'GLOBAL',
-          child: _Section('Global', [
+          child: LedgerSection('Global', children: [
             for (final t in worldIdx) _TickRow(t, spark: t.closes.length > 1),
             if (adrs.isNotEmpty) ...[
               const SizedBox(height: 14),
@@ -672,26 +645,27 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'odds',
           label: 'ODDS',
-          child: _Section('Odds', [
-            Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text('Polymarket odds — crowd bets, not forecasts',
-                    style: mono.copyWith(fontSize: 10))),
-            for (final m in predictions)
-              _LineRow(
-                  lead: '${m['pct']}%',
-                  main: '${m['q'] ?? ''}',
-                  trail: '${m['label'] ?? ''}',
-                  sub: m['end'] == null || '${m['end']}'.isEmpty
-                      ? null
-                      : 'resolves ${m['end']}'),
-          ], stamp: data.blobUpdated['predictions']),
+          child: LedgerSection('Odds',
+              stamp: data.blobUpdated['predictions'],
+              stampPrefix: 'Polymarket',
+              footnote: 'Polymarket odds — crowd bets, not forecasts',
+              children: [
+                for (final m in predictions)
+                  LedgerRow(
+                      lead: '${m['pct']}%',
+                      main: '${m['q'] ?? ''}',
+                      trail: '${m['label'] ?? ''}',
+                      bar: ((m['pct'] as num?) ?? 0).toDouble() / 100,
+                      sub: m['end'] == null || '${m['end']}'.isEmpty
+                          ? null
+                          : 'resolves ${m['end']}'),
+              ]),
         ),
       if (data.kind('commodity').isNotEmpty)
         (
           id: 'commodities',
           label: 'COMMODITIES',
-          child: _Section('Commodities', [
+          child: LedgerSection('Commodities', children: [
             for (final t in data.kind('commodity'))
               _TickRow(t, spark: t.closes.length > 1),
           ]),
@@ -700,231 +674,261 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'shipping',
           label: 'SHIPPING',
-          child: _Section('Shipping', [
-            Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text('IMF PortWatch · daily transits, published ~5 days behind',
-                    style: mono.copyWith(fontSize: 10))),
-            for (final c in chokes)
-              _LineRow(
-                  lead: '${c['n_total'] ?? ''}',
-                  main: '${c['name'] ?? ''}',
-                  trail: c['pct'] == null
-                      ? ''
-                      : '${(c['pct'] as num) >= 0 ? '+' : '−'}${(c['pct'] as num).abs()}% vs 30d',
-                  trailColor: c['pct'] == null ? null : ((c['pct'] as num) >= 0 ? green : red),
-                  sub: 'tankers ${c['n_tanker'] ?? '—'} · ${_dmy(c['date'])}'),
-            for (final p in ports)
-              _LineRow(
-                  lead: '${p['portcalls'] ?? ''}',
-                  main: '${p['name'] ?? ''} port calls',
-                  trail: '',
-                  sub: 'in ${_kt(p['import'])} · out ${_kt(p['export'])} · ${_dmy(p['date'])}'),
-          ]),
+          child: LedgerSection('Shipping',
+              footnote: 'IMF PortWatch · daily transits, published ~5 days behind',
+              children: [
+                for (final c in chokes)
+                  LedgerRow(
+                      lead: '${c['n_total'] ?? ''}',
+                      main: '${c['name'] ?? ''}',
+                      trail: c['pct'] == null
+                          ? ''
+                          : '${(c['pct'] as num) >= 0 ? '+' : '−'}${(c['pct'] as num).abs()}% vs 30d',
+                      trailColor: c['pct'] == null ? null : ((c['pct'] as num) >= 0 ? green : red),
+                      sub: 'tankers ${c['n_tanker'] ?? '—'} · ${dmy(c['date'])}'),
+                for (final p in ports)
+                  LedgerRow(
+                      lead: '${p['portcalls'] ?? ''}',
+                      main: '${p['name'] ?? ''} port calls',
+                      sub: 'in ${_kt(p['import'])} · out ${_kt(p['export'])} · ${dmy(p['date'])}'),
+              ]),
         ),
       if (mf.isNotEmpty || onAddMf != null)
         (
           id: 'mf',
           label: 'MF',
-          child: _Section('MF', [
-            for (final t in mf)
-              _MfRow(t, data.followedMf.contains(t.meta['scheme_code']),
-                  onFollowMf),
-          ], action: onAddMf == null
-              ? null
-              : TextButton(
-                  onPressed: onAddMf,
-                  child: Text('+ Add fund',
-                      style: mono.copyWith(fontSize: 12, color: green)))),
+          child: LedgerSection('MF',
+              action: onAddMf == null
+                  ? null
+                  : TextButton(
+                      onPressed: onAddMf,
+                      child: Text('+ Add fund',
+                          style: mono.copyWith(fontSize: 12, color: green))),
+              children: [
+                for (final t in mf)
+                  _MfRow(t, data.followedMf.contains(t.meta['scheme_code']),
+                      onFollowMf),
+              ]),
         ),
       if (bonds.isNotEmpty || rbi.isNotEmpty || cb.isNotEmpty)
         (
           id: 'bonds',
           label: 'BONDS',
-          child: _Section('Bonds', [
-            // The curve: benchmark G-Secs by residual tenor (RBI homepage),
-            // evenly spaced - the tenor row underneath is the axis.
-            if (bonds.length >= 2) ...[
-              const SizedBox(height: 10),
-              SizedBox(
-                  height: 40,
-                  child: Sparkline(
-                      [for (final b in bonds) ((b['yield'] ?? 0) as num).toDouble()],
-                      inkDim)),
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                for (final b in bonds)
-                  Text('${b['tenor'] ?? ''}', style: mono.copyWith(fontSize: 10)),
+          child: LedgerSection('Bonds',
+              stamp: data.blobUpdated['bonds'],
+              stampPrefix: 'Stooq',
+              footnote: 'falling yield = green${rbi['asof'] == null ? '' : ' · RBI as of ${rbi['asof']}'}',
+              children: [
+                // The curve: benchmark G-Secs by residual tenor, points at
+                // column centres so the tenor row underneath is the axis.
+                if (bonds.length >= 2) ...[
+                  const SizedBox(height: 12),
+                  LabeledLine(
+                    [for (final b in bonds) ((b['yield'] ?? 0) as num).toDouble()],
+                    [for (final b in bonds) '${b['tenor'] ?? ''}'],
+                    ink,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                KvTable(const ['TENOR', 'YIELD', 'SERIES', 'CHANGE'], [
+                  for (final b in bonds)
+                    (
+                      metric: '${b['tenor'] ?? ''}',
+                      value: '${fmtNum(((b['yield'] ?? 0) as num).toDouble())}%',
+                      third: '${b['name'] ?? 'G-Sec'}',
+                      read: [
+                        if (b['chg_bp'] != null)
+                          '${(b['chg_bp'] as num) >= 0 ? '+' : '−'}${(b['chg_bp'] as num).abs()} bp',
+                        if (b['date'] != null) '${b['date']}',
+                      ].join(' · '),
+                      // Falling yield = rising bond prices, so down is green here.
+                      tone: b['chg_bp'] == null ? 0 : ((b['chg_bp'] as num) <= 0 ? 1 : -1),
+                    ),
+                ]),
+                if (rbi.isNotEmpty) ...[
+                  _groupLabel('RBI POLICY RATES'),
+                  StatGrid(columns: 2, [
+                    for (final (key, label) in const [
+                      ('repo', 'Repo rate'),
+                      ('sdf', 'Standing deposit facility'),
+                      ('msf', 'Marginal standing facility'),
+                      ('bank_rate', 'Bank rate'),
+                      ('reverse_repo', 'Reverse repo'),
+                      ('crr', 'CRR'),
+                      ('slr', 'SLR'),
+                      ('tbill_91d', '91-day T-bill cut-off'),
+                      ('tbill_182d', '182-day T-bill cut-off'),
+                      ('tbill_364d', '364-day T-bill cut-off'),
+                    ])
+                      if (rbi[key] != null)
+                        StatTile(label, '${fmtNum((rbi[key] as num).toDouble())}%'),
+                  ]),
+                ],
+                // The world's policy rates (BIS), under RBI's own box.
+                if (cb.isNotEmpty) ...[
+                  _groupLabel('WORLD POLICY RATES'),
+                  StatGrid(columns: 2, [
+                    for (final (key, label) in const [
+                      ('US', 'Fed funds'),
+                      ('XM', 'ECB deposit'),
+                      ('GB', 'BoE bank rate'),
+                      ('JP', 'BoJ policy'),
+                      ('CN', 'PBoC 1y LPR'),
+                    ])
+                      if (cb[key] is Map)
+                        StatTile(label,
+                            '${fmtNum(((cb[key] as Map)['rate'] as num).toDouble())}%',
+                            sub: '${key == 'XM' ? 'EU' : key} · ${(cb[key] as Map)['asof'] ?? ''}'),
+                  ]),
+                ],
               ]),
-            ],
-            for (final b in bonds)
-              _LineRow(
-                  lead: '${b['tenor'] ?? ''}',
-                  main: '${b['name'] ?? 'G-Sec yield'}',
-                  trail: '${fmtNum(((b['yield'] ?? 0) as num).toDouble())}%',
-                  // Falling yield = rising bond prices, so down is green here.
-                  trailColor: b['chg_bp'] == null
-                      ? null
-                      : ((b['chg_bp'] as num) <= 0 ? green : red),
-                  sub: [
-                    if (b['chg_bp'] != null)
-                      '${(b['chg_bp'] as num) >= 0 ? '+' : '−'}${(b['chg_bp'] as num).abs()} bp',
-                    if (b['date'] != null) '${b['date']}',
-                  ].join(' · ')),
-            for (final (key, label) in const [
-              ('repo', 'Repo rate'),
-              ('sdf', 'Standing deposit facility'),
-              ('msf', 'Marginal standing facility'),
-              ('crr', 'CRR'),
-              ('slr', 'SLR'),
-              ('tbill_91d', '91-day T-bill cut-off'),
-              ('tbill_182d', '182-day T-bill cut-off'),
-              ('tbill_364d', '364-day T-bill cut-off'),
-            ])
-              if (rbi[key] != null)
-                _LineRow(
-                    lead: 'RBI',
-                    main: label,
-                    trail: '${fmtNum((rbi[key] as num).toDouble())}%',
-                    sub: rbi['asof'] == null ? null : '${rbi['asof']}'),
-            // The world's policy rates (BIS), under RBI's own box.
-            for (final (key, label) in const [
-              ('US', 'Fed funds'),
-              ('XM', 'ECB deposit'),
-              ('GB', 'BoE bank rate'),
-              ('JP', 'BoJ policy'),
-              ('CN', 'PBoC 1y LPR'),
-            ])
-              if (cb[key] is Map)
-                _LineRow(
-                    lead: key == 'XM' ? 'EU' : key,
-                    main: label,
-                    trail: '${fmtNum(((cb[key] as Map)['rate'] as num).toDouble())}%',
-                    sub: '${(cb[key] as Map)['asof'] ?? ''}'),
-          ], stamp: data.blobUpdated['bonds']),
         ),
       if (ipos.isNotEmpty)
         (
           id: 'ipos',
           label: 'IPO',
-          child: _Section('IPO', [
-            _Collapsible([
-              for (final i in ipos)
-                _LineRow(
-                    lead: '${i['symbol'] ?? ''}',
-                    main: '${i['company'] ?? ''}',
-                    trail: '${i['status'] ?? ''}',
-                    trailColor: '${i['status']}'.toLowerCase() == 'open'
-                        ? green
-                        : null,
-                    sub: [
-                      if (i['band'] != null) '₹${i['band']}',
-                      if (i['size'] != null) '${i['size']}',
+          child: LedgerSection('IPO', stamp: data.blobUpdated['ipos'], children: [
+            Collapsible([
+              KvTable(const ['SYMBOL', 'BAND ₹', 'SIZE', 'COMPANY · DATES · STATUS'], [
+                for (final i in ipos)
+                  (
+                    metric: '${i['symbol'] ?? ''}',
+                    value: '${i['band'] ?? '—'}',
+                    third: '${i['size'] ?? '—'}',
+                    read: [
+                      if (i['company'] != null) '${i['company']}',
                       if (i['open'] != null || i['close'] != null)
                         '${i['open'] ?? ''}–${i['close'] ?? ''}',
-                    ].join(' · ')),
-            ]),
-          ], stamp: data.blobUpdated['ipos']),
+                      if (i['status'] != null) '${i['status']}',
+                    ].join(' · '),
+                    tone: '${i['status']}'.toLowerCase() == 'open' ? 1 : 0,
+                  ),
+              ]),
+            ], initial: 1),
+          ]),
         ),
       if (macro.isNotEmpty || wb.isNotEmpty)
         (
           id: 'macro',
           label: 'MACRO',
-          child: _Section('Macro', [
+          child: LedgerSection('Macro', children: [
             for (final t in macro) _MacroRow(t),
-            // Annual frame from the World Bank: one row per series, prior year under.
-            for (final e in wb.entries)
-              if (e.value is Map && (e.value as Map)['value'] != null)
-                _LineRow(
-                    lead: '${(e.value as Map)['year'] ?? ''}',
-                    main: '${(e.value as Map)['name'] ?? e.key}',
-                    trail:
-                        '${fmtNum(((e.value as Map)['value'] as num).toDouble(), decimals: 2)}${(e.value as Map)['units'] == '%' ? '%' : ''}',
-                    sub: [
-                      if ((e.value as Map)['units'] != '%') '${(e.value as Map)['units']}',
-                      if ((e.value as Map)['prev'] != null)
-                        'prev ${(e.value as Map)['prev_year'] ?? ''}: ${fmtNum(((e.value as Map)['prev'] as num).toDouble(), decimals: 2)}',
-                    ].join(' · ')),
+            // Annual frame from the World Bank: one row per series.
+            if (wb.values.any((v) => v is Map && v['value'] != null))
+              KvTable(const ['SERIES', 'VALUE', 'YEAR', 'PRIOR'], [
+                for (final e in wb.entries)
+                  if (e.value is Map && (e.value as Map)['value'] != null)
+                    (
+                      metric: '${(e.value as Map)['name'] ?? e.key}',
+                      value:
+                          '${fmtNum(((e.value as Map)['value'] as num).toDouble(), decimals: 2)}${(e.value as Map)['units'] == '%' ? '%' : ''}',
+                      third: '${(e.value as Map)['year'] ?? ''}',
+                      read: [
+                        if ((e.value as Map)['units'] != '%') '${(e.value as Map)['units']}',
+                        if ((e.value as Map)['prev'] != null)
+                          'prev ${(e.value as Map)['prev_year'] ?? ''}: ${fmtNum(((e.value as Map)['prev'] as num).toDouble(), decimals: 2)}',
+                      ].join(' · '),
+                      tone: 0,
+                    ),
+              ]),
           ]),
         ),
       if (quakes.isNotEmpty)
         (
           id: 'quakes',
           label: 'QUAKES',
-          child: _Section('Quakes', [  // last 7 days, M4.5+, India region
-            for (final q in quakes)
-              _LineRow(
-                  lead: 'M${q['mag']}',
-                  main: '${q['place'] ?? ''}',
-                  trail: '${q['time']}'.length >= 10 ? '${q['time']}'.substring(5, 10) : '',
-                  trailColor: ((q['mag'] as num?) ?? 0) >= 6 ? red : null),
-          ], stamp: data.blobUpdated['hazards']),
+          child: LedgerSection('Quakes',
+              stamp: data.blobUpdated['hazards'],
+              stampPrefix: 'USGS',
+              footnote: 'last 7 days · M4.5+ · India region',
+              children: [
+                KvTable(const ['MAG', 'DATE', '', 'PLACE'], [
+                  for (final q in quakes)
+                    (
+                      metric: 'M${q['mag']}',
+                      value: '${q['time']}'.length >= 10 ? '${q['time']}'.substring(5, 10) : '',
+                      third: '',
+                      read: '${q['place'] ?? ''}',
+                      tone: ((q['mag'] as num?) ?? 0) >= 6 ? -1 : 0,
+                    ),
+                ]),
+              ]),
         ),
       if (monsoon['country'] is Map)
         (
           id: 'monsoon',
           label: 'MONSOON',
-          child: _Section('Monsoon', [
-            Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text('IMD · rainfall since 1 June vs normal · ${_dmy(monsoon['asof'])}',
-                    style: mono.copyWith(fontSize: 10))),
-            _depRow('India', (monsoon['country'] as Map).cast<String, dynamic>(), country: true),
-            for (final r in _l(monsoon['regions'])) _depRow('${r['name']}', r),
-            if (_l(monsoon['worst']).isNotEmpty) ...[
-              const SizedBox(height: 14),
-              Text('MOST DEFICIENT', style: monoLabel),
-              for (final r in _l(monsoon['worst'])) _depRow('${r['name']}', r),
-            ],
-          ]),
+          child: LedgerSection('Monsoon',
+              footnote: 'IMD · rainfall since 1 June vs normal · ${dmy(monsoon['asof'])}',
+              children: [
+                _depRow('India', (monsoon['country'] as Map).cast<String, dynamic>(), country: true),
+                for (final r in _l(monsoon['regions'])) _depRow('${r['name']}', r),
+                if (_l(monsoon['worst']).isNotEmpty) ...[
+                  _groupLabel('MOST DEFICIENT'),
+                  for (final r in _l(monsoon['worst'])) _depRow('${r['name']}', r),
+                ],
+              ]),
         ),
       if (results.isNotEmpty)
         (
           id: 'results',
           label: 'RESULTS',
-          child: _Section('Results', [
-            _Collapsible([
-              for (final r in results) _LineRow(
-                  lead: r['symbol']?.toString() ?? '',
-                  main: r['company']?.toString() ?? '',
-                  trail: _dmy(r['date']),
-                  sub: r['purpose']?.toString())
-            ]),
-          ], stamp: data.blobUpdated['results_calendar']),
+          child: LedgerSection('Results', stamp: data.blobUpdated['results_calendar'], children: [
+            Collapsible([
+              KvTable(const ['SYMBOL', 'DATE', '', 'COMPANY · PURPOSE'], [
+                for (final r in results)
+                  (
+                    metric: r['symbol']?.toString() ?? '',
+                    value: dmy(r['date']),
+                    third: '',
+                    read: [
+                      if (r['company'] != null) '${r['company']}',
+                      if (r['purpose'] != null) '${r['purpose']}',
+                    ].join(' · '),
+                    tone: 0,
+                  ),
+              ]),
+            ], initial: 1),
+          ]),
         ),
       if (deals.isNotEmpty)
         (
           id: 'deals',
           label: 'DEALS',
-          child: _Section('Deals', [
-            _Collapsible([
-              for (final d in deals)
-                _LineRow(
-                    lead: d['symbol']?.toString() ?? '',
-                    main: d['client']?.toString() ?? '',
-                    trail: '${d['side']} ₹${_crore(d['value'])}',
-                    trailColor: d['side'] == 'BUY' ? green : red,
-                    sub:
-                        '${d['type']} · ${fmtNum((d['qty'] as num).toDouble(), decimals: 0)} @ ₹${fmtNum((d['price'] as num).toDouble())} · ${d['date'] ?? ''}')
-            ]),
-          ], stamp: data.blobUpdated['bulk_deals']),
+          child: LedgerSection('Deals', stamp: data.blobUpdated['bulk_deals'], children: [
+            Collapsible([
+              KvTable(const ['SYMBOL', 'QTY', 'PRICE', 'CLIENT · SIDE'], [
+                for (final d in deals)
+                  (
+                    metric: d['symbol']?.toString() ?? '',
+                    value: fmtNum((d['qty'] as num).toDouble(), decimals: 0),
+                    third: '₹${fmtNum((d['price'] as num).toDouble())}',
+                    read:
+                        '${d['client'] ?? ''} · ${d['side']} ₹${_crore(d['value'])} · ${d['type']} · ${d['date'] ?? ''}',
+                    tone: d['side'] == 'BUY' ? 1 : -1,
+                  ),
+              ]),
+            ], initial: 1),
+          ]),
         ),
       if (insider.isNotEmpty)
         (
           id: 'insider',
           label: 'INSIDER',
-          child: _Section('Insider', [
-            _Collapsible([
-              for (final i in insider)
-                _LineRow(
-                    lead: i['symbol']?.toString() ?? '',
-                    main: i['person']?.toString() ?? '',
-                    trail: '${i['side'] ?? ''} ${i['qty'] ?? ''}',
-                    trailColor: '${i['side']}'.toLowerCase().startsWith('b')
-                        ? green
-                        : red,
-                    sub: '${i['category'] ?? ''} · ${i['mode'] ?? ''} · ${i['date'] ?? ''}')
-            ]),
-          ], stamp: data.blobUpdated['insider_trades']),
+          child: LedgerSection('Insider', stamp: data.blobUpdated['insider_trades'], children: [
+            Collapsible([
+              KvTable(const ['SYMBOL', 'QTY', 'SIDE', 'PERSON · CATEGORY'], [
+                for (final i in insider)
+                  (
+                    metric: i['symbol']?.toString() ?? '',
+                    value: '${i['qty'] ?? ''}',
+                    third: '${i['side'] ?? ''}'.toUpperCase(),
+                    read: '${i['person'] ?? ''} · ${i['category'] ?? ''} · ${i['mode'] ?? ''} · ${i['date'] ?? ''}',
+                    tone: '${i['side']}'.toLowerCase().startsWith('b') ? 1 : -1,
+                  ),
+              ]),
+            ], initial: 1),
+          ]),
         ),
     ];
   }
@@ -933,7 +937,7 @@ class _MarketsBodyState extends State<MarketsBody> {
   Widget build(BuildContext context) {
     final data = widget.data;
     final secs = _sections();
-    _ids = [for (final s in secs) s.id];
+    _tracker.ids = [for (final s in secs) s.id];
     final stale = _stale(data.updatedAt);
     final scroll = SingleChildScrollView(
       key: const Key('marketsScroll'),
@@ -950,12 +954,12 @@ class _MarketsBodyState extends State<MarketsBody> {
                   textAlign: TextAlign.center,
                   style: mono.copyWith(fontSize: 13, height: 1.6)),
             ),
-          for (final s in secs) KeyedSubtree(key: _key(s.id), child: s.child),
+          for (final s in secs) KeyedSubtree(key: _tracker.key(s.id), child: s.child),
           const SizedBox(height: 20),
           Text(
               [
                 if (data.updatedAt != null)
-                  'as of ${_hhmmIst(data.updatedAt!)} IST',
+                  'as of ${hhmmIst(data.updatedAt!)} IST',
                 if (stale) 'stale — pipeline has not refreshed',
                 'Yahoo Finance · CoinGecko · mfapi.in · NSE · delayed',
               ].join(' · '),
@@ -965,10 +969,11 @@ class _MarketsBodyState extends State<MarketsBody> {
     );
     if (secs.length < 2) return scroll;
     return Column(children: [
-      SectionRibbon([for (final s in secs) (id: s.id, label: s.label)], _active, _jump),
+      SectionRibbon([for (final s in secs) (id: s.id, label: s.label)],
+          _tracker.active, _tracker.jump),
       Expanded(
         child: NotificationListener<ScrollUpdateNotification>(
-          onNotification: _track,
+          onNotification: _tracker.track,
           child: scroll,
         ),
       ),
@@ -982,33 +987,43 @@ List<Map<String, dynamic>> _l(Object? v) => [
         Map<String, dynamic>.from(r as Map)
     ];
 
-String _oiTrail(num? v) {
-  final d = (v ?? 0).toDouble();
-  return '${d >= 0 ? '+' : '−'}${d.abs().toStringAsFixed(1)}% OI';
+Widget _groupLabel(String s) => Padding(
+      padding: const EdgeInsets.fromLTRB(0, 14, 0, 6),
+      child: Text(s, style: mono.copyWith(fontSize: 10)),
+    );
+
+/// Nine swatches, most-negative → most-positive, with the horizon's range.
+Widget _heatLegend(double scale) {
+  final r = scale.toStringAsFixed(0);
+  return Row(children: [
+    Text('−$r%', style: mono.copyWith(fontSize: 9)),
+    const SizedBox(width: 6),
+    for (final c in heatSwatches(scale: scale))
+      SizedBox(width: 20, height: 8, child: ColoredBox(color: c)),
+    const SizedBox(width: 6),
+    Text('+$r%', style: mono.copyWith(fontSize: 9)),
+    const Spacer(),
+    Text('bar = advances vs declines', style: mono.copyWith(fontSize: 9)),
+  ]);
 }
 
-String _fnoSub(Map<String, dynamic> r) => [
-      if (r['ltp'] != null) '₹${fmtNum((r['ltp'] as num).toDouble())}',
-      if (r['pct'] != null) fmtPct((r['pct'] as num).toDouble()),
-    ].join(' · ');
+KvRow _oiRow(Map<String, dynamic> r, String what) {
+  final oi = ((r['oi_pct'] ?? 0) as num).toDouble();
+  final pct = (r['pct'] as num?)?.toDouble();
+  return (
+    metric: '${r['symbol']}',
+    value: r['ltp'] == null ? '—' : '₹${fmtNum((r['ltp'] as num).toDouble())}',
+    third: '${oi >= 0 ? '+' : '−'}${oi.abs().toStringAsFixed(1)}% OI',
+    read: [if (pct != null) fmtPct(pct), what].join(' · '),
+    tone: pct == null ? 0 : (pct >= 0 ? 1 : -1),
+  );
+}
 
 /// Two hours is 2x the slowest Phase-1 cadence (equities off-hours); older
 /// than that the numbers are shown but called out, never passed off as live.
 bool _stale(DateTime? updatedAt) =>
     updatedAt != null &&
     DateTime.now().difference(updatedAt) > const Duration(hours: 2);
-
-String _hhmmIst(DateTime t) {
-  final ist = t.toUtc().add(const Duration(hours: 5, minutes: 30));
-  return '${ist.hour.toString().padLeft(2, '0')}:${ist.minute.toString().padLeft(2, '0')}';
-}
-
-String _dmy(Object? iso) {
-  final d = DateTime.tryParse('$iso');
-  if (d == null) return '$iso';
-  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return '${d.day} ${m[d.month - 1]}';
-}
 
 /// ₹ value -> "24.7 Cr" / "85 L" — deal sizes read in crores here, nowhere else.
 String _crore(Object? v) {
@@ -1029,16 +1044,27 @@ const _componentNames = {
   'news': 'News spikes',
 };
 
-/// Score + label head row, then one row per 0-100 component. A number reads
-/// fine; an arc gauge is a painter this file doesn't have — add if asked.
-List<Widget> _gaugeRows(String name, Map<String, dynamic> g, Color? color) {
+/// Score row + a 0-100 scale bar, then one bar row per component.
+/// [lowIsRed] flips the zone colours: fear is low on Fear & Greed, risk is high.
+List<Widget> _gaugeRows(String name, Map<String, dynamic> g, Color color,
+    {required bool lowIsRed}) {
   final comps = (g['components'] as Map?)?.cast<String, dynamic>() ?? const {};
+  final score = ((g['score'] ?? 0) as num).toDouble();
   return [
-    _LineRow(lead: '${g['score']}', main: name, trail: '${g['label']}',
-        trailColor: color),
+    LedgerRow(main: name, trail: '${g['label']}', trailColor: color,
+        sub: 'score ${g['score']}'),
+    const SizedBox(height: 4),
+    ScaleBar(score, zones: [
+      (0, 30, lowIsRed ? red : green),
+      (30, 70, amber),
+      (70, 100, lowIsRed ? green : red),
+    ]),
+    const SizedBox(height: 8),
     for (final e in comps.entries)
-      _LineRow(lead: '', main: _componentNames[e.key] ?? e.key,
-          trail: '${e.value}'),
+      LedgerRow(
+          main: _componentNames[e.key] ?? e.key,
+          trail: '${e.value}',
+          bar: ((e.value as num?) ?? 0).toDouble() / 100),
   ];
 }
 
@@ -1050,22 +1076,27 @@ Widget _poiRow(String who, Map<String, dynamic> r) {
   final net = ((r['net_fut_idx'] ?? 0) as num).toDouble();
   final prev = (r['prev_net_fut_idx'] as num?)?.toDouble();
   final d = prev == null ? null : net - prev;
-  return _LineRow(
+  final long = ((r['total_long'] ?? 0) as num).toDouble();
+  final short = ((r['total_short'] ?? 0) as num).toDouble();
+  return LedgerRow(
       lead: who,
       main: 'net index futures',
       trail: '${net >= 0 ? '+' : ''}${fmtNum(net, decimals: 0)}',
       trailColor: net >= 0 ? green : red,
+      bar: long + short == 0 ? null : long / (long + short),
+      barColor: green,
+      barTrack: red.withValues(alpha: 0.35),
       sub: [
         if (d != null) 'Δ ${d >= 0 ? '+' : ''}${fmtNum(d, decimals: 0)} d/d',
-        'long ${fmtNum(((r['total_long'] ?? 0) as num).toDouble(), decimals: 0)} · short ${fmtNum(((r['total_short'] ?? 0) as num).toDouble(), decimals: 0)}',
+        'long ${fmtNum(long, decimals: 0)} · short ${fmtNum(short, decimals: 0)}',
       ].join(' · '));
 }
 
 /// IMD departure row: red past -19% (deficient), green past +19% (excess).
 Widget _depRow(String name, Map<String, dynamic> r, {bool country = false}) {
   final dep = ((r['dep_pct'] ?? 0) as num).toInt();
-  return _LineRow(
-      lead: country ? 'INDIA' : '',
+  return LedgerRow(
+      lead: country ? 'INDIA' : null,
       main: name,
       trail: '${dep >= 0 ? '+' : '−'}${dep.abs()}%',
       trailColor: dep < -19 ? red : dep > 19 ? green : null,
@@ -1098,9 +1129,9 @@ class _SessionsState extends State<_Sessions> {
   }
 
   @override
-  Widget build(BuildContext context) => _Section('Sessions', [
+  Widget build(BuildContext context) => LedgerSection('Sessions', children: [
         for (final s in sessionStates(DateTime.now().toUtc()))
-          _LineRow(
+          LedgerRow(
               lead: s.name,
               main: s.note,
               trail: '●',
@@ -1108,64 +1139,51 @@ class _SessionsState extends State<_Sessions> {
       ]);
 }
 
-Widget _moveRow(Map<String, dynamic> m, String main) {
+Widget _moveRow(Map<String, dynamic> m, String main, {VoidCallback? onTap}) {
   final chg = (m['chg'] as num?)?.toDouble();
-  return _LineRow(lead: '${m['symbol'] ?? ''}', main: main, trail: fmtPct(chg),
-      trailColor: chg == null ? null : (chg >= 0 ? green : red));
+  return LedgerRow(lead: '${m['symbol'] ?? ''}', main: main, trail: fmtPct(chg),
+      trailColor: chg == null ? null : (chg >= 0 ? green : red), onTap: onTap);
 }
 
-class _Section extends StatelessWidget {
-  const _Section(this.title, this.children, {this.action, this.stamp});
-  final String title;
-  final List<Widget> children;
-  final Widget? action;
-  final DateTime? stamp;
-
-  @override
-  Widget build(BuildContext context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 22),
-          Row(children: [
-            Expanded(child: Text(title.toUpperCase(), style: monoLabel)),
-            if (stamp != null)
-              Text('NSE · ${_hhmmIst(stamp!)}', style: mono.copyWith(fontSize: 10)),
-            if (action != null) action!,
-          ]),
-          const SizedBox(height: 6),
-          const Divider(height: 1),
-          ...children,
-        ],
-      );
+/// FII/DII cash-market: net in the row, buy vs sell as paired bars. ₹ Cr.
+List<Widget> _flowRows(String who, Map<String, dynamic> d, String? date) {
+  final net = (d['net'] as num?)?.toDouble() ?? 0;
+  final buy = ((d['buy'] ?? 0) as num).toDouble();
+  final sell = ((d['sell'] ?? 0) as num).toDouble();
+  return [
+    LedgerRow(
+        lead: who,
+        main: 'cash market${date == null ? '' : ' · $date'}',
+        trail: '${net >= 0 ? '+' : '−'}₹${fmtNum(net.abs(), decimals: 0)} Cr',
+        trailColor: net >= 0 ? green : red),
+    Padding(
+      padding: const EdgeInsets.fromLTRB(0, 6, 0, 10),
+      child: Column(children: [
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text('buy ₹${fmtNum(buy, decimals: 0)} Cr', style: mono.copyWith(fontSize: 10)),
+          Text('sell ₹${fmtNum(sell, decimals: 0)} Cr', style: mono.copyWith(fontSize: 10)),
+        ]),
+        const SizedBox(height: 3),
+        PairedBar(buy, sell),
+      ]),
+    ),
+  ];
 }
 
-/// Long lists start at 6 rows; "show all N" expands in place.
-class _Collapsible extends StatefulWidget {
-  const _Collapsible(this.rows);
-  final List<Widget> rows;
+/// advances vs declines (or new highs vs lows): counts on the right, the
+/// green share of a red track underneath.
+Widget _breadthRow(String lead, num adv, num dec, {String main = 'advance / decline'}) =>
+    LedgerRow(
+        lead: lead,
+        main: main,
+        trail: '${adv is int ? adv : adv.toInt()}↑ ${dec is int ? dec : dec.toInt()}↓',
+        trailColor: adv >= dec ? green : red,
+        bar: adv + dec == 0 ? 0 : adv / (adv + dec),
+        barColor: green,
+        barTrack: red.withValues(alpha: 0.35));
 
-  @override
-  State<_Collapsible> createState() => _CollapsibleState();
-}
-
-class _CollapsibleState extends State<_Collapsible> {
-  bool _all = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final rows = _all ? widget.rows : widget.rows.take(6).toList();
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      ...rows,
-      if (!_all && widget.rows.length > 6)
-        TextButton(
-            onPressed: () => setState(() => _all = true),
-            child: Text('show all ${widget.rows.length}',
-                style: mono.copyWith(fontSize: 12, color: green))),
-    ]);
-  }
-}
-
-/// One instrument: name (+ label) left, price and % right, optional sparkline.
+/// One instrument: name (+ label) left, sparkline, price and % in a fixed
+/// 84px column so the section shares one right edge.
 class _TickRow extends StatelessWidget {
   const _TickRow(this.t, {this.spark = false});
   final Tick t;
@@ -1176,7 +1194,7 @@ class _TickRow extends StatelessWidget {
     final color = t.changePct == null ? inkDim : (t.up ? green : red);
     final label = t.meta['label'] as String?;
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 11),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: const BoxDecoration(
           border: Border(bottom: BorderSide(color: border))),
       child: Row(children: [
@@ -1193,14 +1211,18 @@ class _TickRow extends StatelessWidget {
               ]),
         ),
         if (spark && t.closes.length > 1)
-          SizedBox(width: 64, height: 22, child: Sparkline(t.closes, color)),
+          SizedBox(width: 80, height: 24, child: Sparkline(t.closes, color)),
         const SizedBox(width: 14),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text(fmtMoney(t.price, t.currency),
-              style: mono.copyWith(fontSize: 14, color: ink)),
-          Text(fmtPct(t.changePct),
-              style: mono.copyWith(fontSize: 11, color: color)),
-        ]),
+        SizedBox(
+          width: 84,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(fmtMoney(t.price, t.currency),
+                maxLines: 1,
+                style: mono.copyWith(fontSize: 14, color: ink)),
+            Text(fmtPct(t.changePct),
+                style: mono.copyWith(fontSize: 11, color: color)),
+          ]),
+        ),
       ]),
     );
   }
@@ -1220,7 +1242,7 @@ class _CompanyRow extends StatelessWidget {
       onTap: () => Navigator.of(context)
           .push(MaterialPageRoute(builder: (_) => StockScreen(company: c))),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 11),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: const BoxDecoration(
             border: Border(bottom: BorderSide(color: border))),
         child: Row(children: [
@@ -1236,15 +1258,19 @@ class _CompanyRow extends StatelessWidget {
                       style: serif.copyWith(fontSize: 14)),
                 ]),
           ),
-          if (t != null)
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text(fmtMoney(t!.price, t!.currency),
-                  style: mono.copyWith(fontSize: 14, color: ink)),
-              Text(fmtPct(t!.changePct),
-                  style: mono.copyWith(fontSize: 11, color: color)),
-            ])
-          else
-            Text('—', style: mono.copyWith(fontSize: 13)),
+          SizedBox(
+            width: 84,
+            child: t != null
+                ? Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Text(fmtMoney(t!.price, t!.currency),
+                        maxLines: 1,
+                        style: mono.copyWith(fontSize: 14, color: ink)),
+                    Text(fmtPct(t!.changePct),
+                        style: mono.copyWith(fontSize: 11, color: color)),
+                  ])
+                : Text('—',
+                    textAlign: TextAlign.end, style: mono.copyWith(fontSize: 13)),
+          ),
           const SizedBox(width: 6),
           const Icon(Icons.north_east_rounded, size: 12, color: inkDim),
         ]),
@@ -1297,12 +1323,16 @@ class _MfRow extends StatelessWidget {
               ]),
         ),
         const SizedBox(width: 10),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text('₹${fmtNum(t.price, decimals: 2)}',
-              style: mono.copyWith(fontSize: 13, color: ink)),
-          Text(fmtPct(t.changePct),
-              style: mono.copyWith(fontSize: 11, color: color)),
-        ]),
+        SizedBox(
+          width: 84,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text('₹${fmtNum(t.price, decimals: 2)}',
+                maxLines: 1,
+                style: mono.copyWith(fontSize: 13, color: ink)),
+            Text(fmtPct(t.changePct),
+                style: mono.copyWith(fontSize: 11, color: color)),
+          ]),
+        ),
       ]),
     );
   }
@@ -1321,7 +1351,7 @@ class _MacroRow extends StatelessWidget {
     String val(double v) =>
         units == '%' ? '${v.toStringAsFixed(2)}%' : fmtNum(v, indian: units == 'INR');
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 11),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: const BoxDecoration(
           border: Border(bottom: BorderSide(color: border))),
       child: Row(children: [
@@ -1340,33 +1370,25 @@ class _MacroRow extends StatelessWidget {
         ),
         if (t.closes.length > 1)
           SizedBox(
-              width: 64,
-              height: 22,
+              width: 80,
+              height: 24,
               child: Sparkline(t.closes,
                   delta == null ? inkDim : (delta >= 0 ? green : red))),
         const SizedBox(width: 14),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text(val(t.price), style: mono.copyWith(fontSize: 14, color: ink)),
-          if (delta != null)
-            Text('${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(2)}',
-                style: mono.copyWith(
-                    fontSize: 11, color: delta >= 0 ? green : red)),
-        ]),
+        SizedBox(
+          width: 84,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(val(t.price),
+                maxLines: 1, style: mono.copyWith(fontSize: 14, color: ink)),
+            if (delta != null)
+              Text('${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(2)}',
+                  style: mono.copyWith(
+                      fontSize: 11, color: delta >= 0 ? green : red)),
+          ]),
+        ),
       ]),
     );
   }
-}
-
-/// FII/DII cash-market line: net first, buy/sell underneath. Values are ₹ Cr.
-Widget _flowRow(String who, Map<String, dynamic> d, String? date) {
-  final net = (d['net'] as num?)?.toDouble() ?? 0;
-  return _LineRow(
-      lead: who,
-      main: 'cash market${date == null ? '' : ' · $date'}',
-      trail: '${net >= 0 ? '+' : '−'}₹${fmtNum(net.abs(), decimals: 0)} Cr',
-      trailColor: net >= 0 ? green : red,
-      sub:
-          'buy ₹${fmtNum(((d['buy'] ?? 0) as num).toDouble(), decimals: 0)} Cr · sell ₹${fmtNum(((d['sell'] ?? 0) as num).toDouble(), decimals: 0)} Cr');
 }
 
 /// Tile names must survive a 3-across grid; only the long ones get overrides,
@@ -1386,13 +1408,19 @@ String _sectorName(Map<String, dynamic> s) {
   return _shortSector[n] ?? n;
 }
 
-/// One NSE index group inside SECTORS: dim label + heat grid. Sectoral opens
-/// in full; the other groups start at 6 tiles with a "show all N" expander.
+double? _num(Object? v) => v == null ? null : double.tryParse('$v');
+
+/// One NSE index group inside SECTORS: dim label + heat grid sorted by the
+/// chosen horizon. Sectoral opens in full; the other groups start at 6 tiles
+/// with a "show all N" expander.
 class _HeatGroup extends StatefulWidget {
-  const _HeatGroup(this.label, this.rows, {this.expanded = false});
+  const _HeatGroup(this.label, this.rows,
+      {this.expanded = false, this.field = 'pct', this.scale = 3});
   final String label;
   final List<Map<String, dynamic>> rows;
   final bool expanded;
+  final String field;
+  final double scale;
 
   @override
   State<_HeatGroup> createState() => _HeatGroupState();
@@ -1403,20 +1431,33 @@ class _HeatGroupState extends State<_HeatGroup> {
 
   @override
   Widget build(BuildContext context) {
-    final tiles = _all ? widget.rows : widget.rows.take(6).toList();
+    final sorted = [...widget.rows]..sort((a, b) {
+        final va = _num(a[widget.field]), vb = _num(b[widget.field]);
+        if (va == null) return vb == null ? 0 : 1;
+        if (vb == null) return -1;
+        return vb.compareTo(va);
+      });
+    final tiles = _all ? sorted : sorted.take(6).toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const SizedBox(height: 10),
       Text(widget.label, style: mono.copyWith(fontSize: 10, color: inkDim)),
       const SizedBox(height: 6),
-      GridView.count(
-        crossAxisCount: 3,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-        childAspectRatio: 1.55,
-        children: [for (final s in tiles) _HeatTile(s)],
-      ),
+      StatGrid([
+        for (final s in tiles)
+          Builder(builder: (context) {
+            final adv = _num(s['advances']), dec = _num(s['declines']);
+            final hasBreadth = adv != null && dec != null && adv + dec > 0;
+            return HeatCell(_sectorName(s), _num(s[widget.field]),
+                scale: widget.scale,
+                bar: hasBreadth ? adv / (adv + dec) : null,
+                barColor: green,
+                barTrack: red.withValues(alpha: 0.35),
+                sub: hasBreadth || s['last'] == null
+                    ? null
+                    : fmtNum(_num(s['last']) ?? 0, decimals: 0),
+                onTap: () => _showSectorSheet(context, s));
+          }),
+      ]),
       if (!_all && widget.rows.length > 6)
         TextButton(
             onPressed: () => setState(() => _all = true),
@@ -1426,58 +1467,22 @@ class _HeatGroupState extends State<_HeatGroup> {
   }
 }
 
-/// Sector heatmap tile: tinted by today's %, tap for the full NSE row.
-class _HeatTile extends StatelessWidget {
-  const _HeatTile(this.s);
-  final Map<String, dynamic> s;
-
-  @override
-  Widget build(BuildContext context) {
-    final pct = (s['pct'] as num?)?.toDouble();
-    final c = pct == null ? inkDim : (pct >= 0 ? green : red);
-    final last = (s['last'] as num?)?.toDouble();
-    return InkWell(
-      onTap: () => _showSectorSheet(context, s),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-        decoration: BoxDecoration(
-            color: c.withValues(alpha: (pct?.abs() ?? 0).clamp(0.4, 2.5) / 10),
-            border: Border.all(color: c.withValues(alpha: 0.45))),
-        child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(_sectorName(s),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: mono.copyWith(fontSize: 10, color: ink)),
-              Text(fmtPct(pct), style: mono.copyWith(fontSize: 13, color: c)),
-              if (last != null)
-                Text(fmtNum(last, decimals: 0),
-                    style: mono.copyWith(fontSize: 9)),
-            ]),
-      ),
-    );
-  }
-}
-
 /// Everything NSE gives us for one sectoral index — the tile shows two fields,
 /// this sheet shows the rest. Values arrive as num or string; parse leniently.
 void _showSectorSheet(BuildContext context, Map<String, dynamic> s) {
-  double? n(Object? v) => v == null ? null : double.tryParse('$v');
   Color pctColor(double? v) => v == null ? inkDim : (v >= 0 ? green : red);
-  final pct = n(s['pct']);
-  final d30 = n(s['pct_30d']);
-  final y1 = n(s['pct_1y']);
-  final adv = n(s['advances']);
-  final dec = n(s['declines']);
-  final hi = n(s['year_high']);
-  final lo = n(s['year_low']);
-  final pe = n(s['pe']);
+  final pct = _num(s['pct']);
+  final d30 = _num(s['pct_30d']);
+  final y1 = _num(s['pct_1y']);
+  final adv = _num(s['advances']);
+  final dec = _num(s['declines']);
+  final hi = _num(s['year_high']);
+  final lo = _num(s['year_low']);
+  final pe = _num(s['pe']);
   showModalBottomSheet<void>(
     context: context,
     backgroundColor: surface,
-    builder: (_) => Padding(
+    builder: (_) => SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
       child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1486,35 +1491,31 @@ void _showSectorSheet(BuildContext context, Map<String, dynamic> s) {
             Text('${s['index'] ?? ''}'.toUpperCase(), style: monoLabel),
             const SizedBox(height: 6),
             const Divider(height: 1),
-            _LineRow(
+            LedgerRow(
                 lead: 'TODAY',
-                main: n(s['last']) == null
+                main: _num(s['last']) == null
                     ? 'change'
-                    : 'level ${fmtNum(n(s['last'])!, decimals: 0)}',
+                    : 'level ${fmtNum(_num(s['last'])!, decimals: 0)}',
                 trail: fmtPct(pct),
                 trailColor: pctColor(pct)),
             if (pe != null)
-              _LineRow(lead: 'P/E', main: 'valuation', trail: fmtNum(pe)),
+              LedgerRow(lead: 'P/E', main: 'valuation', trail: fmtNum(pe)),
             if (adv != null && dec != null)
-              _LineRow(
-                  lead: 'BREADTH',
-                  main: 'advance / decline',
-                  trail: '${adv.toInt()}↑ ${dec.toInt()}↓',
-                  trailColor: adv >= dec ? green : red),
+              _breadthRow('BREADTH', adv, dec),
             if (d30 != null)
-              _LineRow(
+              LedgerRow(
                   lead: '30D',
                   main: 'one month',
                   trail: fmtPct(d30),
                   trailColor: pctColor(d30)),
             if (y1 != null)
-              _LineRow(
+              LedgerRow(
                   lead: '1Y',
                   main: 'one year',
                   trail: fmtPct(y1),
                   trailColor: pctColor(y1)),
             if (hi != null && lo != null)
-              _LineRow(
+              LedgerRow(
                   lead: '52W',
                   main: 'high / low',
                   trail:
@@ -1522,53 +1523,6 @@ void _showSectorSheet(BuildContext context, Map<String, dynamic> s) {
           ]),
     ),
   );
-}
-
-/// Lead (symbol) · main text · trailing value, with a sub-line. Used for the
-/// three NSE lists so they all read the same.
-class _LineRow extends StatelessWidget {
-  const _LineRow(
-      {required this.lead,
-      required this.main,
-      required this.trail,
-      this.trailColor,
-      this.sub});
-  final String lead, main, trail;
-  final Color? trailColor;
-  final String? sub;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 9),
-        decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: border))),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          SizedBox(
-              width: 86,
-              child: Text(lead,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: mono.copyWith(fontSize: 12, color: ink))),
-          Expanded(
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(main,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: serif.copyWith(fontSize: 13)),
-                  if (sub != null && sub!.isNotEmpty)
-                    Text(sub!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: mono.copyWith(fontSize: 10)),
-                ]),
-          ),
-          const SizedBox(width: 8),
-          Text(trail,
-              style: mono.copyWith(fontSize: 12, color: trailColor ?? ink)),
-        ]),
-      );
 }
 
 /// Search mfapi.in (keyless, straight from the phone like Yahoo on the stock

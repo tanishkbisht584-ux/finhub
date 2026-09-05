@@ -66,11 +66,13 @@ void main() {
       Expanded(child: HeatCell('IT', null, sub: 'lvl')),
       Expanded(child: HeatCell('Bank', 1.234, bar: 0.6)),
       Expanded(child: HeatCell('Auto', -0.5, pctText: '−0.5 bp')),
+      Expanded(child: HeatCell('Oil', -2.3)),
     ])));
     expect(find.text('—'), findsOneWidget);
     expect(find.text('lvl'), findsOneWidget);
     expect(find.text('+1.23%'), findsOneWidget);
     expect(find.text('−0.5 bp'), findsOneWidget);
+    expect(find.text('−2.30%'), findsOneWidget);
   });
 
   testWidgets('Collapsible shows initial rows then all', (tester) async {

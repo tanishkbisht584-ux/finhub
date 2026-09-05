@@ -417,7 +417,7 @@ List<String> companyEventLines(Map<String, dynamic> blobs, String symbol) {
   final out = <String>[];
   for (final r in (blobs['results_calendar'] as List? ?? const [])) {
     if (r['symbol'] == symbol) {
-      out.add('Board meeting ${_dmy(r['date'])} — ${r['purpose'] ?? 'results'}');
+      out.add('Board meeting ${dmy(r['date'])} — ${r['purpose'] ?? 'results'}');
     }
   }
   final deals = (blobs['bulk_deals'] as Map?)?['deals'] as List? ?? const [];
@@ -437,9 +437,13 @@ List<String> companyEventLines(Map<String, dynamic> blobs, String symbol) {
   return out;
 }
 
-String _dmy(Object? iso) {
+String dmy(Object? iso) {
   final d = DateTime.tryParse('$iso');
   if (d == null) return '$iso';
   const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return '${d.day} ${m[d.month - 1]}';
 }
+
+/// One row of a labelled four-column table (KvTable): metric · value ·
+/// third · read, with a tone (-1 red, 0 ink, +1 green) for the read cell.
+typedef KvRow = ({String metric, String value, String third, String read, int tone});

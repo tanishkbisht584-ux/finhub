@@ -6,9 +6,6 @@ import 'models.dart';
 ///
 /// Tone is -1 / 0 / +1 (red / ink / green) so this file stays Flutter-free.
 
-/// One row of a labelled table: metric · value · third column · read.
-typedef KvRow = ({String metric, String value, String third, String read, int tone});
-
 /// One bordered tile: label · value · optional sub line.
 typedef Stat = ({String label, String value, String? sub, int tone});
 

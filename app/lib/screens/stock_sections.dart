@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../analysis.dart';
 import '../fundamentals.dart';
 import '../heat.dart';
 import '../ledger.dart';
@@ -76,71 +75,6 @@ const shareholdingRows = [
   ('Employee Trusts %', 'employee_trusts', CellFmt.pct),
   ('No. of Shareholders', 'n_holders', CellFmt.cr),
 ];
-
-/// Labelled text table for FUNDAMENTALS / TECHNICALS: metric · value · third
-/// · read. Numeric columns right-aligned, the read column wraps.
-class KvTable extends StatelessWidget {
-  const KvTable(this.columns, this.rows, {super.key});
-  final List<String> columns; // 4 headers
-  final List<KvRow> rows;
-
-  static Color toneColor(int tone) => tone > 0 ? green : tone < 0 ? red : ink;
-
-  @override
-  Widget build(BuildContext context) {
-    if (rows.isEmpty) return const SizedBox.shrink();
-    Widget cell(String s,
-            {bool head = false, bool right = true, Color? color, bool wrap = false}) =>
-        Container(
-          constraints: const BoxConstraints(minHeight: 28),
-          alignment: right ? Alignment.centerRight : Alignment.centerLeft,
-          padding: EdgeInsets.only(left: right ? 6 : 0),
-          child: Text(s,
-              maxLines: wrap ? 2 : 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: right ? TextAlign.right : TextAlign.left,
-              style: mono.copyWith(
-                  fontSize: head ? 10 : 11,
-                  letterSpacing: head ? 0.6 : 0,
-                  color: color ?? (head ? inkDim : ink))),
-        );
-    Color valueColor(String v) =>
-        v.startsWith('+') ? green : v.startsWith('−') ? red : ink;
-    return Table(
-      columnWidths: const {
-        0: FixedColumnWidth(92),
-        1: FlexColumnWidth(1.1),
-        2: FlexColumnWidth(0.9),
-        3: FlexColumnWidth(1.5),
-      },
-      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-      children: [
-        TableRow(
-          decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: border))),
-          children: [
-            cell(columns[0], head: true, right: false),
-            cell(columns[1], head: true),
-            cell(columns[2], head: true),
-            Padding(
-                padding: const EdgeInsets.only(left: 10),
-                child: cell(columns[3], head: true, right: false)),
-          ],
-        ),
-        for (final r in rows)
-          TableRow(children: [
-            cell(r.metric, right: false),
-            cell(r.value, color: valueColor(r.value)),
-            cell(r.third, color: inkDim),
-            Padding(
-                padding: const EdgeInsets.only(left: 10),
-                child: cell(r.read,
-                    right: false, wrap: true, color: toneColor(r.tone))),
-          ]),
-      ],
-    );
-  }
-}
 
 /// Sticky label column + horizontally scrollable period columns. reverse:true
 /// starts the scroll at the newest period (Screener keeps oldest on the left).

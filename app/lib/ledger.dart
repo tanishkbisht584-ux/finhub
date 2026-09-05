@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'heat.dart';
+import 'models.dart';
 import 'theme.dart';
 
 /// The ledger kit: one section header, one row, one tile, one heat cell, one
@@ -244,7 +245,7 @@ class HeatCell extends StatelessWidget {
                 pctText ??
                     (pct == null
                         ? '—'
-                        : '${pct! > 0 ? '+' : ''}${pct!.toStringAsFixed(2)}%'),
+                        : '${pct! > 0 ? '+' : pct! < 0 ? '−' : ''}${pct!.abs().toStringAsFixed(2)}%'),
                 style: mono.copyWith(
                     fontSize: 13, color: neutral ? inkDim : c)),
             if (bar != null) ...[
@@ -344,5 +345,71 @@ class _CollapsibleState extends State<Collapsible> {
             child: Text('show all ${widget.rows.length}',
                 style: mono.copyWith(fontSize: 12, color: green))),
     ]);
+  }
+}
+
+/// Labelled four-column table: metric · value · third · read. Value and
+/// third colour themselves by a leading +/−; the read column wraps and takes
+/// the row's tone. Stock ratios, F&O lists, deals, IPOs all read the same.
+class KvTable extends StatelessWidget {
+  const KvTable(this.columns, this.rows, {super.key});
+  final List<String> columns; // 4 headers
+  final List<KvRow> rows;
+
+  static Color toneColor(int tone) => tone > 0 ? green : tone < 0 ? red : ink;
+
+  @override
+  Widget build(BuildContext context) {
+    if (rows.isEmpty) return const SizedBox.shrink();
+    Widget cell(String s,
+            {bool head = false, bool right = true, Color? color, bool wrap = false}) =>
+        Container(
+          constraints: const BoxConstraints(minHeight: 28),
+          alignment: right ? Alignment.centerRight : Alignment.centerLeft,
+          padding: EdgeInsets.only(left: right ? 6 : 0),
+          child: Text(s,
+              maxLines: wrap ? 2 : 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: right ? TextAlign.right : TextAlign.left,
+              style: mono.copyWith(
+                  fontSize: head ? 10 : 11,
+                  letterSpacing: head ? 0.6 : 0,
+                  color: color ?? (head ? inkDim : ink))),
+        );
+    Color valueColor(String v) =>
+        v.startsWith('+') ? green : v.startsWith('−') ? red : ink;
+    return Table(
+      columnWidths: const {
+        0: FixedColumnWidth(92),
+        1: FlexColumnWidth(1.1),
+        2: FlexColumnWidth(0.9),
+        3: FlexColumnWidth(1.5),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        TableRow(
+          decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: border))),
+          children: [
+            cell(columns[0], head: true, right: false),
+            cell(columns[1], head: true),
+            cell(columns[2], head: true),
+            Padding(
+                padding: const EdgeInsets.only(left: 10),
+                child: cell(columns[3], head: true, right: false)),
+          ],
+        ),
+        for (final r in rows)
+          TableRow(children: [
+            cell(r.metric, right: false),
+            cell(r.value, color: valueColor(r.value)),
+            cell(r.third, color: inkDim),
+            Padding(
+                padding: const EdgeInsets.only(left: 10),
+                child: cell(r.read,
+                    right: false, wrap: true, color: toneColor(r.tone))),
+          ]),
+      ],
+    );
   }
 }

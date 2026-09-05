@@ -19,8 +19,10 @@ Future<void> openExternal(BuildContext context, String url) async {
 }
 
 /// Minimal ledger (docs/mockups/finswipe-minimal-mockup.png): no blur, no
-/// aurora, no colour-by-category. Red/green only for market direction and
-/// on/off state. Numbers monospace, the hook serif — it alone carries weight.
+/// aurora, no colour-by-category. Red/green only for direction — a tick, a
+/// heat cell's growth, a period-on-period change — and on/off state. Tiles
+/// and tables are bordered, square, and share one right edge (lib/ledger.dart).
+/// Numbers monospace, the hook serif — it alone carries weight.
 
 const bg = Color(0xFF0E100F);
 const surface = Color(0xFF161917);

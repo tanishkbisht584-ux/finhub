@@ -1,4 +1,5 @@
 import 'package:finswipe/analysis.dart';
+import 'package:finswipe/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _meta = {
