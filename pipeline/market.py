@@ -126,7 +126,8 @@ def nav_slot(now):
 
 DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
-              "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30)}
+              "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30),
+              "participant_oi": (19, 0)}
 
 
 def due(group, now):
@@ -1424,6 +1425,59 @@ def refresh_calendar(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+# NSE participant-wise F&O open interest (the Indian COT). A daily CSV on
+# the archives host, which - unlike www.nseindia.com/api - answers from any IP,
+# so this is its own local-runnable group, not an nse job. Published after
+# close; no file on a holiday, so step back a few days.
+
+POI_URL = "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{}.csv"
+POI_COLS = {"Future Index Long": "fut_idx_long", "Future Index Short": "fut_idx_short",
+            "Option Index Call Long": "opt_idx_call_long", "Option Index Put Long": "opt_idx_put_long",
+            "Option Index Call Short": "opt_idx_call_short", "Option Index Put Short": "opt_idx_put_short",
+            "Total Long Contracts": "total_long", "Total Short Contracts": "total_short"}
+POI_BACK_DAYS = 5  # Fri file on a Mon + one holiday; Diwali week may raise once
+
+
+def parse_participant_oi(text):
+    """CSV (quoted title line, padded headers, TOTAL row) -> {Client|DII|FII|Pro: {...}}."""
+    lines = (text or "").splitlines()
+    out = {}
+    for r in csv.DictReader(io.StringIO("\n".join(lines[1:]))):
+        r = {(k or "").strip(): (v or "").strip() for k, v in r.items()}
+        who = r.get("Client Type")
+        if not who or who.upper() == "TOTAL":
+            continue
+        try:
+            row = {v: int(r[k]) for k, v in POI_COLS.items()}
+        except (KeyError, ValueError):
+            continue
+        row["net_fut_idx"] = row["fut_idx_long"] - row["fut_idx_short"]
+        out[who] = row
+    return out
+
+
+def refresh_participant_oi(sb, now):
+    day = now.astimezone(IST).date()
+    for back in range(POI_BACK_DAYS):
+        d = day - timedelta(days=back)
+        r = requests.get(POI_URL.format(d.strftime("%d%m%Y")), headers=BROWSER_UA, timeout=TIMEOUT)
+        rows = parse_participant_oi(r.text) if r.status_code == 200 else {}
+        if rows:
+            break
+    else:
+        raise RuntimeError(f"participant OI: no file in the last {POI_BACK_DAYS} days")
+    date = d.isoformat()
+    # day-over-day net index futures vs the last published blob (bonds pattern)
+    old = sb("GET", "market_blobs?select=payload&key=eq.participant_oi")
+    oldp = (old[0]["payload"] if old else {}) or {}
+    for who, row in rows.items():
+        p = (oldp.get("rows") or {}).get(who) or {}
+        row["prev_net_fut_idx"] = (p.get("net_fut_idx") if oldp.get("date") != date
+                                   else p.get("prev_net_fut_idx"))
+    return write_blobs(sb, [{"key": "participant_oi", "payload": {"date": date, "rows": rows},
+                             "updated_at": now.isoformat()}])
+
+
 # ---------- sentiment composites (P2, worldmonitor study) ----------
 # Editorial scales, not empirical. methodology_version is bumped whenever a
 # component, scale, or weighting changes so clients and history can tell
@@ -1657,7 +1711,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("worldmacro", refresh_worldmacro), ("hazards", refresh_hazards),
           ("wikidata", refresh_wikidata), ("cpi", refresh_cpi),
           ("polymarket", refresh_polymarket), ("cb_rates", refresh_cb_rates),
-          ("calendar", refresh_calendar),
+          ("calendar", refresh_calendar), ("participant_oi", refresh_participant_oi),
           ("fundamentals", refresh_fundamentals), ("technicals", refresh_technicals),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),

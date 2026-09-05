@@ -268,7 +268,7 @@ def test_market_is_an_admin_switch():
 
 def test_all_groups_registered():
     assert [g for g, _ in market.GROUPS] == ["index", "equity", "fxcom", "crypto", "global", "mf", "mf_new",
-                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates", "calendar",
+                                             "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates", "calendar", "participant_oi",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm",
@@ -1100,3 +1100,46 @@ def test_refresh_calendar_merges_sources_and_trims_window(monkeypatch):
     written.clear()
     market.refresh_calendar(None, NOW)
     assert calls == [] and any(e["region"] == "IN" for e in written[0]["payload"]["events"])
+
+
+POI_CSV = (
+    '""Participant wise Open Interest (no. of contracts) in Equity Derivatives as on Sep 03, 2026"",,,,,,,,,,,,,,\n'
+    "Client Type,Future Index Long,Future Index Short,Future Stock Long,Future Stock Short       ,"
+    "Option Index Call Long,Option Index Put Long,Option Index Call Short,Option Index Put Short,"
+    "Option Stock Call Long,Option Stock Put Long,Option Stock Call Short,Option Stock Put Short,"
+    "Total Long Contracts      ,Total Short Contracts\n"
+    "Client,261619,55623,3385672,209099,3751431,2367385,3368894,3169,1,2,3,4,12641969,9132988\n"
+    "FII,33502,268604,3467706,2857809,1,2,3,4,5,6,7,8,5470310,4814011\n"
+    "TOTAL,385477,385477,7989438,7989438,1,2,3,4,5,6,7,8,23205519,23205519\n")
+
+
+def test_parse_participant_oi_strips_headers_and_drops_total():
+    out = market.parse_participant_oi(POI_CSV)
+    assert set(out) == {"Client", "FII"}
+    assert out["FII"]["net_fut_idx"] == 33502 - 268604 and out["FII"]["total_short"] == 4814011
+    assert out["Client"]["opt_idx_put_short"] == 3169
+    assert market.parse_participant_oi("") == {} and market.parse_participant_oi("<html>blocked</html>") == {}
+
+
+def test_refresh_participant_oi_steps_back_and_sets_prev(monkeypatch):
+    urls = []
+
+    class R:
+        def __init__(self, url):
+            self.status_code = 200 if url.endswith("21082026.csv") else 404
+            self.text = POI_CSV if self.status_code == 200 else "not found"
+    monkeypatch.setattr(market.requests, "get", lambda url, **k: urls.append(url) or R(url))
+    monkeypatch.setattr(market, "_blob_sent", {})
+    written = []
+    monkeypatch.setattr(market, "write_blobs", lambda sb, rows: written.extend(rows) or 1)
+    old = {"date": "2026-08-20", "rows": {"FII": {"net_fut_idx": -100000}}}
+    sb = lambda *a, **k: [{"payload": old}]
+    assert market.refresh_participant_oi(sb, NOW) == 1  # NOW = 22 Aug IST; 22nd 404s, 21st serves
+    assert len(urls) == 2
+    p = written[0]["payload"]
+    assert p["date"] == "2026-08-21" and p["rows"]["FII"]["prev_net_fut_idx"] == -100000
+    assert p["rows"]["Client"]["prev_net_fut_idx"] is None  # no old row for Client
+
+    monkeypatch.setattr(market.requests, "get", lambda url, **k: R("x"))
+    with pytest.raises(RuntimeError):
+        market.refresh_participant_oi(sb, NOW)

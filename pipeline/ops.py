@@ -55,7 +55,8 @@ BLOB_CONTENT_MAX_H = {"bonds": 120, "flows": 120,
                       # World Bank re-cuts WDI a few times a year; `asof` = lastupdated
                       "macro_context": 24 * 120,
                       # context groups stamp asof = fetch date (daily); 48 h = one missed day
-                      "cb_rates": 48, "calendar": 48}
+                      "cb_rates": 48, "calendar": 48,
+                      "participant_oi": 120}  # NSE file date; long weekend + holiday
 GROUP_FAILS = 3      # interval group: consecutive failures before it's a problem
                      # (daily groups alert on a single failure — one miss = a lost day)
 
@@ -101,7 +102,7 @@ def blob_content_age_h(key, payload, now):
     stale (a fabricated clock would hide the very freeze this exists to catch)."""
     if key == "bonds":
         dates = [_parse_obs_date(y.get("date")) for y in (payload or {}).get("yields") or []]
-    elif key == "flows":
+    elif key in ("flows", "participant_oi"):
         dates = [_parse_obs_date((payload or {}).get("date"))]
     elif key in ("macro_context", "cb_rates", "calendar"):
         dates = [_parse_obs_date((payload or {}).get("asof"))]
