@@ -1,10 +1,11 @@
-"""One-shot GDELT + Polymarket probe (run from a GitHub runner via the probe
-workflow — both refuse/429 the dev machine's Indian IP, same story as NSE).
-Prints status + shape samples so the global-layer groups are built against
-real responses, or buried with evidence. No writes.
+"""One-shot upstream probe (run from a GitHub runner via the probe workflow —
+several hosts treat datacenter and Indian residential IPs differently, so new
+groups are built against real runner responses, or buried with evidence).
+No writes. Current round (Sep 2026): zero-cost sweep #3 — IBJA gold, JODI oil,
+IMF IRFCL, FAO FPI, SCFI/CCFI, BDI, SEBI/RBI RSS liveness. All answered the
+dev IP on 5 Sep; this run confirms the runner's IP.
 """
-import json
-import time
+import re
 
 import requests
 
@@ -13,7 +14,7 @@ UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinSwipe-probe/1.0"}
 
 def show(tag, url, params=None):
     try:
-        r = requests.get(url, params=params, headers=UA, timeout=20)
+        r = requests.get(url, params=params, headers=UA, timeout=25)
         body = r.text[:600].replace("\n", " ")
         print(f"\n[{tag}] {r.status_code} {r.headers.get('content-type', '?')[:40]}")
         print(f"  {body}")
@@ -23,25 +24,40 @@ def show(tag, url, params=None):
         return None
 
 
-# GDELT DOC 2.0 — numbers only (timeline volume + tone), never articles
-show("gdelt timelinevol", "https://api.gdeltproject.org/api/v2/doc/doc",
-     {"query": '"Reserve Bank of India"', "mode": "timelinevol",
-      "timespan": "7d", "format": "json"})
-time.sleep(6)  # their own stated rate limit: one call per 5 s
-show("gdelt timelinetone", "https://api.gdeltproject.org/api/v2/doc/doc",
-     {"query": "india economy", "mode": "timelinetone",
-      "timespan": "7d", "format": "json"})
-
-# Polymarket Gamma — market list + a search, for the curated-slug design
-r = show("polymarket markets", "https://gamma-api.polymarket.com/markets",
-         {"limit": 3, "active": "true", "closed": "false",
-          "order": "volume24hr", "ascending": "false"})
+r = show("ibja", "https://ibjarates.com/")
 if r is not None and r.ok:
-    for m in r.json()[:3]:
-        print("  slug:", m.get("slug"), "| q:", (m.get("question") or "")[:60],
-              "| outcomes:", m.get("outcomes"), "| prices:", m.get("outcomePrices"))
-show("polymarket search", "https://gamma-api.polymarket.com/public-search",
-     {"q": "india", "limit_per_type": 5})
-show("polymarket fed search", "https://gamma-api.polymarket.com/public-search",
-     {"q": "fed rate", "limit_per_type": 5})
+    m = re.search(r'"purity999":\[([\d,.]+)\]', r.text)
+    d = re.search(r'"dates":\[([^\]]+)\]', r.text)
+    print("  purity999 tail:", m.group(1)[-80:] if m else "MISSING")
+    print("  dates tail:", d.group(1)[-80:] if d else "MISSING")
+
+r = show("jodi oil", "https://www.jodidata.org/_resources/files/downloads/"
+         "oil-data/annual-csv/primary/primaryyear2026.csv")
+if r is not None and r.ok:
+    rows = [ln for ln in r.text.splitlines() if ln.startswith("IN,")]
+    print(f"  IN rows: {len(rows)}")
+    for ln in rows[-3:]:
+        print("  last:", ln)
+    print("  products:", sorted({ln.split(",")[2] for ln in rows}))
+    print("  flows:", sorted({ln.split(",")[3] for ln in rows}))
+
+show("imf irfcl gold", "https://api.imf.org/external/sdmx/2.1/data/"
+     "IMF.STA,IRFCL/IND.IRFCLDT1_IRFCL56V_FTO..M", {"lastNObservations": 3})
+
+r = show("fao fpi", "https://www.fao.org/media/docs/worldfoodsituationlibraries/"
+         "default-document-library/food_price_indices_data.csv")
+if r is not None and r.ok:
+    print("  tail:", r.text.strip().splitlines()[-1])
+
+show("scfi", "https://en.sse.net.cn/currentIndex", {"indexName": "scfi"})
+show("ccfi", "https://en.sse.net.cn/currentIndex", {"indexName": "ccfi"})
+
+r = show("bdi handybulk", "https://www.handybulk.com/baltic-dry-index/")
+if r is not None and r.ok:  # need a LEVEL + date, not just the daily change
+    for x in re.findall(r"[^>]{0,60}BDI[^<]{0,80}", r.text)[:6]:
+        print("  ", x)
+
+# item 3 repair-side: are the regulator feeds alive at these URLs?
+show("sebi rss", "https://www.sebi.gov.in/sebirss.xml")
+show("rbi press rss", "https://www.rbi.org.in/pressreleases_rss.xml")
 print("\nprobe done")
