@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Widget _page(Widget w) => MaterialApp(
-    home: Scaffold(body: SizedBox(width: 360, child: SingleChildScrollView(child: w))));
+    home: Scaffold(
+        body: SizedBox(width: 360, child: SingleChildScrollView(child: w))));
 
 void main() {
   testWidgets('LedgerRow trails share one right edge regardless of length',
@@ -21,7 +22,8 @@ void main() {
   });
 
   testWidgets('LedgerRow without lead has no 86px gutter', (tester) async {
-    await tester.pumpWidget(_page(const LedgerRow(main: 'no lead', trail: 'x')));
+    await tester
+        .pumpWidget(_page(const LedgerRow(main: 'no lead', trail: 'x')));
     final main = tester.getRect(find.text('no lead'));
     // Row starts at the page edge (Scaffold body has no padding here).
     expect(main.left, lessThan(10));
@@ -76,8 +78,8 @@ void main() {
   });
 
   testWidgets('Collapsible shows initial rows then all', (tester) async {
-    await tester.pumpWidget(_page(Collapsible(
-        [for (var i = 0; i < 8; i++) Text('row$i')], initial: 3)));
+    await tester.pumpWidget(_page(
+        Collapsible([for (var i = 0; i < 8; i++) Text('row$i')], initial: 3)));
     expect(find.text('row2'), findsOneWidget);
     expect(find.text('row3'), findsNothing);
     await tester.tap(find.text('show all 8'));
@@ -97,5 +99,34 @@ void main() {
     expect(find.text('ACT'), findsOneWidget);
     expect(find.text('note'), findsOneWidget);
     expect(find.text('child'), findsOneWidget);
+  });
+
+  testWidgets('LedgerTable never ellipsises and scrolls sideways',
+      (tester) async {
+    const long =
+        'KRISHNA PRASAD CHIGURUPATI AND ASSOCIATES FAMILY TRUST NUMBER ONE OF HYDERABAD';
+    await tester.pumpWidget(_page(LedgerTable(const [
+      LtCol('Symbol', right: false),
+      LtCol('Qty'),
+      LtCol('Client', right: false, text: true),
+    ], const [
+      (cells: ['GRANULES', '+1,32,95,129', long], tone: 1, onTap: null),
+      (cells: ['B', '−5', 'x'], tone: -1, onTap: null),
+      (cells: ['C', '1', 'y'], tone: 0, onTap: null),
+    ], initial: 2)));
+    expect(find.text('SYMBOL'), findsOneWidget);
+    final t = tester.widget<Text>(find.text(long));
+    expect(t.overflow, isNull);
+    expect(t.maxLines, isNull);
+    expect(t.style!.color, green); // tone on the last cell
+    expect(tester.widget<Text>(find.text('−5')).style!.color, red);
+    expect(find.text('C'), findsNothing); // behind "show all 3"
+    await tester.tap(find.text('show all 3'));
+    await tester.pump();
+    expect(find.text('C'), findsOneWidget);
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is SingleChildScrollView && w.scrollDirection == Axis.horizontal),
+        findsOneWidget);
   });
 }

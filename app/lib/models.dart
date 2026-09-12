@@ -518,8 +518,11 @@ List<String> companyEventLines(Map<String, dynamic> blobs, String symbol) {
   return out;
 }
 
+/// "2026-09-11" / "11-Sep-2026" (NSE deals, IPOs, flows) / "10-09-2026"
+/// (NSE insider filings) -> "11 Sep"; the year is appended only when it is
+/// not this year, so a table of this month's dates stays short.
 String dmy(Object? iso) {
-  final d = DateTime.tryParse('$iso');
+  final d = parseDate(iso);
   if (d == null) return '$iso';
   const m = [
     'Jan',
@@ -535,7 +538,35 @@ String dmy(Object? iso) {
     'Nov',
     'Dec'
   ];
-  return '${d.day} ${m[d.month - 1]}';
+  final y = d.year == DateTime.now().year ? '' : ' ${d.year}';
+  return '${d.day} ${m[d.month - 1]}$y';
+}
+
+const _mon = {
+  'jan': 1,
+  'feb': 2,
+  'mar': 3,
+  'apr': 4,
+  'may': 5,
+  'jun': 6,
+  'jul': 7,
+  'aug': 8,
+  'sep': 9,
+  'oct': 10,
+  'nov': 11,
+  'dec': 12,
+};
+
+/// ISO, dd-MMM-yyyy or dd-MM-yyyy (with an optional time) -> DateTime, else null.
+DateTime? parseDate(Object? v) {
+  final s = '$v'.trim();
+  final d = DateTime.tryParse(s);
+  if (d != null) return d;
+  final m = RegExp(r'^(\d{1,2})-(\w{3}|\d{2})-(\d{4})').firstMatch(s);
+  if (m == null) return null;
+  final mon = int.tryParse(m[2]!) ?? _mon[m[2]!.toLowerCase()];
+  if (mon == null) return null;
+  return DateTime(int.parse(m[3]!), mon, int.parse(m[1]!));
 }
 
 /// One row of a labelled four-column table (KvTable): metric · value ·

@@ -111,10 +111,8 @@ class LedgerRow extends StatelessWidget {
         Expanded(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(main,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: serif.copyWith(fontSize: 13)),
+            // Wraps: a headline or a market question is the row's point.
+            Text(main, style: serif.copyWith(fontSize: 13)),
             if (sub != null && sub!.isNotEmpty)
               Text(sub!,
                   maxLines: 2,
@@ -155,7 +153,7 @@ class StatTile extends StatelessWidget {
         decoration: BoxDecoration(border: Border.all(color: border)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label,
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: mono.copyWith(fontSize: 10)),
           const SizedBox(height: 2),
@@ -353,13 +351,36 @@ class _CollapsibleState extends State<Collapsible> {
   }
 }
 
-/// Labelled four-column table: metric · value · third · read. Value and
-/// third colour themselves by a leading +/−; the read column wraps and takes
-/// the row's tone. Stock ratios, F&O lists, deals, IPOs all read the same.
-class KvTable extends StatelessWidget {
-  const KvTable(this.columns, this.rows, {super.key});
-  final List<String> columns; // 4 headers
-  final List<KvRow> rows;
+/// One column of a [LedgerTable]: header label; numbers right-aligned by
+/// default, [text] columns left-aligned and wrapped at the table's [wrap]
+/// width instead of stretching the table.
+class LtCol {
+  const LtCol(this.label, {this.right = true, this.text = false});
+  final String label;
+  final bool right, text;
+}
+
+/// One row: one string per column, a tone (-1 red, 0 ink, +1 green) for the
+/// last cell, optional tap.
+typedef LtRow = ({List<String> cells, int tone, VoidCallback? onTap});
+
+/// N labelled columns in a real Table that scrolls sideways when it is wider
+/// than the phone (12 Sep 2026: the old four-column table crammed deals,
+/// insiders and IPOs into one "…" cell). Nothing here ellipsises: numbers
+/// take their intrinsic width, text columns wrap at [wrap] px. Values colour
+/// themselves by a leading +/−; the last cell takes the row's tone.
+class LedgerTable extends StatefulWidget {
+  const LedgerTable(this.columns, this.rows,
+      {super.key, this.wrap = 200, this.toneCol, this.initial});
+  final List<LtCol> columns;
+  final List<LtRow> rows;
+  final double wrap;
+
+  /// Which cell the row's tone colours (default: the last one).
+  final int? toneCol;
+
+  /// Rows shown before a "show all N" button; null shows every row.
+  final int? initial;
 
   static Color toneColor(int tone) => tone > 0
       ? green
@@ -368,72 +389,117 @@ class KvTable extends StatelessWidget {
           : ink;
 
   @override
+  State<LedgerTable> createState() => _LedgerTableState();
+}
+
+class _LedgerTableState extends State<LedgerTable> {
+  bool _all = false;
+
+  @override
   Widget build(BuildContext context) {
+    final columns = widget.columns;
+    final wrap = widget.wrap;
+    final toneCol = widget.toneCol ?? columns.length - 1;
+    final initial = widget.initial;
+    final rows = _all || initial == null
+        ? widget.rows
+        : widget.rows.take(initial).toList();
     if (rows.isEmpty) return const SizedBox.shrink();
-    Widget cell(String s,
-            {bool head = false,
-            bool right = true,
-            Color? color,
-            bool wrap = false}) =>
-        Container(
-          constraints: const BoxConstraints(minHeight: 28),
-          alignment: right ? Alignment.centerRight : Alignment.centerLeft,
-          padding: EdgeInsets.only(left: right ? 6 : 0),
-          child: Text(s,
-              maxLines: wrap ? 2 : 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: right ? TextAlign.right : TextAlign.left,
-              style: mono.copyWith(
-                  fontSize: head ? 10 : 11,
-                  letterSpacing: head ? 0.6 : 0,
-                  color: color ?? (head ? inkDim : ink))),
-        );
-    Color valueColor(String v) => v.startsWith('+')
+    Color valueColor(String v) => v.startsWith('+') || v.startsWith('▲')
         ? green
-        : v.startsWith('−')
+        : v.startsWith('−') || v.startsWith('▼')
             ? red
             : ink;
-    return Table(
-      columnWidths: const {
-        0: FixedColumnWidth(92),
-        1: FlexColumnWidth(1.1),
-        2: FlexColumnWidth(0.9),
-        3: FlexColumnWidth(1.5),
-      },
+    Widget cell(int i, String s, {bool head = false, Color? color}) {
+      final c = columns[i];
+      final style = mono.copyWith(
+          fontSize: head ? 10 : 11,
+          letterSpacing: head ? 0.6 : 0,
+          color: color ?? (head ? inkDim : ink));
+      final t = i == 0 && !head
+          // First column is the densest jargon (RSI-14, OI, G-Sec): glossary-aware.
+          ? GlossaryText(s, style: style)
+          : Text(s,
+              textAlign: c.right ? TextAlign.right : TextAlign.left,
+              style: style);
+      return Container(
+        constraints: BoxConstraints(
+            minHeight: 28, maxWidth: c.text ? wrap : double.infinity),
+        alignment: c.right ? Alignment.centerRight : Alignment.centerLeft,
+        padding: EdgeInsets.only(
+            left: i == 0 ? 0 : 10, right: i == columns.length - 1 ? 0 : 2),
+        child: t,
+      );
+    }
+
+    final table = Table(
+      defaultColumnWidth: const IntrinsicColumnWidth(),
       defaultVerticalAlignment: TableCellVerticalAlignment.middle,
       children: [
         TableRow(
           decoration: const BoxDecoration(
               border: Border(bottom: BorderSide(color: border))),
           children: [
-            cell(columns[0], head: true, right: false),
-            cell(columns[1], head: true),
-            cell(columns[2], head: true),
-            Padding(
-                padding: const EdgeInsets.only(left: 10),
-                child: cell(columns[3], head: true, right: false)),
+            for (var i = 0; i < columns.length; i++)
+              cell(i, columns[i].label.toUpperCase(), head: true),
           ],
         ),
         for (final r in rows)
-          TableRow(children: [
-            // Metric names are the app's densest jargon (RSI-14, ROCE, OI) —
-            // glossary-aware so a beginner can tap any of them.
-            Container(
-              constraints: const BoxConstraints(minHeight: 28),
-              alignment: Alignment.centerLeft,
-              child: GlossaryText(r.metric,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: mono.copyWith(fontSize: 11, color: ink)),
-            ),
-            cell(r.value, color: valueColor(r.value)),
-            cell(r.third, color: inkDim),
-            Padding(
-                padding: const EdgeInsets.only(left: 10),
-                child: cell(r.read,
-                    right: false, wrap: true, color: toneColor(r.tone))),
-          ]),
+          TableRow(
+            decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: border))),
+            children: [
+              for (var i = 0; i < columns.length; i++)
+                _tap(
+                    r.onTap,
+                    cell(i, i < r.cells.length ? r.cells[i] : '',
+                        color: i == toneCol
+                            ? LedgerTable.toneColor(r.tone)
+                            : i == 0
+                                ? ink
+                                : valueColor(
+                                    i < r.cells.length ? r.cells[i] : ''))),
+            ],
+          ),
       ],
     );
+    // ponytail: the first column scrolls away with the rest; pin it with a
+    // second synced scroll view only if readers lose the symbol off-screen.
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SingleChildScrollView(scrollDirection: Axis.horizontal, child: table),
+      if (!_all && initial != null && widget.rows.length > initial)
+        TextButton(
+            onPressed: () => setState(() => _all = true),
+            child: Text('show all ${widget.rows.length}',
+                style: mono.copyWith(fontSize: 12, color: green))),
+    ]);
   }
+
+  static Widget _tap(VoidCallback? onTap, Widget w) =>
+      onTap == null ? w : InkWell(onTap: onTap, child: w);
+}
+
+/// The stock page's metric · value · sector · read table, now a four-column
+/// [LedgerTable] (the read column wraps instead of ending in "…").
+class KvTable extends StatelessWidget {
+  const KvTable(this.columns, this.rows, {super.key});
+  final List<String> columns; // 4 headers
+  final List<KvRow> rows;
+
+  static Color toneColor(int tone) => LedgerTable.toneColor(tone);
+
+  @override
+  Widget build(BuildContext context) => LedgerTable([
+        LtCol(columns[0], right: false),
+        LtCol(columns[1]),
+        LtCol(columns[2]),
+        LtCol(columns[3], right: false, text: true),
+      ], [
+        for (final r in rows)
+          (
+            cells: [r.metric, r.value, r.third, r.read],
+            tone: r.tone,
+            onTap: null
+          ),
+      ]);
 }
