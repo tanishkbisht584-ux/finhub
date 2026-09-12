@@ -60,4 +60,14 @@ if r is not None and r.ok:  # need a LEVEL + date, not just the daily change
 # item 3 repair-side: are the regulator feeds alive at these URLs?
 show("sebi rss", "https://www.sebi.gov.in/sebirss.xml")
 show("rbi press rss", "https://www.rbi.org.in/pressreleases_rss.xml")
+# 12 Sep: stockanalysis.com screener table - 323 data points for 3.2k NSE
+# stocks in one keyless GET from the dev IP; does Cloudflare let a runner in?
+r = show("stockanalysis screener", "https://stockanalysis.com/_api/endpoints/screener/table",
+         {"type": "s", "m": "marketCap", "s": "desc", "c": "s,n,marketCap,price,change,peRatio,rsi,sector",
+          "cn": "3000", "f": "exchangeCode-is-NSE,subtype-is-stock", "i": "symbols"})
+if r is not None and r.ok and r.headers.get("content-type", "").startswith("application/json"):
+    d = r.json().get("data") or {}
+    print("  rows:", len(d.get("data") or []), "resultsCount:", d.get("resultsCount"))
+show("stockanalysis column-meta", "https://stockanalysis.com/_api/endpoints/screener/column-meta",
+     {"type": "quote", "v": "1"})
 print("\nprobe done")
