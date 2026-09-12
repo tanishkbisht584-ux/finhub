@@ -46,6 +46,10 @@ class _StockScreenState extends State<StockScreen> {
   Timer? _fundPoll;
   int _fundPolls = 0;
   List<Map<String, dynamic>> _peers = const [];
+  /// The symbol's own screener_metrics row: Stock Analysis columns + `sa`
+  /// jsonb (returns, records, street, calendar). Empty until the row has
+  /// `sa_price_date`, i.e. the stockanalysis group has covered it.
+  Map<String, dynamic> _sa = const {};
   String _range = '1M';
   List<double> _chartCloses = const [];
   List<DateTime> _chartTimes = const [];
@@ -109,12 +113,19 @@ class _StockScreenState extends State<StockScreen> {
     final sb = Supabase.instance.client;
     sb
         .from('screener_metrics')
-        .select('sector')
+        .select('sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
+            'ath_pct,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
+            'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
+            'shares_yoy,sa,sa_price_date')
         .eq('symbol', widget.company.nseSymbol)
         .maybeSingle()
         .then((self) {
+      if (!mounted) return;
+      if (self?['sa_price_date'] != null) {
+        setState(() => _sa = Map<String, dynamic>.from(self!));
+      }
       final sector = self?['sector'] as String?;
-      if (sector == null || sector.isEmpty || !mounted) return;
+      if (sector == null || sector.isEmpty) return;
       sb
           .from('screener_metrics')
           .select('symbol,name,price,pe,pb,mcap_cr,roe,roce,de,div_yield,opm,promoter_pct')
@@ -503,6 +514,16 @@ class _StockScreenState extends State<StockScreen> {
             ]);
       });
 
+  /// RETURNS: the Stock Analysis columns of this symbol's screener_metrics
+  /// row — returns ladder, records, risk, street view, fair values, dates.
+  Widget _returns() => LedgerSection('Returns & street',
+      action: _stamp('as of ${dmy(_sa['sa_price_date'])}'),
+      footnote: 'Returns, risk and calendar: Stock Analysis (S&P Global)',
+      children: [
+        const SizedBox(height: 2),
+        KvTable(const ['METRIC', 'VALUE', '', 'READ'], saRows(_sa)),
+      ]);
+
   Widget _tape() => LedgerSection('On the tape',
       footnote: 'NSE · board meetings, bulk/block deals, insider filings',
       children: [
@@ -593,6 +614,7 @@ class _StockScreenState extends State<StockScreen> {
       (id: 'snapshot', label: 'SNAPSHOT', child: _snapshot()),
       (id: 'fundamentals', label: 'FUNDAMENTALS', child: _fundamentals()),
       (id: 'technicals', label: 'TECHNICALS', child: _technicals()),
+      if (_sa.isNotEmpty) (id: 'returns', label: 'RETURNS', child: _returns()),
       if ((f.summary['pros'] as List?)?.isNotEmpty == true ||
           (f.summary['cons'] as List?)?.isNotEmpty == true)
         (

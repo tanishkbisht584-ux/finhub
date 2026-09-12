@@ -43,6 +43,7 @@ SLOW_MS = 3000       # median empty-read above this => gateway degraded
 MAX_QUOTE_AGE_H = {"fx": 4, "commodity": 4, "crypto": 4, "equity": 4, "index": 4,
                    "mf": 30, "macro": 30}
 FUND_MAX_AGE_H = 36  # fundamentals/screener_metrics rebuild daily; 36 h absorbs cron lag
+SA_MAX_AGE_H = 100   # stockanalysis sa_at is stamped only on a real pull: Fri close -> Tue close over a Monday holiday = 96 h
 # Blob content-age: the date the data INSIDE the blob claims, not when we wrote
 # the row. A frozen upstream keeps answering 200 with old data — row updated_at
 # keeps advancing (and with market.write_blobs suppression it stops advancing on
@@ -190,10 +191,12 @@ def gather(repo, gh_token, deep=False):
         ts = [g.get("ts") for g in (f["market_status"].get("groups") or {}).values() if g.get("ts")]
         f["status_age_h"] = _age_h(max(ts), now) if ts else None
         ages = {}
-        for t in ("fundamentals", "screener_metrics"):
-            r2 = sb("GET", f"{t}?select=updated_at&order=updated_at.desc&limit=1")
-            if r2:
-                ages[t] = _age_h(r2[0]["updated_at"], now)
+        for t, tbl, col in (("fundamentals", "fundamentals", "updated_at"),
+                            ("screener_metrics", "screener_metrics", "updated_at"),
+                            ("stockanalysis", "screener_metrics", "sa_at")):
+            r2 = sb("GET", f"{tbl}?select={col}&order={col}.desc.nullslast&limit=1")
+            if r2 and r2[0].get(col):
+                ages[t] = _age_h(r2[0][col], now)
         f["fund_age_h"] = ages
     except Exception as e:  # noqa: BLE001
         f["errors"]["fund"] = str(e)
@@ -407,9 +410,11 @@ def evaluate(f):
             prob("market group failing", f"Market refresh group(s) failing: {lst} — the rest of the "
                  "market layer keeps running; this data goes stale until fixed.", "market", "market")
         for t, age in (f.get("fund_age_h") or {}).items():
-            if age > FUND_MAX_AGE_H and not ({"deep_warm", "deep_new"} if t == "fundamentals"
-                                             else {"screener"}) & off:
-                prob(f"{t} stale", f"Newest {t} row is {age:.0f}h old (rebuilds daily) — the screener "
+            owners = {"fundamentals": {"deep_warm", "deep_new"},
+                      "stockanalysis": {"stockanalysis"}}.get(t, {"screener"})
+            lim = SA_MAX_AGE_H if t == "stockanalysis" else FUND_MAX_AGE_H
+            if age > lim and not owners & off:
+                prob(f"{t} stale", f"Newest {t} row is {age:.0f}h old (refreshes daily) — the screener "
                      "and stock pages are serving stale numbers.", "market", "market")
 
     # deep-only facts (Health page); absent in the hourly watchdog, so silent there

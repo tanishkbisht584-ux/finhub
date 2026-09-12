@@ -100,7 +100,7 @@ _status = {}    # group -> last attempt outcome; mirrored to app_config `market_
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "global": 15, "polymarket": 60, "nse": 60, "bonds": 60, "macro": 24 * 60,
             "mf_new": 5, "analysis_new": 5, "deep_new": 5, "screener_px": 60,
-            "sentiment": 60, "hazards": 60}
+            "sentiment": 60, "hazards": 60, "stockanalysis": 60}
 
 
 def market_hours(now):
@@ -2108,6 +2108,11 @@ def refresh_screener_px(sb, now):
     return fundamentals.refresh_screener_px(sb, now)
 
 
+def refresh_stockanalysis(sb, now):
+    import stockanalysis
+    return stockanalysis.refresh_stockanalysis(sb, now)
+
+
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
           ("global", refresh_global),
@@ -2122,7 +2127,8 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),
           ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm),
-          ("screener", refresh_screener), ("screener_px", refresh_screener_px))
+          ("screener", refresh_screener), ("screener_px", refresh_screener_px),
+          ("stockanalysis", refresh_stockanalysis))
 
 
 def refresh(sb, now=None):

@@ -162,6 +162,42 @@ void main() {
     expect(fmtDay(null), '');
   });
 
+  test('saRows: Stock Analysis columns -> RETURNS table, blanks skipped', () {
+    expect(saRows(const {}), isEmpty);
+    final rows = saRows(const {
+      'ret_1w': -4.88, 'ret_1y': -8.68, 'ret_5y': null, 'ath_pct': -21.98,
+      'sharpe': -0.5, 'sortino': -0.42, 'atr': 21.16, 'rel_vol': 0.82, 'turnover_cr': 1103.8,
+      'graham_upside': -20.6, 'f_score': 3, 'ps': 1.51, 'sector_pe': 13.32,
+      'ev_ebitda': 10.74, 'roic': 8.07, 'shares_yoy': 0.0,
+      'sa': {
+        'allTimeHigh': 1611.8, 'allTimeHighDate': '2026-01-05',
+        'high52Date': '2026-01-05', 'low52Date': '2026-07-24',
+        'analystRatings': 'Strong Buy', 'analystCount': 26, 'priceTarget': 1676,
+        'priceTargetChange': 33.28, 'grahamNumber': 998.5,
+        'nextEarningsDate': '2026-10-23', 'lastReportDate': '2026-06-30',
+        'employees': 404501, 'founded': 1957, 'isin': 'INE002A01018',
+      },
+      'sa_price_date': '2026-09-11',
+    });
+    final metrics = [for (final r in rows) r.metric];
+    expect(metrics, [
+      '1 week', '1 year', 'All-time high', '52-wk high / low', 'Sharpe / Sortino', 'ATR',
+      'Rel. volume', 'Street', 'Graham number', 'Piotroski F', 'P/S', 'EV/EBITDA', 'ROIC',
+      'Shares YoY', 'Next results', 'Company',
+    ]);
+    final by = {for (final r in rows) r.metric: r};
+    expect(by['1 year']!.value, '−8.7%');
+    expect(by['1 year']!.tone, -1);
+    expect(by['All-time high']!.read, '−22.0% from high');
+    expect(by['Street']!.tone, 1);
+    expect(by['Street']!.read, '26 analysts · +33.3% to target');
+    expect(by['Piotroski F']!.value, '3/9');
+    expect(by['Piotroski F']!.tone, -1);
+    expect(by['P/S']!.read, 'sector PE 13.32');
+    expect(by['Company']!.third, 'est. 1957');
+    expect(by['Company']!.read, 'INE002A01018');
+  });
+
   test('needsAnalysisRequest fires only when both strips are absent', () {
     expect(needsAnalysisRequest(const {}), isTrue);
     expect(needsAnalysisRequest(const {'f': null, 't': null}), isTrue);

@@ -121,6 +121,168 @@ const List<MetricDef> metricDefs = [
     unit: '%',
     choices: [('≥ 50', true, 50), ('≥ 60', true, 60), ('≥ 75', true, 75)]
   ),
+  // ---- Stock Analysis (S&P Global) columns, pipeline/stockanalysis.py ----
+  (
+    col: 'ret_1w',
+    label: 'RET 1W',
+    unit: '%',
+    choices: [('≥ 5', true, 5), ('≤ -5', false, -5)]
+  ),
+  (
+    col: 'ret_1m',
+    label: 'RET 1M',
+    unit: '%',
+    choices: [('≥ 0', true, 0), ('≥ 10', true, 10), ('≤ -10', false, -10)]
+  ),
+  (
+    col: 'ret_3m',
+    label: 'RET 3M',
+    unit: '%',
+    choices: [('≥ 0', true, 0), ('≥ 10', true, 10), ('≤ -10', false, -10)]
+  ),
+  (
+    col: 'ret_6m',
+    label: 'RET 6M',
+    unit: '%',
+    choices: [('≥ 0', true, 0), ('≥ 20', true, 20), ('≤ -20', false, -20)]
+  ),
+  (
+    col: 'ret_ytd',
+    label: 'RET YTD',
+    unit: '%',
+    choices: [('≥ 0', true, 0), ('≥ 20', true, 20), ('≤ -10', false, -10)]
+  ),
+  (
+    col: 'ret_1y',
+    label: 'RET 1Y',
+    unit: '%',
+    choices: [
+      ('≥ 0', true, 0),
+      ('≥ 25', true, 25),
+      ('≥ 50', true, 50),
+      ('≤ -20', false, -20)
+    ]
+  ),
+  (
+    col: 'ret_3y',
+    label: 'RET 3Y',
+    unit: '%',
+    choices: [('≥ 50', true, 50), ('≥ 100', true, 100), ('≥ 200', true, 200)]
+  ),
+  (
+    col: 'ret_5y',
+    label: 'RET 5Y',
+    unit: '%',
+    choices: [('≥ 100', true, 100), ('≥ 200', true, 200), ('≥ 500', true, 500)]
+  ),
+  (
+    col: 'ath_pct',
+    label: 'FROM ATH',
+    unit: '%',
+    choices: [('≥ -5', true, -5), ('≥ -20', true, -20), ('≤ -50', false, -50)]
+  ),
+  (
+    col: 'turnover_cr',
+    label: 'TURNOVER',
+    unit: ' CR',
+    choices: [('≥ 1', true, 1), ('≥ 10', true, 10), ('≥ 100', true, 100)]
+  ),
+  (
+    col: 'avg_vol',
+    label: 'AVG VOL',
+    unit: '',
+    choices: [('≥ 100000', true, 100000), ('≥ 1000000', true, 1000000)]
+  ),
+  (
+    col: 'rel_vol',
+    label: 'REL VOL',
+    unit: 'x',
+    choices: [('≥ 1.5', true, 1.5), ('≥ 3', true, 3)]
+  ),
+  (
+    col: 'sharpe',
+    label: 'SHARPE',
+    unit: '',
+    choices: [('≥ 0.5', true, 0.5), ('≥ 1', true, 1), ('≥ 2', true, 2)]
+  ),
+  (
+    col: 'sortino',
+    label: 'SORTINO',
+    unit: '',
+    choices: [('≥ 0.5', true, 0.5), ('≥ 1', true, 1), ('≥ 2', true, 2)]
+  ),
+  (
+    col: 'atr',
+    label: 'ATR',
+    unit: '',
+    choices: [('≤ 10', false, 10), ('≤ 50', false, 50)]
+  ),
+  (
+    col: 'graham_upside',
+    label: 'GRAHAM UPSIDE',
+    unit: '%',
+    choices: [('≥ 0', true, 0), ('≥ 25', true, 25), ('≥ 50', true, 50)]
+  ),
+  (
+    col: 'f_score',
+    label: 'F-SCORE',
+    unit: '',
+    choices: [('≥ 6', true, 6), ('≥ 7', true, 7), ('≥ 8', true, 8)]
+  ),
+  (
+    col: 'ps',
+    label: 'P/S',
+    unit: '',
+    choices: [('≤ 1', false, 1), ('≤ 3', false, 3), ('≤ 10', false, 10)]
+  ),
+  (
+    col: 'earnings_yield',
+    label: 'EARN YIELD',
+    unit: '%',
+    choices: [('≥ 4', true, 4), ('≥ 8', true, 8)]
+  ),
+  (
+    col: 'fcf_yield',
+    label: 'FCF YIELD',
+    unit: '%',
+    choices: [('≥ 3', true, 3), ('≥ 5', true, 5), ('≥ 8', true, 8)]
+  ),
+  (
+    col: 'roic',
+    label: 'ROIC',
+    unit: '%',
+    choices: [('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 20', true, 20)]
+  ),
+  (
+    col: 'int_cov',
+    label: 'INT COVER',
+    unit: 'x',
+    choices: [('≥ 3', true, 3), ('≥ 5', true, 5), ('≥ 10', true, 10)]
+  ),
+  (
+    col: 'ev_ebitda',
+    label: 'EV/EBITDA',
+    unit: '',
+    choices: [('≤ 8', false, 8), ('≤ 12', false, 12), ('≤ 20', false, 20)]
+  ),
+  (
+    col: 'sector_pe',
+    label: 'SECTOR PE',
+    unit: '',
+    choices: [('≤ 15', false, 15), ('≤ 25', false, 25)]
+  ),
+  (
+    col: 'industry_pe',
+    label: 'INDUSTRY PE',
+    unit: '',
+    choices: [('≤ 15', false, 15), ('≤ 25', false, 25)]
+  ),
+  (
+    col: 'shares_yoy',
+    label: 'SHARES YOY',
+    unit: '%',
+    choices: [('≤ 0', false, 0), ('≤ 2', false, 2), ('≥ 5', true, 5)]
+  ),
 ];
 
 const List<ScreenPreset> screenPresets = [
@@ -268,7 +430,7 @@ String filterLabel(ScreenFilter f) {
 String metricText(String col, num? v) {
   if (v == null) return '';
   final d = _def(col);
-  final s = col == 'mcap_cr'
+  final s = const {'mcap_cr', 'avg_vol', 'turnover_cr'}.contains(col)
       ? fmtNum(v.toDouble(), decimals: 0)
       : (v.toDouble() == v.roundToDouble()
           ? '${v.round()}'
@@ -494,7 +656,10 @@ class _ScreensScreenState extends State<ScreensScreen> {
       _failed = false;
     });
     try {
-      var q = Supabase.instance.client.from('screener_metrics').select();
+      // explicit projection: the `sa` jsonb (stock-page extras) never rides
+      // along on a 50-row screen
+      var q = Supabase.instance.client.from('screener_metrics').select(
+          'symbol,name,price,${metricDefs.map((m) => m.col).join(',')}');
       for (final f in _filters) {
         q = f.gte ? q.gte(f.metric, f.value) : q.lte(f.metric, f.value);
       }
@@ -596,7 +761,8 @@ class _ScreensScreenState extends State<ScreensScreen> {
             Navigator.of(ctx).pop();
             setState(() {
               // low-is-good columns rank ascending, the rest descending
-              _asc = const {'pe', 'pb', 'de'}.contains(m.col);
+              _asc = const {'pe', 'pb', 'de', 'ps', 'ev_ebitda', 'shares_yoy'}
+                  .contains(m.col);
               _sortCol = m.col;
             });
             _run();

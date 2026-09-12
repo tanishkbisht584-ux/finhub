@@ -36,6 +36,10 @@ void main() {
     expect(metricText('roe', 22.0), 'ROE 22%');
     expect(metricText('mcap_cr', 2800.0), 'MCAP 2,800 CR');
     expect(metricText('pe', null), '');
+    expect(metricText('ret_1y', -12.34), 'RET 1Y -12.3%');
+    expect(metricText('avg_vol', 1234567), 'AVG VOL 12,34,567');
+    expect(metricText('f_score', 7.0), 'F-SCORE 7');
+    expect(metricText('rel_vol', 1.5), 'REL VOL 1.5x');
   });
 
   group('saved screens', () {

@@ -273,6 +273,94 @@ List<KvRow> technicalRows(Map<String, dynamic> meta) {
   return out;
 }
 
+/// RETURNS table: the symbol's own screener_metrics row, Stock Analysis
+/// (S&P Global) columns only (pipeline/stockanalysis.py, migration 019) —
+/// returns ladder, records, risk, street view, fair values, calendar, facts.
+/// Rows whose value is missing are skipped; an empty row yields [].
+List<KvRow> saRows(Map<String, dynamic> r) {
+  if (r.isEmpty) return const [];
+  final sa = (r['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
+  double? n(String k) => (r[k] as num?)?.toDouble();
+  double? s(String k) => (sa[k] as num?)?.toDouble();
+  String? sd(String k) => sa[k] == null || '${sa[k]}'.isEmpty ? null : dmy(sa[k]);
+  final out = <KvRow>[];
+  void row(String metric, String value, String third, String read, int tone) =>
+      out.add((metric: metric, value: value, third: third, read: read, tone: tone));
+  int sign(double v) => v > 0 ? 1 : v < 0 ? -1 : 0;
+  String rs(double v, {int decimals = 0}) => '₹${fmtNum(v, decimals: decimals)}';
+
+  for (final (k, label) in const [
+    ('ret_1w', '1 week'), ('ret_1m', '1 month'), ('ret_3m', '3 months'),
+    ('ret_6m', '6 months'), ('ret_ytd', 'This year'), ('ret_1y', '1 year'),
+    ('ret_3y', '3 years'), ('ret_5y', '5 years'),
+  ]) {
+    final v = n(k);
+    if (v != null) row(label, _signed(v), '', k == 'ret_1w' ? 'price return' : '', sign(v));
+  }
+  final ath = s('allTimeHigh'), athPct = n('ath_pct');
+  if (ath != null) {
+    row('All-time high', rs(ath), sd('allTimeHighDate') ?? '',
+        athPct == null ? '' : '${_signed(athPct)} from high',
+        athPct == null ? 0 : athPct >= -5 ? 1 : athPct <= -30 ? -1 : 0);
+  }
+  if (sd('high52Date') != null || sd('low52Date') != null) {
+    row('52-wk high / low', sd('high52Date') ?? '—', sd('low52Date') ?? '—', 'dates', 0);
+  }
+  final sharpe = n('sharpe'), sortino = n('sortino');
+  if (sharpe != null || sortino != null) {
+    row('Sharpe / Sortino', sharpe == null ? '—' : _n2(sharpe),
+        sortino == null ? '—' : _n2(sortino), 'risk-adjusted return',
+        sharpe == null ? 0 : sharpe >= 1 ? 1 : sharpe < 0 ? -1 : 0);
+  }
+  final atr = n('atr');
+  if (atr != null) row('ATR', rs(atr, decimals: 2), '', 'avg daily range', 0);
+  final rv = n('rel_vol'), to = n('turnover_cr');
+  if (rv != null || to != null) {
+    row('Rel. volume', rv == null ? '—' : '${_n2(rv)}×', '',
+        to == null ? '' : 'turnover ${rs(to)} Cr/day', 0);
+  }
+  final rating = sa['analystRatings'] as String?, target = s('priceTarget');
+  if (rating != null || target != null) {
+    final cnt = sa['analystCount'], up = s('priceTargetChange');
+    row('Street', rating ?? '—', target == null ? '' : rs(target),
+        [if (cnt != null) '$cnt analysts', if (up != null) '${_signed(up)} to target'].join(' · '),
+        rating == null ? 0 : rating.contains('Buy') ? 1 : rating.contains('Sell') ? -1 : 0);
+  }
+  final graham = s('grahamNumber'), gu = n('graham_upside');
+  if (graham != null) {
+    row('Graham number', rs(graham), '', gu == null ? '' : '${_signed(gu)} upside',
+        gu == null ? 0 : sign(gu));
+  }
+  final f = n('f_score');
+  if (f != null) {
+    row('Piotroski F', '${f.round()}/9', '', f >= 7 ? 'strong' : f <= 3 ? 'weak' : 'middling',
+        f >= 7 ? 1 : f <= 3 ? -1 : 0);
+  }
+  final ps = n('ps'), spe = n('sector_pe'), ipe = n('industry_pe');
+  if (ps != null) {
+    row('P/S', _n2(ps), '', [if (spe != null) 'sector PE ${_n2(spe)}', if (ipe != null) 'industry PE ${_n2(ipe)}'].join(' · '), 0);
+  }
+  for (final (k, label, unit) in const [
+    ('ev_ebitda', 'EV/EBITDA', ''), ('roic', 'ROIC', '%'), ('int_cov', 'Interest cover', '×'),
+    ('fcf_yield', 'FCF yield', '%'), ('earnings_yield', 'Earnings yield', '%'),
+  ]) {
+    final v = n(k);
+    if (v != null) row(label, '${_n2(v)}$unit', '', '', 0);
+  }
+  final sy = n('shares_yoy');
+  if (sy != null) row('Shares YoY', _signed(sy, decimals: 2), '', sy > 1 ? 'diluting' : sy < 0 ? 'buying back' : 'stable', sy > 1 ? -1 : sy < 0 ? 1 : 0);
+  final next = sd('nextEarningsDate');
+  if (next != null) row('Next results', next, '', sd('lastReportDate') == null ? '' : 'last report ${sd('lastReportDate')}', 0);
+  final xd = sd('exDivDate');
+  if (xd != null) row('Ex-dividend', xd, '', sd('paymentDate') == null ? '' : 'pays ${sd('paymentDate')}', 0);
+  final emp = s('employees'), founded = sa['founded'];
+  if (emp != null || founded != null) {
+    row('Company', emp == null ? '—' : '${fmtNum(emp, decimals: 0)} staff',
+        founded == null ? '' : 'est. $founded', '${sa['isin'] ?? ''}', 0);
+  }
+  return out;
+}
+
 /// Last [n] quarters of sales and net profit (₹ Cr) for the bar chart, oldest
 /// first. The `fundamentals` table is preferred (full history, already in
 /// Cr); meta.f.quarters (newest-first, raw ₹) is the fallback.

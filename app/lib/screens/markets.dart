@@ -391,6 +391,10 @@ class _MarketsBodyState extends State<MarketsBody> {
       });
     final macro = data.kind('macro');
     final results = data.list('results_calendar');
+    // Stock Analysis (S&P Global) blobs, pipeline/stockanalysis.py
+    final earnings = data.list('earnings_calendar');
+    final records =
+        (data.blobs['records'] as Map?)?.cast<String, dynamic>() ?? const {};
     final deals = data.deals;
     final insider = data.list('insider_trades');
     final idxGroups = <String, List<Map<String, dynamic>>>{};
@@ -1150,6 +1154,54 @@ class _MarketsBodyState extends State<MarketsBody> {
                       onTap: null,
                     ),
                 ], initial: 12),
+              ]),
+        ),
+      if (earnings.isNotEmpty)
+        (
+          id: 'earnings',
+          label: 'EARNINGS',
+          child: LedgerSection('Earnings ahead',
+              stamp: data.blobUpdated['earnings_calendar'],
+              footnote: 'next 14 days, every NSE stock · Stock Analysis (S&P Global)',
+              children: [
+                LedgerTable(const [
+                  LtCol('Symbol', right: false),
+                  LtCol('Date', right: false),
+                  LtCol('Company', right: false, text: true),
+                ], [
+                  for (final r in earnings)
+                    (
+                      cells: [
+                        r['symbol']?.toString() ?? '',
+                        dmy(r['date']),
+                        '${r['name'] ?? ''}',
+                      ],
+                      tone: 0,
+                      onTap: null,
+                    ),
+                ], initial: 12),
+              ]),
+        ),
+      if (records.isNotEmpty)
+        (
+          id: 'records',
+          label: 'RECORDS',
+          child: LedgerSection('Records',
+              stamp: data.blobUpdated['records'],
+              footnote: 'NSE stocks at or near their all-time high · Stock Analysis '
+                  '(S&P Global) · as of ${dmy(records['asof'])}',
+              children: [
+                Text(
+                    '${records['near_ath_pct'] ?? '—'}% within 5% of all-time high · '
+                    '${records['up_1y_pct'] ?? '—'}% up over 1 year',
+                    style: mono.copyWith(fontSize: 12)),
+                const SizedBox(height: 8),
+                LedgerTable(const [
+                  LtCol('At all-time high', right: false),
+                ], [
+                  for (final s in (records['ath'] as List?) ?? const [])
+                    (cells: ['$s'], tone: 1, onTap: null),
+                ], initial: 10),
               ]),
         ),
       if (deals.isNotEmpty)

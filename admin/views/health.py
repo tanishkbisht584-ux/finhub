@@ -147,7 +147,8 @@ gst = (f.get("market_status") or {}).get("groups") or {}
 fund_h = f.get("fund_age_h") or {}
 group("Market data", "quotes, list blobs, fundamentals + the screener", "market",
       [pill(f"{k} {a:.1f}h", a <= ops.MAX_QUOTE_AGE_H.get(k, 999)) for k, a in sorted(qa_h.items())]
-      + [pill(f"{t} {a:.1f}h", a <= ops.FUND_MAX_AGE_H) for t, a in sorted(fund_h.items())]
+      + [pill(f"{t} {a:.1f}h", a <= (ops.SA_MAX_AGE_H if t == "stockanalysis" else ops.FUND_MAX_AGE_H))
+         for t, a in sorted(fund_h.items())]
       + ([pill(f"{sum(1 for s in gst.values() if not s.get('ok'))}/{len(gst)} groups failing",
                all(s.get("ok") for s in gst.values()))] if gst else [])
       or [pill("no quote rows / not probed", True, DIM)])

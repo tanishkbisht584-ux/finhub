@@ -114,6 +114,18 @@ const glossaryTerms = [
   'lpr',
   'p/e',
   'p/b',
+  'p/s',
+  'sharpe',
+  'sortino',
+  'atr',
+  'piotroski',
+  'graham number',
+  'ev/ebitda',
+  'roic',
+  'interest cover',
+  'fcf yield',
+  'earnings yield',
+  'all-time high',
 ];
 
 /// Split [text] into segments, marking case-insensitive whole-word hits of

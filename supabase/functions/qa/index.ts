@@ -517,7 +517,8 @@ const DEFINE_TERMS = new Set([
   "rsi", "macd", "sma", "golden cross", "death cross", "advance decline",
   "beta", "cagr", "promoter pledge", "vix", "lpr", "breadth", "bulk deal",
   "block deal", "circuit filter", "oversubscription", "grey market",
-  "p/e", "p/b",
+  "p/e", "p/b", "p/s", "sharpe", "sortino", "atr", "piotroski", "graham number", "ev/ebitda",
+  "roic", "interest cover", "fcf yield", "earnings yield", "all-time high",
 ]);
 
 async function questionHash(norm: string): Promise<string> {
