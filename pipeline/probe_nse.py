@@ -103,6 +103,38 @@ def reports_announcements():
     print("announcements first keys:", sorted(ann[0]) if ann else None)
 
 
+def market_shapes():
+    """12 Sep 2026: F&O + announcements shapes for the Markets-tab tables —
+    the live fno blob had ltp/pct null on every OI row and hi52/lo52 = 0."""
+    def head(label, j, n=2, keys=None):
+        rows = market_rows(j)
+        print(f"\n-- {label}: {len(rows)} rows; top-level keys: {sorted(j) if isinstance(j, dict) else type(j).__name__}")
+        for r in rows[:n]:
+            print("  ", json.dumps({k: r.get(k) for k in keys} if keys else r)[:900])
+        if rows:
+            print("   row keys:", sorted(rows[0]))
+        return rows
+
+    head("oi-spurts", get("live-analysis-oi-spurts-underlyings"))
+    for idx in ("high", "low"):
+        j = get("live-analysis-52Week", index=idx)
+        print(f"\n-- 52Week {idx}: type={type(j).__name__} keys={sorted(j) if isinstance(j, dict) else None}")
+        print("  ", json.dumps(j)[:700])
+    head("variations gainers", get("live-analysis-variations", index="gainers"))
+    head("F&O securities", get("equity-stockIndices", index="SECURITIES IN F&O"))
+    ann = get("corporate-announcements", index="equities")
+    rows = head("announcements (all)", ann, n=3,
+                keys=["symbol", "desc", "an_dt", "sm_name", "attchmntFile", "sort_date", "bd_dt"])
+    dts = sorted(str(r.get("an_dt") or "") for r in rows)
+    print("   an_dt span:", dts[:1], dts[-1:])
+
+
+def market_rows(j):
+    from market import _rows
+    return [r for r in _rows(j) if isinstance(r, dict)]
+
+
+show("market shapes (F&O, 52wk, announcements)", market_shapes)
 show("SHP master + XBRL", shp)
 show("financial results + XBRL", results)
 show("credit ratings raw", ratings)
