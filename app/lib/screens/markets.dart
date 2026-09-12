@@ -331,6 +331,38 @@ class _MarketsBodyState extends State<MarketsBody> {
     super.dispose();
   }
 
+  /// One explained mover: the story (tap -> feed) or the NSE filing (tap ->
+  /// the PDF) that is the reason, its impact, and where it was first reported.
+  LtRow _moveRow(Map<String, dynamic> m) {
+    final storyId = (m['story_id'] as num?)?.toInt();
+    final url = m['url'] as String?;
+    final impact = m['impact'];
+    return (
+      cells: [
+        '${m['symbol'] ?? ''}',
+        fmtPct((m['chg'] as num?)?.toDouble()),
+        _rs(m['ltp']),
+        impact != null
+            ? '$impact/10'
+            : m['reason'] != null
+                ? 'filing'
+                : '—',
+        '${m['title'] ?? m['reason'] ?? ''}',
+        '${m['source'] ?? ''}',
+        _when(m['at']),
+      ],
+      tone: 0,
+      onTap: storyId != null
+          ? () {
+              homeTab.value = 0;
+              pendingStory.value = storyId;
+            }
+          : url != null && url.isNotEmpty
+              ? () => openExternal(context, url)
+              : null,
+    );
+  }
+
   List<_Sec> _sections() {
     final data = widget.data;
     final onFollowMf = widget.onFollowMf;
@@ -376,6 +408,12 @@ class _MarketsBodyState extends State<MarketsBody> {
     // Sentiment + signals (pipeline market.refresh_sentiment / signals.py).
     final summary =
         '${(data.blobs['market_summary'] as Map?)?['text'] ?? ''}'.trim();
+    final summaryLines = [
+      for (final l
+          in (data.blobs['market_summary'] as Map?)?['lines'] as List? ??
+              (summary.isEmpty ? const [] : summary.split(' · ')))
+        '$l'
+    ];
     final fg = (data.blobs['fear_greed'] as Map?)?.cast<String, dynamic>();
     final risk = (data.blobs['risk_index'] as Map?)?.cast<String, dynamic>();
     final corr = (data.blobs['correlation'] as Map?)?.cast<String, dynamic>();
@@ -384,6 +422,8 @@ class _MarketsBodyState extends State<MarketsBody> {
             const {};
     final explained = _l(moves['explained']);
     final unexplained = _l(moves['unexplained']);
+    final unexplainedN =
+        (moves['unexplained_n'] as num?)?.toInt() ?? unexplained.length;
     // P4 (0.31.0): RBI policy box, World Bank frame, USGS quakes.
     final rbi =
         (data.blobs['rbi_rates'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -526,17 +566,30 @@ class _MarketsBodyState extends State<MarketsBody> {
                         (e.value['dec'] as num?) ?? 0),
               ]),
         ),
-      // One no-AI line after the flows (the heatmap keeps opening the tab): index moves, FII/DII, top mover, mood.
-      if (summary.isNotEmpty)
+      // Today: one bullet per fact (index moves, FII/DII, top mover, mood) from
+      // market_summary.lines — no AI, the headline whole.
+      if (summaryLines.isNotEmpty)
         (
           id: 'today',
           label: 'TODAY',
           child: LedgerSection('Today',
               stamp: data.blobUpdated['market_summary'],
               children: [
-                Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: Text(summary, style: serif.copyWith(fontSize: 14))),
+                const SizedBox(height: 6),
+                for (final l in summaryLines)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('•  ',
+                              style:
+                                  serif.copyWith(fontSize: 14, color: inkDim)),
+                          Expanded(
+                              child:
+                                  Text(l, style: serif.copyWith(fontSize: 14))),
+                        ]),
+                  ),
               ]),
         ),
       if (calendar.isNotEmpty)
@@ -546,19 +599,24 @@ class _MarketsBodyState extends State<MarketsBody> {
           child: LedgerSection('Calendar',
               footnote: 'next 45 days · RBI/MOSPI rule + FRED release dates',
               children: [
-                KvTable(const [
-                  'DATE',
-                  'REGION',
-                  'TIME',
-                  'EVENT'
+                LedgerTable(const [
+                  LtCol('Date', right: false),
+                  LtCol('In'),
+                  LtCol('Region', right: false),
+                  LtCol('Time', right: false),
+                  LtCol('Event', right: false, text: true),
                 ], [
                   for (final e in calendar)
                     (
-                      metric: dmy(e['date']),
-                      value: '${e['region'] ?? ''}',
-                      third: '${e['time'] ?? ''}',
-                      read: '${e['name'] ?? ''}',
+                      cells: [
+                        dmy(e['date']),
+                        _daysAway(e['date']),
+                        '${e['region'] ?? ''}',
+                        '${e['time'] ?? ''}',
+                        '${e['name'] ?? ''}',
+                      ],
                       tone: 0,
+                      onTap: null,
                     ),
                 ]),
               ]),
@@ -596,73 +654,111 @@ class _MarketsBodyState extends State<MarketsBody> {
                 ],
               ]),
         ),
-      if (explained.isNotEmpty || unexplained.isNotEmpty)
+      // Moves: every explained 3%+ equity move with the story or NSE filing
+      // behind it, where it was first reported, and the news impact.
+      if (explained.isNotEmpty)
         (
           id: 'moves',
           label: 'MOVES',
           child: LedgerSection('Moves',
               stamp: data.blobUpdated['move_context'],
+              footnote: [
+                'equities that moved 3%+ · WHY = the story or NSE filing behind it · tap a row to read it',
+                if (unexplainedN > 0)
+                  '$unexplainedN more moved with no story or filing we carry',
+              ].join(' · '),
               children: [
-                Collapsible([
-                  for (final m in explained)
-                    _moveRow(m, '${m['title'] ?? ''}', onTap: () {
-                      homeTab.value = 0;
-                      pendingStory.value = (m['story_id'] as num?)?.toInt();
-                    }),
-                  for (final m in unexplained) _moveRow(m, 'No news we carry'),
-                ]),
+                LedgerTable(const [
+                  LtCol('Symbol', right: false),
+                  LtCol('Move'),
+                  LtCol('LTP ₹'),
+                  LtCol('Impact'),
+                  LtCol('Why', right: false, text: true),
+                  LtCol('Source', right: false, text: true),
+                  LtCol('When', right: false),
+                ], [
+                  for (final m in explained) _moveRow(m),
+                ], wrap: 260, initial: 10),
               ]),
         ),
       if (fno.isNotEmpty || flows['pcr'] != null)
         (
           id: 'fno',
           label: 'F&O',
-          child:
-              LedgerSection('F&O', stamp: data.blobUpdated['fno'], children: [
-            if (flows['pcr'] != null) ...[
-              LedgerRow(
-                  main: 'NIFTY put/call ratio',
-                  trail: 'PCR ${flows['pcr']}',
-                  trailColor: (flows['pcr'] as num) >= 1 ? green : red,
-                  sub:
-                      'exp ${flows['expiry'] ?? ''} · max OI at ${fmtNum(((flows['max_oi_strike'] ?? 0) as num).toDouble(), decimals: 0)} · spot ${fmtNum(((flows['underlying'] ?? 0) as num).toDouble(), decimals: 0)}'),
-              const SizedBox(height: 6),
-              ScaleBar((flows['pcr'] as num).toDouble(),
-                  min: 0.5, max: 1.5, marks: const [(1.0, '1.0')]),
-              const SizedBox(height: 6),
-            ],
-            if (fno['hi52'] != null || fno['lo52'] != null)
-              _breadthRow(
-                  '52W', (fno['hi52'] as num?) ?? 0, (fno['lo52'] as num?) ?? 0,
-                  main: 'new highs / lows'),
-            for (final (key, label) in const [
-              ('gainers', 'TOP GAINERS'),
-              ('losers', 'TOP LOSERS')
-            ])
-              if (_l(fno[key]).isNotEmpty) ...[
-                _groupLabel(label),
-                StatGrid([
-                  for (final r in _l(fno[key]).take(6))
-                    HeatCell('${r['symbol']}', (r['pct'] as num?)?.toDouble(),
-                        sub: r['ltp'] == null
-                            ? null
-                            : '₹${fmtNum((r['ltp'] as num).toDouble())}'),
-                ]),
-              ],
-            if (_l(fno['oi_gainers']).isNotEmpty ||
-                _l(fno['oi_losers']).isNotEmpty) ...[
-              _groupLabel('OPEN INTEREST'),
-              KvTable(const [
-                'SYMBOL',
-                'LTP',
-                'OI',
-                'PRICE · READ'
-              ], [
-                for (final r in _l(fno['oi_gainers'])) _oiRow(r, 'build-up'),
-                for (final r in _l(fno['oi_losers'])) _oiRow(r, 'unwinding'),
+          child: LedgerSection('F&O',
+              stamp: data.blobUpdated['fno'],
+              footnote:
+                  'NIFTY options at the nearest expiry · OI = open interest, contracts · read = price × OI direction',
+              children: [
+                if (flows['pcr'] != null) ...[
+                  _groupLabel('NIFTY OPTIONS'),
+                  StatGrid([
+                    StatTile('NIFTY PCR', '${flows['pcr']}',
+                        color: (flows['pcr'] as num) >= 1 ? green : red,
+                        sub: (flows['pcr'] as num) >= 1
+                            ? 'puts lead'
+                            : 'calls lead'),
+                    StatTile('Expiry', dmy(flows['expiry'])),
+                    StatTile('Spot', _n0(flows['underlying'])),
+                    StatTile('Max OI strike', _n0(flows['max_oi_strike'])),
+                    if (flows['ce_oi'] != null)
+                      StatTile('Call OI', _n0(flows['ce_oi'])),
+                    if (flows['pe_oi'] != null)
+                      StatTile('Put OI', _n0(flows['pe_oi'])),
+                  ]),
+                  const SizedBox(height: 8),
+                  ScaleBar((flows['pcr'] as num).toDouble(),
+                      min: 0.5, max: 1.5, marks: const [(1.0, '1.0')]),
+                  const SizedBox(height: 6),
+                ],
+                if (fno['hi52'] != null || fno['lo52'] != null)
+                  _breadthRow('52W', (fno['hi52'] as num?) ?? 0,
+                      (fno['lo52'] as num?) ?? 0,
+                      main: 'new highs / lows'),
+                for (final (key, label) in const [
+                  ('gainers', 'TOP GAINERS'),
+                  ('losers', 'TOP LOSERS')
+                ])
+                  if (_l(fno[key]).isNotEmpty) ...[
+                    _groupLabel(label),
+                    LedgerTable(const [
+                      LtCol('Symbol', right: false),
+                      LtCol('LTP ₹'),
+                      LtCol('Change'),
+                    ], [
+                      for (final r in _l(fno[key]))
+                        (
+                          cells: [
+                            '${r['symbol']}',
+                            _rs(r['ltp']),
+                            fmtPct((r['pct'] as num?)?.toDouble()),
+                          ],
+                          tone: 0,
+                          onTap: null,
+                        ),
+                    ]),
+                  ],
+                for (final (key, label) in const [
+                  ('oi_gainers', 'OI BUILD-UP'),
+                  ('oi_losers', 'OI UNWINDING')
+                ])
+                  if (_l(fno[key]).isNotEmpty) ...[
+                    _groupLabel(label),
+                    LedgerTable(const [
+                      LtCol('Symbol', right: false),
+                      LtCol('LTP ₹'),
+                      LtCol('Price'),
+                      LtCol('OI chg'),
+                      LtCol('OI'),
+                      LtCol('Δ OI'),
+                      LtCol('Volume'),
+                      LtCol('Read', right: false),
+                    ], [
+                      for (final r in _l(fno[key]))
+                        _oiRow(r, key == 'oi_gainers'),
+                    ]),
+                  ],
               ]),
-            ],
-          ]),
         ),
       if (poi.isNotEmpty)
         (
@@ -670,11 +766,25 @@ class _MarketsBodyState extends State<MarketsBody> {
           label: 'POSITIONING',
           child: LedgerSection('Positioning',
               footnote:
-                  'NSE participant-wise F&O open interest · ${dmy(poiBlob['date'])}',
+                  'NSE participant-wise F&O open interest · contracts · ${dmy(poiBlob['date'])} · net = index futures long − short',
               children: [
-                for (final who in const ['FII', 'DII', 'Pro', 'Client'])
-                  if (poi[who] is Map)
-                    _poiRow(who, (poi[who] as Map).cast<String, dynamic>()),
+                LedgerTable(const [
+                  LtCol('Participant', right: false),
+                  LtCol('Net idx fut'),
+                  LtCol('Δ d/d'),
+                  LtCol('Fut long'),
+                  LtCol('Fut short'),
+                  LtCol('Call long'),
+                  LtCol('Call short'),
+                  LtCol('Put long'),
+                  LtCol('Put short'),
+                  LtCol('Total long'),
+                  LtCol('Total short'),
+                ], [
+                  for (final who in const ['FII', 'DII', 'Pro', 'Client'])
+                    if (poi[who] is Map)
+                      _poiRow(who, (poi[who] as Map).cast<String, dynamic>()),
+                ], toneCol: 1),
               ]),
         ),
       if (data.kind('fx').isNotEmpty)
@@ -723,7 +833,7 @@ class _MarketsBodyState extends State<MarketsBody> {
                       bar: ((m['pct'] as num?) ?? 0).toDouble() / 100,
                       sub: m['end'] == null || '${m['end']}'.isEmpty
                           ? null
-                          : 'resolves ${m['end']}'),
+                          : 'resolves ${dmy(m['end'])}'),
               ]),
         ),
       if (data.kind('commodity').isNotEmpty)
@@ -799,9 +909,9 @@ class _MarketsBodyState extends State<MarketsBody> {
           label: 'BONDS',
           child: LedgerSection('Bonds',
               stamp: data.blobUpdated['bonds'],
-              stampPrefix: 'Stooq',
+              stampPrefix: 'RBI',
               footnote:
-                  'falling yield = green${rbi['asof'] == null ? '' : ' · RBI as of ${rbi['asof']}'}',
+                  'benchmark G-Secs · falling yield = green${rbi['asof'] == null ? '' : ' · RBI as of ${dmy(rbi['asof'])}'}',
               children: [
                 // The curve: benchmark G-Secs by residual tenor, points at
                 // column centres so the tenor row underneath is the axis.
@@ -817,29 +927,33 @@ class _MarketsBodyState extends State<MarketsBody> {
                   ),
                   const SizedBox(height: 8),
                 ],
-                KvTable(const [
-                  'TENOR',
-                  'YIELD',
-                  'SERIES',
-                  'CHANGE'
+                LedgerTable(const [
+                  LtCol('Tenor', right: false),
+                  LtCol('Yield'),
+                  LtCol('Δ bp'),
+                  LtCol('Prev'),
+                  LtCol('Series', right: false),
+                  LtCol('As of', right: false),
                 ], [
                   for (final b in bonds)
                     (
-                      metric: '${b['tenor'] ?? ''}',
-                      value:
-                          '${fmtNum(((b['yield'] ?? 0) as num).toDouble())}%',
-                      third: '${b['name'] ?? 'G-Sec'}',
-                      read: [
-                        if (b['chg_bp'] != null)
-                          '${(b['chg_bp'] as num) >= 0 ? '+' : '−'}${(b['chg_bp'] as num).abs()} bp',
-                        if (b['date'] != null) '${b['date']}',
-                      ].join(' · '),
+                      cells: [
+                        '${b['tenor'] ?? ''}',
+                        '${fmtNum(((b['yield'] ?? 0) as num).toDouble())}%',
+                        _sgn(b['chg_bp'], decimals: 1),
+                        b['prev'] == null
+                            ? '—'
+                            : '${fmtNum((b['prev'] as num).toDouble())}%',
+                        '${b['name'] ?? 'G-Sec'}',
+                        dmy(b['date']),
+                      ],
                       // Falling yield = rising bond prices, so down is green here.
                       tone: b['chg_bp'] == null
                           ? 0
                           : ((b['chg_bp'] as num) <= 0 ? 1 : -1),
+                      onTap: null,
                     ),
-                ]),
+                ], toneCol: 2),
                 if (rbi.isNotEmpty) ...[
                   _groupLabel('RBI POLICY RATES'),
                   StatGrid(columns: 2, [
@@ -875,7 +989,7 @@ class _MarketsBodyState extends State<MarketsBody> {
                         StatTile(label,
                             '${fmtNum(((cb[key] as Map)['rate'] as num).toDouble())}%',
                             sub:
-                                '${key == 'XM' ? 'EU' : key} · ${(cb[key] as Map)['asof'] ?? ''}'),
+                                '${key == 'XM' ? 'EU' : key} · ${dmy((cb[key] as Map)['asof'])}'),
                   ]),
                 ],
               ]),
@@ -884,29 +998,45 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'ipos',
           label: 'IPO',
-          child:
-              LedgerSection('IPO', stamp: data.blobUpdated['ipos'], children: [
-            KvTable(const [
-              'SYMBOL',
-              'BAND ₹',
-              'SIZE',
-              'COMPANY · DATES · STATUS'
-            ], [
-              for (final i in ipos)
-                (
-                  metric: '${i['symbol'] ?? ''}',
-                  value: '${i['band'] ?? '—'}',
-                  third: '${i['size'] ?? '—'}',
-                  read: [
-                    if (i['company'] != null) '${i['company']}',
-                    if (i['open'] != null || i['close'] != null)
-                      '${i['open'] ?? ''}–${i['close'] ?? ''}',
-                    if (i['status'] != null) '${i['status']}',
-                  ].join(' · '),
-                  tone: '${i['status']}'.toLowerCase() == 'open' ? 1 : 0,
-                ),
-            ]),
-          ]),
+          child: LedgerSection('IPO',
+              stamp: data.blobUpdated['ipos'],
+              footnote: 'NSE mainboard + SME · size = shares offered',
+              children: [
+                for (final (key, label) in const [
+                  ('current', 'OPEN NOW'),
+                  ('upcoming', 'UPCOMING')
+                ])
+                  if (_l(ipoBlob[key]).isNotEmpty) ...[
+                    _groupLabel(label),
+                    LedgerTable(const [
+                      LtCol('Symbol', right: false),
+                      LtCol('Company', right: false, text: true),
+                      LtCol('Band ₹'),
+                      LtCol('Opens', right: false),
+                      LtCol('Closes', right: false),
+                      LtCol('Size'),
+                      LtCol('Status', right: false),
+                    ], [
+                      for (final i in _l(ipoBlob[key]))
+                        (
+                          cells: [
+                            '${i['symbol'] ?? ''}',
+                            '${i['company'] ?? ''}',
+                            _band(i['band']),
+                            dmy(i['open']),
+                            dmy(i['close']),
+                            _shares(i['size']),
+                            '${i['status'] ?? ''}',
+                          ],
+                          tone: const {'open', 'active'}
+                                  .contains('${i['status']}'.toLowerCase())
+                              ? 1
+                              : 0,
+                          onTap: null,
+                        ),
+                    ]),
+                  ],
+              ]),
         ),
       if (macro.isNotEmpty || wb.isNotEmpty)
         (
@@ -915,29 +1045,34 @@ class _MarketsBodyState extends State<MarketsBody> {
           child: LedgerSection('Macro', children: [
             for (final t in macro) _MacroRow(t),
             // Annual frame from the World Bank: one row per series.
-            if (wb.values.any((v) => v is Map && v['value'] != null))
-              KvTable(const [
-                'SERIES',
-                'VALUE',
-                'YEAR',
-                'PRIOR'
+            if (wb.values.any((v) => v is Map && v['value'] != null)) ...[
+              _groupLabel('ANNUAL · WORLD BANK'),
+              LedgerTable(const [
+                LtCol('Series', right: false),
+                LtCol('Value'),
+                LtCol('Year'),
+                LtCol('Prior'),
+                LtCol('Prior yr'),
+                LtCol('Units', right: false),
               ], [
                 for (final e in wb.entries)
                   if (e.value is Map && (e.value as Map)['value'] != null)
                     (
-                      metric: '${(e.value as Map)['name'] ?? e.key}',
-                      value:
-                          '${fmtNum(((e.value as Map)['value'] as num).toDouble(), decimals: 2)}${(e.value as Map)['units'] == '%' ? '%' : ''}',
-                      third: '${(e.value as Map)['year'] ?? ''}',
-                      read: [
-                        if ((e.value as Map)['units'] != '%')
-                          '${(e.value as Map)['units']}',
-                        if ((e.value as Map)['prev'] != null)
-                          'prev ${(e.value as Map)['prev_year'] ?? ''}: ${fmtNum(((e.value as Map)['prev'] as num).toDouble(), decimals: 2)}',
-                      ].join(' · '),
+                      cells: [
+                        '${(e.value as Map)['name'] ?? e.key}',
+                        _wbv((e.value as Map)['value'],
+                            (e.value as Map)['units']),
+                        '${(e.value as Map)['year'] ?? ''}',
+                        _wbv((e.value as Map)['prev'],
+                            (e.value as Map)['units']),
+                        '${(e.value as Map)['prev_year'] ?? ''}',
+                        '${(e.value as Map)['units'] ?? ''}',
+                      ],
                       tone: 0,
+                      onTap: null,
                     ),
               ]),
+            ],
           ]),
         ),
       if (quakes.isNotEmpty)
@@ -949,21 +1084,22 @@ class _MarketsBodyState extends State<MarketsBody> {
               stampPrefix: 'USGS',
               footnote: 'last 7 days · M4.5+ · India region',
               children: [
-                KvTable(const [
-                  'MAG',
-                  'DATE',
-                  '',
-                  'PLACE'
+                LedgerTable(const [
+                  LtCol('Mag', right: false),
+                  LtCol('Date', right: false),
+                  LtCol('Time IST', right: false),
+                  LtCol('Place', right: false, text: true),
                 ], [
                   for (final q in quakes)
                     (
-                      metric: 'M${q['mag']}',
-                      value: '${q['time']}'.length >= 10
-                          ? '${q['time']}'.substring(5, 10)
-                          : '',
-                      third: '',
-                      read: '${q['place'] ?? ''}',
+                      cells: [
+                        'M${q['mag']}',
+                        dmy(q['time']),
+                        _hhmm(q['time']),
+                        '${q['place'] ?? ''}',
+                      ],
                       tone: ((q['mag'] as num?) ?? 0) >= 6 ? -1 : 0,
+                      onTap: null,
                     ),
                 ]),
               ]),
@@ -994,25 +1130,26 @@ class _MarketsBodyState extends State<MarketsBody> {
           label: 'RESULTS',
           child: LedgerSection('Results',
               stamp: data.blobUpdated['results_calendar'],
+              footnote: 'NSE board meetings and results dates',
               children: [
-                KvTable(const [
-                  'SYMBOL',
-                  'DATE',
-                  '',
-                  'COMPANY · PURPOSE'
+                LedgerTable(const [
+                  LtCol('Symbol', right: false),
+                  LtCol('Date', right: false),
+                  LtCol('Company', right: false, text: true),
+                  LtCol('Purpose', right: false, text: true),
                 ], [
                   for (final r in results)
                     (
-                      metric: r['symbol']?.toString() ?? '',
-                      value: dmy(r['date']),
-                      third: '',
-                      read: [
-                        if (r['company'] != null) '${r['company']}',
-                        if (r['purpose'] != null) '${r['purpose']}',
-                      ].join(' · '),
+                      cells: [
+                        r['symbol']?.toString() ?? '',
+                        dmy(r['date']),
+                        '${r['company'] ?? ''}',
+                        '${r['purpose'] ?? ''}',
+                      ],
                       tone: 0,
+                      onTap: null,
                     ),
-                ]),
+                ], initial: 12),
               ]),
         ),
       if (deals.isNotEmpty)
@@ -1021,23 +1158,37 @@ class _MarketsBodyState extends State<MarketsBody> {
           label: 'DEALS',
           child: LedgerSection('Deals',
               stamp: data.blobUpdated['bulk_deals'],
+              footnote:
+                  'NSE bulk (>0.5% of equity in a day) and block (negotiated window) deals · value in ₹',
               children: [
-                KvTable(const [
-                  'SYMBOL',
-                  'QTY',
-                  'PRICE',
-                  'CLIENT · SIDE'
+                LedgerTable(const [
+                  LtCol('Symbol', right: false),
+                  LtCol('Side', right: false),
+                  LtCol('Qty'),
+                  LtCol('Price ₹'),
+                  LtCol('Value'),
+                  LtCol('Type', right: false),
+                  LtCol('Client', right: false, text: true),
+                  LtCol('Company', right: false, text: true),
+                  LtCol('Date', right: false),
                 ], [
                   for (final d in deals)
                     (
-                      metric: d['symbol']?.toString() ?? '',
-                      value: fmtNum((d['qty'] as num).toDouble(), decimals: 0),
-                      third: '₹${fmtNum((d['price'] as num).toDouble())}',
-                      read:
-                          '${d['client'] ?? ''} · ${d['side']} ₹${_crore(d['value'])} · ${d['type']} · ${d['date'] ?? ''}',
+                      cells: [
+                        d['symbol']?.toString() ?? '',
+                        '${d['side'] ?? ''}',
+                        _n0(d['qty']),
+                        fmtNum(((d['price'] ?? 0) as num).toDouble()),
+                        '₹${_crore(d['value'])}',
+                        '${d['type'] ?? ''}',
+                        '${d['client'] ?? ''}',
+                        '${d['name'] ?? ''}',
+                        dmy(d['date']),
+                      ],
                       tone: d['side'] == 'BUY' ? 1 : -1,
+                      onTap: null,
                     ),
-                ]),
+                ], toneCol: 1, initial: 12),
               ]),
         ),
       if (insider.isNotEmpty)
@@ -1046,24 +1197,40 @@ class _MarketsBodyState extends State<MarketsBody> {
           label: 'INSIDER',
           child: LedgerSection('Insider',
               stamp: data.blobUpdated['insider_trades'],
+              footnote:
+                  'NSE insider-trading disclosures (SEBI PIT), last 7 days · value in ₹',
               children: [
-                KvTable(const [
-                  'SYMBOL',
-                  'QTY',
-                  'SIDE',
-                  'PERSON · CATEGORY'
+                LedgerTable(const [
+                  LtCol('Symbol', right: false),
+                  LtCol('Side', right: false),
+                  LtCol('Qty'),
+                  LtCol('Value ₹'),
+                  LtCol('Person', right: false, text: true),
+                  LtCol('Category', right: false),
+                  LtCol('Mode', right: false),
+                  LtCol('Company', right: false, text: true),
+                  LtCol('Traded', right: false),
+                  LtCol('Intimated', right: false),
                 ], [
                   for (final i in insider)
                     (
-                      metric: i['symbol']?.toString() ?? '',
-                      value: '${i['qty'] ?? ''}',
-                      third: '${i['side'] ?? ''}'.toUpperCase(),
-                      read:
-                          '${i['person'] ?? ''} · ${i['category'] ?? ''} · ${i['mode'] ?? ''} · ${i['date'] ?? ''}',
+                      cells: [
+                        i['symbol']?.toString() ?? '',
+                        '${i['side'] ?? ''}'.toUpperCase(),
+                        _n0(i['qty']),
+                        _money(i['value']),
+                        '${i['person'] ?? ''}',
+                        '${i['category'] ?? ''}',
+                        '${i['mode'] ?? ''}',
+                        '${i['company'] ?? ''}',
+                        dmy(i['date']),
+                        i['intimated'] == null ? '—' : dmy(i['intimated']),
+                      ],
                       tone:
                           '${i['side']}'.toLowerCase().startsWith('b') ? 1 : -1,
+                      onTap: null,
                     ),
-                ]),
+                ], toneCol: 1, initial: 12),
               ]),
         ),
     ];
@@ -1145,15 +1312,126 @@ Widget _heatLegend(double scale) {
   ]);
 }
 
-KvRow _oiRow(Map<String, dynamic> r, String what) {
-  final oi = ((r['oi_pct'] ?? 0) as num).toDouble();
+/// A number whether the blob sent it as a number or an NSE string ("7,500").
+double? _numOf(Object? v) => v is num
+    ? v.toDouble()
+    : v == null
+        ? null
+        : double.tryParse('$v'.replaceAll(',', '').trim());
+
+String _rs(Object? v) => _numOf(v) == null ? '—' : '₹${fmtNum(_numOf(v)!)}';
+
+String _n0(Object? v) =>
+    _numOf(v) == null ? '—' : fmtNum(_numOf(v)!, decimals: 0);
+
+String _money(Object? v) => _numOf(v) == null ? '—' : '₹${_crore(_numOf(v))}';
+
+/// Signed with the typographic minus the tables colour by.
+String _sgn(Object? v, {int decimals = 2, String unit = ''}) {
+  final n = _numOf(v);
+  if (n == null) return '—';
+  return '${n >= 0 ? '+' : '−'}${fmtNum(n.abs(), decimals: decimals)}$unit';
+}
+
+String _wbv(Object? v, Object? units) => _numOf(v) == null
+    ? '—'
+    : '${fmtNum(_numOf(v)!, decimals: 2)}${units == '%' ? '%' : ''}';
+
+/// "Rs.40 to Rs.43" (NSE) -> "40–43".
+String _band(Object? v) => v == null
+    ? '—'
+    : '$v'
+        .replaceAll(RegExp(r'Rs\.?\s*'), '')
+        .replaceAll(RegExp(r'\s+to\s+'), '–');
+
+/// NSE issue size is a share count string ("37636363") -> "3.76 Cr sh";
+/// anything non-numeric ("1,200 Cr") is shown as sent.
+String _shares(Object? v) {
+  final n = _numOf(v);
+  if (v == null) return '—';
+  if (n == null) return '$v';
+  if (n >= 1e7) return '${(n / 1e7).toStringAsFixed(2)} Cr sh';
+  if (n >= 1e5) return '${(n / 1e5).toStringAsFixed(1)} L sh';
+  return '${fmtNum(n, decimals: 0)} sh';
+}
+
+/// Calendar distance: "today" / "tomorrow" / "12 d" / "3 d ago".
+String _daysAway(Object? d) {
+  final t = parseDate(d);
+  if (t == null) return '';
+  final now = DateTime.now();
+  final n = DateTime(t.year, t.month, t.day)
+      .difference(DateTime(now.year, now.month, now.day))
+      .inDays;
+  return n == 0
+      ? 'today'
+      : n == 1
+          ? 'tomorrow'
+          : n < 0
+              ? '${-n} d ago'
+              : '$n d';
+}
+
+/// IST clock of a timestamp; empty when the value carries no time.
+String _hhmm(Object? at) {
+  final t = parseDate(at);
+  return t == null || !'$at'.contains(':') ? '' : hhmmIst(t);
+}
+
+String _when(Object? at) {
+  final t = parseDate(at);
+  if (t == null) return '';
+  final hh = _hhmm(at);
+  return hh.isEmpty ? dmy(at) : '${dmy(at)} $hh';
+}
+
+/// One OI-spurt row: price × OI direction is the F&O desk's read; older
+/// blobs without `read` fall back to the OI direction alone.
+LtRow _oiRow(Map<String, dynamic> r, bool gainer) {
   final pct = (r['pct'] as num?)?.toDouble();
+  final read = '${r['read'] ?? (gainer ? 'OI up' : 'OI down')}';
+  final bullish = read == 'long build-up' || read == 'short covering';
+  final bearish = read == 'short build-up' || read == 'long unwinding';
   return (
-    metric: '${r['symbol']}',
-    value: r['ltp'] == null ? '—' : '₹${fmtNum((r['ltp'] as num).toDouble())}',
-    third: '${oi >= 0 ? '+' : '−'}${oi.abs().toStringAsFixed(1)}% OI',
-    read: [if (pct != null) fmtPct(pct), what].join(' · '),
-    tone: pct == null ? 0 : (pct >= 0 ? 1 : -1),
+    cells: [
+      '${r['symbol']}',
+      _rs(r['ltp']),
+      pct == null ? '—' : fmtPct(pct),
+      _sgn(r['oi_pct'], decimals: 1, unit: '%'),
+      _n0(r['oi']),
+      _sgn(r['oi_chg'], decimals: 0),
+      _n0(r['volume']),
+      read,
+    ],
+    tone: bullish
+        ? 1
+        : bearish
+            ? -1
+            : 0,
+    onTap: null,
+  );
+}
+
+/// One participant's F&O book, day-over-day on the index-futures net.
+LtRow _poiRow(String who, Map<String, dynamic> r) {
+  final net = ((r['net_fut_idx'] ?? 0) as num).toDouble();
+  final prev = (r['prev_net_fut_idx'] as num?)?.toDouble();
+  return (
+    cells: [
+      who,
+      _sgn(net, decimals: 0),
+      prev == null ? '—' : _sgn(net - prev, decimals: 0),
+      _n0(r['fut_idx_long']),
+      _n0(r['fut_idx_short']),
+      _n0(r['opt_idx_call_long']),
+      _n0(r['opt_idx_call_short']),
+      _n0(r['opt_idx_put_long']),
+      _n0(r['opt_idx_put_short']),
+      _n0(r['total_long']),
+      _n0(r['total_short']),
+    ],
+    tone: net >= 0 ? 1 : -1,
+    onTap: null,
   );
 }
 
@@ -1264,27 +1542,6 @@ List<Widget> _gaugeRows(String name, Map<String, dynamic> g, Color color,
 String _kt(Object? v) =>
     '${(((v as num?)?.toDouble() ?? 0) / 1000).toStringAsFixed(0)}k t';
 
-/// One participant's net index-futures stance, day-over-day when we have it.
-Widget _poiRow(String who, Map<String, dynamic> r) {
-  final net = ((r['net_fut_idx'] ?? 0) as num).toDouble();
-  final prev = (r['prev_net_fut_idx'] as num?)?.toDouble();
-  final d = prev == null ? null : net - prev;
-  final long = ((r['total_long'] ?? 0) as num).toDouble();
-  final short = ((r['total_short'] ?? 0) as num).toDouble();
-  return LedgerRow(
-      lead: who,
-      main: 'net index futures',
-      trail: '${net >= 0 ? '+' : ''}${fmtNum(net, decimals: 0)}',
-      trailColor: net >= 0 ? green : red,
-      bar: long + short == 0 ? null : long / (long + short),
-      barColor: green,
-      barTrack: red.withValues(alpha: 0.35),
-      sub: [
-        if (d != null) 'Δ ${d >= 0 ? '+' : ''}${fmtNum(d, decimals: 0)} d/d',
-        'long ${fmtNum(long, decimals: 0)} · short ${fmtNum(short, decimals: 0)}',
-      ].join(' · '));
-}
-
 /// IMD departure row: red past -19% (deficient), green past +19% (excess).
 Widget _depRow(String name, Map<String, dynamic> r, {bool country = false}) {
   final dep = ((r['dep_pct'] ?? 0) as num).toInt();
@@ -1334,16 +1591,6 @@ class _SessionsState extends State<_Sessions> {
               trail: '●',
               trailColor: s.open ? green : inkDim),
       ]);
-}
-
-Widget _moveRow(Map<String, dynamic> m, String main, {VoidCallback? onTap}) {
-  final chg = (m['chg'] as num?)?.toDouble();
-  return LedgerRow(
-      lead: '${m['symbol'] ?? ''}',
-      main: main,
-      trail: fmtPct(chg),
-      trailColor: chg == null ? null : (chg >= 0 ? green : red),
-      onTap: onTap);
 }
 
 /// FII/DII cash-market: net in the row, buy vs sell as paired bars. ₹ Cr.

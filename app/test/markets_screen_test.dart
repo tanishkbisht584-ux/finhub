@@ -230,13 +230,25 @@ final _blobs = <String, dynamic>{
       {
         'symbol': 'ANANTRAJ',
         'chg': 7.67,
+        'ltp': 610.0,
         'story_id': 97588,
-        'title': 'NSE Questions Anant Raj Over Sudden Surge in Trading Volume'
-      }
+        'title': 'NSE Questions Anant Raj Over Sudden Surge in Trading Volume',
+        'impact': 6,
+        'source': 'Mint Markets',
+        'at': '2026-08-21T10:00:00+05:30',
+      },
+      {
+        'symbol': 'IFCI',
+        'chg': -3.1,
+        'ltp': 42.5,
+        'reason': 'Bagging of orders worth Rs 120 crore from NHAI',
+        'source': 'NSE filing',
+        'at': '2026-08-21T15:10:00+05:30',
+        'url': 'https://nsearchives.nseindia.com/x.pdf',
+      },
     ],
-    'unexplained': [
-      {'symbol': 'IFCI', 'chg': -3.1}
-    ],
+    'unexplained': [],
+    'unexplained_n': 3,
   },
   'predictions': {
     'markets': [
@@ -378,7 +390,7 @@ Widget _app(MarketsData d, {void Function(int, bool)? onFollow}) => MaterialApp(
 
 Future<void> _toEnd(WidgetTester tester) async {
   await tester.drag(
-      find.byKey(const Key('marketsScroll')), const Offset(0, -6000));
+      find.byKey(const Key('marketsScroll')), const Offset(0, -30000));
   await tester.pump();
 }
 
@@ -476,7 +488,21 @@ void main() {
     expect(find.textContaining('w/w +2.29%'), findsOneWidget);
     expect(find.text('ANANTRAJ'), findsOneWidget);
     expect(find.text('▲7.67%'), findsOneWidget);
-    expect(find.text('No news we carry'), findsOneWidget);
+    // Moves: story row + NSE-filing row, whole headline, source, impact.
+    expect(
+        find.text(
+            'NSE Questions Anant Raj Over Sudden Surge in Trading Volume'),
+        findsOneWidget);
+    expect(find.text('6/10'), findsOneWidget);
+    expect(find.text('Mint Markets'), findsOneWidget);
+    expect(find.text('Bagging of orders worth Rs 120 crore from NHAI'),
+        findsOneWidget);
+    expect(find.text('NSE filing'), findsOneWidget);
+    expect(find.text('filing'), findsOneWidget);
+    expect(find.textContaining('3 more moved'), findsOneWidget);
+    expect(find.text('No news we carry'), findsNothing);
+    // Today: the joined text splits into bullets.
+    expect(find.text('•  '), findsWidgets);
     expect(find.text('IT'), findsOneWidget); // NIFTY prefix dropped
     expect(find.text('100'),
         findsNWidgets(2)); // broad market tile + insider qty cell
@@ -488,7 +514,7 @@ void main() {
     // without scrolling; only taps need the widget on screen.
     expect(find.text('−₹543 Cr'), findsOneWidget); // FII net, red side
     expect(find.text('+₹2,124 Cr'), findsOneWidget); // DII net
-    expect(find.text('PCR 1.08'), findsOneWidget);
+    expect(find.text('1.08'), findsOneWidget); // NIFTY PCR tile
     expect(find.text('25↑ 24↓'), findsOneWidget);
     // Followed scheme (Axis) sorts above the default (Parag) despite the alphabet.
     final axis = tester.getTopLeft(find.text('Axis ELSS Tax Saver Fund'));
@@ -510,9 +536,10 @@ void main() {
     expect(find.text('ODDS'), findsNWidgets(2));
     expect(find.textContaining('Fed cut 25 bps'), findsOneWidget);
     expect(find.text('RESULTS'), findsNWidgets(2));
-    expect(find.text('28 Aug'), findsOneWidget);
+    expect(find.text('28 Aug'), findsWidgets); // results date, G-Sec as-of
     expect(find.text('DEALS'), findsNWidgets(2));
-    expect(find.textContaining('BUY ₹8.0 Cr'), findsOneWidget);
+    expect(find.text('₹8.0 Cr'), findsOneWidget);
+    expect(find.text('NOTRE DAME'), findsOneWidget); // whole client name
     expect(find.textContaining('NSE · '), findsWidgets); // blob stamp on deals
     expect(find.textContaining('A Person'), findsOneWidget);
   });
@@ -563,15 +590,18 @@ void main() {
     // PCR moved out of FLOWS into F&O, above the OI movers.
     expect(
         tester.getTopLeft(find.text('F&O').last).dy <
-            tester.getTopLeft(find.text('PCR 1.08')).dy,
+            tester.getTopLeft(find.text('NIFTY PCR')).dy,
         isTrue);
-    expect(find.text('+38.2% OI'), findsOneWidget);
-    expect(find.text('−12.0% OI'), findsOneWidget);
+    expect(find.text('+38.2%'), findsOneWidget); // OI chg column
+    expect(find.text('−12.0%'), findsOneWidget);
+    expect(find.text('OI up'), findsOneWidget); // old blob: no `read`
     expect(find.text('34↑ 12↓'), findsOneWidget);
     expect(find.text('ADANIENT'), findsOneWidget); // heat grid tile
-    expect(find.text('+4.50%'), findsOneWidget);
+    expect(find.text('▲4.50%'), findsOneWidget); // top gainers table
     expect(find.text('6.82%'), findsOneWidget);
-    expect(find.text('−3.0 bp · 2026-08-28'), findsOneWidget);
+    expect(find.text('−3.0'), findsOneWidget); // Δ bp column
+    expect(find.text('6.85%'), findsOneWidget); // prev yield column
+    expect(find.text('28 Aug'), findsWidgets);
     // 0.31.0: named benchmark G-Secs, the curve (2+ points), RBI policy box
     expect(find.text('6.20% GS 2029'), findsOneWidget);
     expect(find.byType(Sparkline), findsWidgets);
@@ -580,15 +610,18 @@ void main() {
     expect(find.text('91-day T-bill cut-off'), findsOneWidget);
     // World Bank rows ride the MACRO section; quakes get their own
     expect(find.text('GDP growth'), findsOneWidget);
-    expect(find.text('prev 2024: 7.10'), findsOneWidget);
+    expect(find.text('7.10%'), findsOneWidget); // PRIOR column, units %
+    expect(find.text('2024'), findsWidgets); // PRIOR YR column
     expect(find.text('2025'), findsWidgets); // YEAR column
-    expect(find.textContaining('% of GDP · prev 2024: '), findsOneWidget);
-    expect(find.textContaining('0.85'), findsOneWidget);
+    expect(find.text('% of GDP'), findsOneWidget); // UNITS column
+    expect(find.text('-0.85'), findsOneWidget);
     expect(find.text('QUAKES'), findsNWidgets(2));
     expect(find.text('M5.1'), findsOneWidget);
-    expect(find.text('09-03'), findsOneWidget);
-    expect(find.textContaining('ABC Ltd · 01-Sep-2026–03-Sep-2026 · Open'),
-        findsOneWidget);
+    expect(find.text('3 Sep'), findsWidgets); // quake date (and a G-Sec as-of)
+    expect(find.text('115 km NE of Joshimath, India'), findsOneWidget);
+    expect(find.text('ABC Ltd'), findsOneWidget); // IPO: its own column
+    expect(find.text('1 Sep'), findsOneWidget);
+    expect(find.text('Open'), findsOneWidget);
   });
 
   testWidgets('ribbon search filters headings and jumps on tap',
@@ -718,9 +751,12 @@ void mergeMarketsTests() {
     }
     expect(find.text('US CPI'), findsOneWidget);
     expect(find.text('11 Sep'), findsOneWidget);
-    expect(find.text('net index futures'), findsNWidgets(2)); // FII + DII rows
-    expect(find.text('-2,35,102'), findsOneWidget);
-    expect(find.textContaining('Δ -35,102 d/d'), findsOneWidget);
+    expect(find.text('NET IDX FUT'), findsOneWidget); // positioning table
+    expect(find.text('−2,35,102'), findsOneWidget);
+    expect(find.text('−35,102'), findsOneWidget); // Δ d/d
+    expect(find.text('54,70,310'), findsOneWidget); // total long, whole
+    expect(find.text('2,68,604'),
+        findsOneWidget); // fut short (never shown before)
     expect(find.text('Hormuz'), findsOneWidget);
     expect(find.text('−12.5% vs 30d'), findsOneWidget);
     expect(find.text('JNPT port calls'), findsOneWidget);
