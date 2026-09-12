@@ -594,10 +594,7 @@ def parse_exchange_ts(value):
     return None
 
 
-FILING_NOISE = re.compile(
-    r"trading window|share certificate|duplicate share|loss of share|regulation 74"
-    r"|reg\. 74|esop|investor meet|analyst meet|newspaper publication|book closure",
-    re.I)
+from signals import FILING_NOISE  # noqa: E402 — one noise list: news fetchers + movers' filing tier
 
 
 def fetch_bse(source):

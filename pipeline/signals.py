@@ -12,9 +12,17 @@ Display and alerts only.
 No import of run.py (it imports us): helpers the window logic owns
 (title_tokens, PUBLISHER) are passed in as arguments.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 import market  # write_blobs; market.py imports neither run nor signals
+
+# Exchange-filing subjects that never explain a price move (run.py's NSE/BSE
+# fetchers use the same list — one place, two readers).
+FILING_NOISE = re.compile(
+    r"trading window|share certificate|duplicate share|loss of share|regulation 74"
+    r"|reg\. 74|esop|investor meet|analyst meet|newspaper publication|book closure",
+    re.I)
 
 SPIKE_FLOOR = 4        # distinct mentions in 6h before a term can spike
 SPIKE_RATIO = 2.5      # 6h rate must exceed this x the prior-42h rate
@@ -23,6 +31,7 @@ SPIKE_CAP = 8          # blob keeps the strongest few, not a tag cloud
 UNUSUAL_MIN_OUTLETS = 4
 MOVER_MIN_PCT = 3.0    # an equity move worth explaining
 EXPLAIN_MIN_SCORE = 4  # bake tune 4 Sep: an AGM notice (score 1-3) does not explain a 4% move
+MOVE_CAP = 40          # biggest explained moves the blob keeps (273 movers/day at 3%+)
 COUNT_STATUSES = ("approved", "pending", "duplicate")  # dupes ARE corroboration
 
 # Provenance class per NEWSROOM (post-PUBLISHER collapse). Everything absent is
@@ -122,11 +131,15 @@ def unusual_story_ids(window, publisher):
     return sorted(ids, reverse=True)[:20]
 
 
-def move_context(movers, links, window):
-    """movers: [(symbol, chg_pct)]; links: [(company_symbol, story_id, impact_score)]
-    for the last 24h. Each big mover is 'explained' (a tagged story of at least
-    EXPLAIN_MIN_SCORE exists — highest score wins, newest breaks ties) or
-    'unexplained' (silent divergence — price moved, no news we carry)."""
+def move_context(movers, links, window, filings=()):
+    """movers: [(symbol, chg_pct[, ltp])]; links: [(company_symbol, story_id,
+    impact_score)] for the last 24h; filings: [(symbol, subject, at_iso, url)]
+    — the day's NSE corporate announcements (nse_filings). Each big mover is
+    'explained' by a tagged story of at least EXPLAIN_MIN_SCORE (highest score
+    wins, newest breaks ties), else by the newest non-noise filing on its
+    symbol (12 Sep 2026: 260 of 273 movers had no story — the exchange feed is
+    where the move was first reported), else 'unexplained'. Explained rows
+    carry the source and time so the app can say where it heard it."""
     by_id = {r["id"]: r for r in window}
     story_for = {}
     for sym, sid, score in links:
@@ -135,16 +148,52 @@ def move_context(movers, links, window):
             cur = story_for.get(sym)
             if cur is None or (score, r["created_at"]) > cur[0]:
                 story_for[sym] = ((score, r["created_at"]), r)
-    story_for = {sym: v[1] for sym, v in story_for.items()}
+    filing_for = {}
+    for sym, subject, at, url in filings:
+        if sym not in filing_for or (at or "") > (filing_for[sym][1] or ""):
+            filing_for[sym] = (subject, at, url)
     explained, unexplained = [], []
-    for sym, chg in movers:
-        r = story_for.get(sym)
-        if r:
-            explained.append({"symbol": sym, "chg": chg, "story_id": r["id"],
-                              "title": r.get("headline") or ""})
+    for m in movers:
+        sym, chg = m[0], m[1]
+        ltp = m[2] if len(m) > 2 else None
+        if sym in story_for:
+            (score, _), r = story_for[sym]
+            explained.append({"symbol": sym, "chg": chg, "ltp": ltp, "story_id": r["id"],
+                              "title": r.get("headline") or "", "impact": score,
+                              "source": r.get("source_name"), "at": r.get("created_at")})
+        elif sym in filing_for:
+            subject, at, url = filing_for[sym]
+            explained.append({"symbol": sym, "chg": chg, "ltp": ltp, "reason": subject,
+                              "source": "NSE filing", "at": at, "url": url})
         else:
             unexplained.append({"symbol": sym, "chg": chg})
-    return {"explained": explained, "unexplained": unexplained}
+    explained.sort(key=lambda e: -abs(e["chg"] or 0))
+    return {"explained": explained[:MOVE_CAP], "unexplained": unexplained}
+
+
+def nse_filings(session, now, symbols):
+    """Today's NSE corporate announcements for [symbols], one call for the
+    whole market (the same feed run.fetch_nse ingests as a news source), as
+    (symbol, subject, at_iso, url). Runs on a CI runner — NSE blocks the dev box."""
+    r = session.get(market.NSE_API + "corporate-announcements", params={"index": "equities"},
+                    timeout=25)
+    r.raise_for_status()
+    since, out = now - timedelta(hours=24), []
+    for a in r.json() if isinstance(r.json(), list) else []:
+        sym, subject = (a.get("symbol") or "").strip(), (a.get("desc") or "").strip()
+        if sym not in symbols or not subject or FILING_NOISE.search(subject):
+            continue
+        at = None
+        for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M"):
+            try:
+                at = datetime.strptime(str(a.get("an_dt") or "").strip(), fmt).replace(tzinfo=market.IST)
+                break
+            except ValueError:
+                continue
+        if at and at < since:
+            continue
+        out.append((sym, subject, at.isoformat() if at else None, a.get("attchmntFile")))
+    return out
 
 
 # ---------- lap orchestration (throttled; failures never block news) ----------
@@ -156,7 +205,8 @@ def _due(name, now, minutes):
     return at is None or (now - at) >= timedelta(minutes=minutes)
 
 
-def refresh(sb, window, authority, companies_by_key, publisher, tokens_of, now=None):
+def refresh(sb, window, authority, companies_by_key, publisher, tokens_of, now=None,
+            nse_session=market.nse_session):
     """Build due signal blobs. window = run.recent_stories() output. Returns
     {"spikes": n, "moves": n} for the lap counts."""
     now = now or datetime.now(timezone.utc)
@@ -175,13 +225,13 @@ def refresh(sb, window, authority, companies_by_key, publisher, tokens_of, now=N
             print(f"SIGNALS FAIL trending: {e}")
     if _due("move_context", now, 10):
         try:
-            rows = sb("GET", "quotes?select=symbol,change_pct&kind=eq.equity")
-            movers = [(r["symbol"], r["change_pct"]) for r in rows
+            rows = sb("GET", "quotes?select=symbol,change_pct,price&kind=eq.equity")
+            movers = [(r["symbol"], r["change_pct"], r.get("price")) for r in rows
                       if r.get("change_pct") is not None and abs(r["change_pct"]) >= MOVER_MIN_PCT]
             links = []
             if movers:
                 sym_by_cid = {}
-                for sym, _ in movers:
+                for sym, *_ in movers:
                     cid = companies_by_key.get(sym.upper())
                     if cid:
                         sym_by_cid[cid] = sym
@@ -193,11 +243,23 @@ def refresh(sb, window, authority, companies_by_key, publisher, tokens_of, now=N
                                        f"&stories.created_at=gte.{since}&company_id=in.({cids})"):
                         links.append((sym_by_cid[l["company_id"]], l["story_id"],
                                       (l.get("stories") or {}).get("impact_score") or 0))
-            payload = {**move_context(movers, links, window), "computed_at": now.isoformat()}
+            ctx = move_context(movers, links, window)
+            filings = []
+            if ctx["unexplained"] and nse_session is not None:
+                try:
+                    filings = nse_filings(nse_session(), now, {u["symbol"] for u in ctx["unexplained"]})
+                except Exception as e:  # noqa: BLE001 — the story tier still publishes
+                    print(f"SIGNALS nse filings: {e}")
+                if filings:
+                    ctx = move_context(movers, links, window, filings)
+            # `unexplained` stays an (empty) list for older builds that render it;
+            # the count feeds the app's footnote.
+            payload = {"explained": ctx["explained"], "unexplained": [],
+                       "unexplained_n": len(ctx["unexplained"]), "computed_at": now.isoformat()}
             market.write_blobs(sb, [{"key": "move_context", "payload": payload,
                                      "updated_at": now.isoformat()}])
             _last["move_context"] = now
-            counts["moves"] = len(payload["explained"]) + len(payload["unexplained"])
+            counts["moves"] = len(payload["explained"])
         except Exception as e:  # noqa: BLE001
             print(f"SIGNALS FAIL move_context: {e}")
     return counts

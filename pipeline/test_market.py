@@ -506,6 +506,28 @@ def test_shape_oi_spurts_splits_gainers_and_losers():
     assert [r["symbol"] for r in out["oi_losers"]] == ["B"]
 
 
+def test_shape_oi_spurts_real_nse_keys_and_quotes_join():
+    # runner probe 12 Sep 2026: the real row has no price change and the price is underlyingValue
+    j = {"data": [{"symbol": "COCHINSHIP", "latestOI": 42167, "prevOI": 30361, "changeInOI": 11806,
+                   "avgInOI": 38.89, "volume": 115908, "underlyingValue": 1381},
+                  {"symbol": "BANDHANBNK", "latestOI": 100, "prevOI": 108, "changeInOI": -8,
+                   "avgInOI": -6.94, "volume": 5, "underlyingValue": 170}]}
+    out = market.shape_oi_spurts(j, px={"COCHINSHIP": (1379.0, -9.17)})
+    g = out["oi_gainers"][0]
+    assert g["ltp"] == 1381 and g["pct"] == -9.17 and g["oi"] == 42167 and g["oi_chg"] == 11806
+    assert g["volume"] == 115908 and g["read"] == "short build-up"
+    lo = out["oi_losers"][0]
+    assert lo["ltp"] == 170 and lo["pct"] is None and lo["read"] == "OI down"
+    assert market.oi_read(1.0, 5.0) == "long build-up"
+    assert market.oi_read(2.0, -5.0) == "short covering"
+    assert market.oi_read(-2.0, -5.0) == "long unwinding"
+
+
+def test_count_52wk_reads_both_ltp_buckets():
+    assert market.count_52wk({"dataLtpGreater20": [{}, {}], "dataLtpLess20": [{}], "timestamp": "x"}) == 3
+    assert market.count_52wk({"data": [{}]}) == 1
+
+
 def test_shape_variations_handles_flat_and_nested_payloads():
     flat = {"data": [{"symbol": "A", "pChange": "4.5", "ltp": 100}]}
     nested = {"FOSec": {"data": [{"symbol": "B", "perChange": -3.1}]}}

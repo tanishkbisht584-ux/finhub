@@ -959,20 +959,47 @@ def shape_ipos(current, upcoming, cap=30):
     return {"current": rows(current, "open"), "upcoming": rows(upcoming, "upcoming")}
 
 
-def shape_oi_spurts(j, cap=8):
+def oi_read(pct, oi_pct):
+    """The F&O desk's four words for price x OI direction; price unknown -> OI only."""
+    if pct is None:
+        return "OI up" if oi_pct > 0 else "OI down"
+    if oi_pct > 0:
+        return "long build-up" if pct >= 0 else "short build-up"
+    return "short covering" if pct >= 0 else "long unwinding"
+
+
+def shape_oi_spurts(j, cap=8, px=None):
+    """Runner probe 12 Sep 2026: rows are {symbol, latestOI, prevOI, changeInOI,
+    avgInOI (%), volume, futValue, optValue, premValue, underlyingValue} — no
+    price change, so [px] = {symbol: (ltp, pct)} from our quotes table fills
+    pct (and ltp when NSE's is missing)."""
+    px = px or {}
     rows = []
     for d in _rows(j):
         sym = _pick(d, "symbol", "underlying")
         oi_pct = _num(_pick(d, "avgInOI", "changeInOI", "oiChgPct", "pctChangeInOI"))
         if not sym or oi_pct is None:
             continue
-        rows.append({"symbol": sym, "ltp": _num(_pick(d, "ltp", "lastPrice", "ltP")),
-                     "pct": _num(_pick(d, "pChange", "perChange", "pctChange")),
-                     "oi_pct": oi_pct})
+        q = px.get(sym) or (None, None)
+        ltp = _num(_pick(d, "underlyingValue", "ltp", "lastPrice", "ltP")) or q[0]
+        pct = _num(_pick(d, "pChange", "perChange", "pctChange"))
+        pct = q[1] if pct is None else pct
+        rows.append({"symbol": sym, "ltp": ltp, "pct": pct, "oi_pct": oi_pct,
+                     "oi": _num(_pick(d, "latestOI")), "oi_prev": _num(_pick(d, "prevOI")),
+                     "oi_chg": _num(_pick(d, "changeInOI")), "volume": _num(_pick(d, "volume")),
+                     "read": oi_read(pct, oi_pct)})
     return {"oi_gainers": sorted((r for r in rows if r["oi_pct"] > 0),
                                  key=lambda r: -r["oi_pct"])[:cap],
             "oi_losers": sorted((r for r in rows if r["oi_pct"] < 0),
                                 key=lambda r: r["oi_pct"])[:cap]}
+
+
+def count_52wk(j):
+    """live-analysis-52Week answers {dataLtpGreater20: [...], dataLtpLess20: [...]}
+    (runner probe 12 Sep 2026 — it sat at 0 for months behind _rows)."""
+    if isinstance(j, dict) and ("dataLtpGreater20" in j or "dataLtpLess20" in j):
+        return sum(len(j.get(k) or []) for k in ("dataLtpGreater20", "dataLtpLess20"))
+    return len(_rows(j))
 
 
 def shape_variations(j, cap=8):
@@ -1915,6 +1942,12 @@ def compute_risk_index(q, flows, trending):
 def market_summary_text(q, flows, fg, move_ctx):
     """One-line market summary, zero AI — a template over numbers already in
     the tables, so it survives a total model-lane outage."""
+    return " · ".join(market_summary_lines(q, flows, fg, move_ctx))
+
+
+def market_summary_lines(q, flows, fg, move_ctx):
+    """The summary as separate lines (12 Sep 2026: the app shows bullets, the
+    joined text stays for older builds). The top mover's headline is whole."""
     bits = []
     for sym, name in (("^NSEI", "NIFTY"), ("^BSESN", "SENSEX")):
         r = q.get(sym) or {}
@@ -1928,10 +1961,10 @@ def market_summary_text(q, flows, fg, move_ctx):
     ex = (move_ctx or {}).get("explained") or []
     if ex:
         m = max(ex, key=lambda e: abs(e.get("chg") or 0))
-        parts.append(f"{m['symbol']} {m['chg']:+.1f}% on “{(m.get('title') or '')[:60]}”")
+        parts.append(f"{m['symbol']} {m['chg']:+.1f}% on “{m.get('title') or m.get('reason') or ''}”")
     if fg:
         parts.append(f"Mood: {fg['label'].lower()} ({fg['score']})")
-    return " · ".join(parts)
+    return parts
 
 
 def refresh_sentiment(sb, now):
@@ -1947,12 +1980,13 @@ def refresh_sentiment(sb, now):
     fg = compute_fear_greed(q, blobs.get("flows"), blobs.get("fno"),
                             blobs.get("participant_oi"))
     risk = compute_risk_index(q, blobs.get("flows"), blobs.get("trending"))
-    text = market_summary_text(q, blobs.get("flows"), fg, blobs.get("move_context"))
+    lines = market_summary_lines(q, blobs.get("flows"), fg, blobs.get("move_context"))
     corr = compute_correlations(q)
     ts = now.isoformat()
     rows = ([{"key": "fear_greed", "payload": fg, "updated_at": ts}] if fg else []) + \
            ([{"key": "risk_index", "payload": risk, "updated_at": ts}] if risk else []) + \
-           ([{"key": "market_summary", "payload": {"text": text}, "updated_at": ts}] if text else []) + \
+           ([{"key": "market_summary", "payload": {"text": " · ".join(lines), "lines": lines},
+              "updated_at": ts}] if lines else []) + \
            ([{"key": "correlation", "payload": corr, "updated_at": ts}] if corr else [])
     return write_blobs(sb, rows)
 
@@ -2009,7 +2043,9 @@ def refresh_nse_blobs(sb, now, session=None):
     def fno():
         out = {}
         try:
-            out.update(shape_oi_spurts(get("live-analysis-oi-spurts-underlyings")))
+            px = {r["symbol"]: (r.get("price"), r.get("change_pct")) for r in
+                  sb("GET", "quotes?select=symbol,price,change_pct&kind=eq.equity")}
+            out.update(shape_oi_spurts(get("live-analysis-oi-spurts-underlyings"), px=px))
         except Exception as e:
             print(f"MARKET NSE fno oi: {e}")
         for side, idx in (("gainers", "gainers"), ("losers", "loosers")):  # NSE's spelling
@@ -2019,7 +2055,7 @@ def refresh_nse_blobs(sb, now, session=None):
                 print(f"MARKET NSE fno {side}: {e}")
         for label, idx in (("hi52", "high"), ("lo52", "low")):
             try:
-                out[label] = len(_rows(get("live-analysis-52Week", index=idx)))
+                out[label] = count_52wk(get("live-analysis-52Week", index=idx))
             except Exception as e:
                 print(f"MARKET NSE fno {label}: {e}")
         if not out:

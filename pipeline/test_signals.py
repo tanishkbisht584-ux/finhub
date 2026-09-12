@@ -101,9 +101,49 @@ def test_move_context_splits_explained_and_unexplained():
     movers = [("TCS", 4.2), ("INFY", -3.5)]
     links = [("TCS", 50, 7), ("TCS", 51, 7)]
     out = signals.move_context(movers, links, window)
-    assert out["explained"] == [{"symbol": "TCS", "chg": 4.2, "story_id": 50,
-                                 "title": "TCS wins mega deal"}]
+    assert out["explained"] == [{"symbol": "TCS", "chg": 4.2, "ltp": None, "story_id": 50,
+                                 "title": "TCS wins mega deal", "impact": 7,
+                                 "source": "Reuters", "at": row(50, "", 3)["created_at"]}]
     assert out["unexplained"] == [{"symbol": "INFY", "chg": -3.5}]
+
+
+def test_move_context_filing_tier_explains_what_no_story_does():
+    # 12 Sep 2026: 260/273 movers had no story; the NSE announcements feed is
+    # where the move was first reported. Newest non-noise filing wins; a story
+    # still beats a filing; biggest move first; ltp rides along.
+    window = [row(50, "TCS wins mega deal", 3)]
+    movers = [("INFY", -3.5, 1500.0), ("TCS", 4.2, 3100.0), ("KOPRAN", 9.0, 210.5)]
+    filings = [("KOPRAN", "Bagging of orders", "2026-09-02T09:00:00+05:30", "https://x/a.pdf"),
+               ("KOPRAN", "Older update", "2026-09-01T09:00:00+05:30", "https://x/b.pdf"),
+               ("TCS", "General Updates", "2026-09-02T10:00:00+05:30", "https://x/c.pdf")]
+    out = signals.move_context(movers, [("TCS", 50, 7)], window, filings)
+    assert [e["symbol"] for e in out["explained"]] == ["KOPRAN", "TCS"]
+    assert out["explained"][0] == {"symbol": "KOPRAN", "chg": 9.0, "ltp": 210.5,
+                                   "reason": "Bagging of orders", "source": "NSE filing",
+                                   "at": "2026-09-02T09:00:00+05:30", "url": "https://x/a.pdf"}
+    assert out["explained"][1]["story_id"] == 50 and out["explained"][1]["ltp"] == 3100.0
+    assert out["unexplained"] == [{"symbol": "INFY", "chg": -3.5}]
+
+
+def test_nse_filings_filters_symbols_noise_and_age():
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"symbol": "KOPRAN", "desc": "Bagging of orders", "an_dt": "02-Sep-2026 15:10:00",
+                     "attchmntFile": "https://x/a.pdf"},
+                    {"symbol": "KOPRAN", "desc": "Closure of Trading Window", "an_dt": "02-Sep-2026 15:11:00"},
+                    {"symbol": "OTHER", "desc": "Order win", "an_dt": "02-Sep-2026 15:12:00"},
+                    {"symbol": "INFY", "desc": "Stale", "an_dt": "30-Aug-2026 09:00:00"}]
+
+    class S:
+        def get(self, url, params=None, timeout=None):
+            assert url.endswith("corporate-announcements") and params == {"index": "equities"}
+            return R()
+
+    out = signals.nse_filings(S(), NOW, {"KOPRAN", "INFY"})
+    assert out == [("KOPRAN", "Bagging of orders", "2026-09-02T15:10:00+05:30", "https://x/a.pdf")]
 
 
 def test_move_context_ignores_links_to_unapproved_stories():
@@ -138,12 +178,13 @@ def test_refresh_throttles_and_isolates_failures(monkeypatch):
         raise AssertionError(path)
 
     window = [row(50, "TCS wins mega deal", 3)]
-    counts = signals.refresh(sb, window, AUTH, {"TCS": 7}, pub, toks, now=NOW)
+    counts = signals.refresh(sb, window, AUTH, {"TCS": 7}, pub, toks, now=NOW, nse_session=None)
     assert counts == {"spikes": 0, "moves": 1}
     keys = [r["key"] for rows in writes for r in rows]
     assert keys == ["trending", "move_context"]
     move = writes[1][0]["payload"]
     assert move["explained"][0]["symbol"] == "TCS" and move["computed_at"] == NOW.isoformat()
+    assert move["unexplained"] == [] and move["unexplained_n"] == 0  # rows dropped, count kept
     # 4 minutes later: both throttled, nothing written, no reads made
     counts2 = signals.refresh(lambda *a, **k: (_ for _ in ()).throw(AssertionError("no reads")),
                               window, AUTH, {}, pub, toks, now=NOW + timedelta(minutes=4))
