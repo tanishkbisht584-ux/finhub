@@ -138,6 +138,23 @@ def test_equity_universe_followed_first_then_tagged_capped(monkeypatch):
     assert [s for s, _ in syms] == ["C1", "C2", "C3"]  # followed first, cap honoured
 
 
+def test_equity_universe_popular_followed_win_cap(monkeypatch):
+    """Under the cap, the symbols MORE users follow rank first -- not the ones
+    the earliest users happened to follow."""
+    def sb(method, path, **kw):
+        if path.startswith("follows"):
+            return [{"target_id": t} for t in ["1", "2", "2", "3", "3", "3"]]
+        if path.startswith("story_companies") or path.startswith("analysis_requests"):
+            return []
+        if path.startswith("companies"):
+            ids = re.search(r"id=in\.\(([^)]*)\)", path).group(1).split(",")
+            return [{"id": int(i), "nse_symbol": f"C{i}", "name": f"Co {i}"} for i in ids]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(market, "EQUITY_CAP", 2)
+    assert [s for s, _ in market.equity_universe(sb, datetime(2026, 8, 22, tzinfo=UTC))] == ["C3", "C2"]
+
+
 # ---------- rows / upsert ----------
 
 def test_gold_in_inr_per_10g_is_derived_and_labelled():

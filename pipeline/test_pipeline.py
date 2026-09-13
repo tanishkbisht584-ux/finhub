@@ -599,6 +599,38 @@ def test_personal_alert_engine_idle_until_migration_020(monkeypatch):
     assert run.personal_alert_engine() == 0
 
 
+def test_alert_engine_counts_cluster_from_window(monkeypatch):
+    """Corroboration (2+ newsrooms) is counted from the in-memory 48 h window,
+    not one stories?cluster_id=eq. query per candidate."""
+    import run
+    from datetime import datetime, timezone
+    calls = []
+
+    def fake_sb(method, path, **kw):
+        calls.append((method, path))
+        if "impact_score=gte.8" in path:
+            return [{"id": 1, "hook": "h", "headline": "h", "impact_score": 8, "cluster_id": "c",
+                     "source_name": "Paper A", "created_at": run.iso(datetime.now(timezone.utc))}]
+        return []
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "recent_stories", lambda: [
+        {"cluster_id": "c", "source_name": "Paper A"}, {"cluster_id": "c", "source_name": "Paper B"}])
+    assert run.alert_engine({"Paper A": 5}, push=False) == 0        # authority 5: only corroboration passes
+    assert [p for m, p in calls if m == "PATCH" and p == "stories?id=eq.1"]
+    assert not any("cluster_id=eq." in p for m, p in calls)
+
+
+def test_retention_sweep_prunes_qa_cache_last(monkeypatch):
+    """qa_cache was never pruned; now rows older than QA_CACHE_RETENTION_DAYS go,
+    and that delete runs LAST so a missing table can never skip the others."""
+    import run
+    calls = []
+    monkeypatch.setattr(run, "sb", lambda m, p, **k: calls.append((m, p)) or [])
+    run.retention_sweep()
+    assert calls[-1][0] == "DELETE" and calls[-1][1].startswith("qa_cache?created_at=lt.")
+
+
 def test_fcm_creds_refreshes_once_while_valid(monkeypatch):
     """The service-account credential is built once per process and refreshed
     only when its token has expired -- not re-minted on every push."""

@@ -1098,11 +1098,15 @@ def alert_engine(authority_by_source, push=True):
                            "source_name,created_at"
                            f"&alerted_at=is.null&impact_score=gte.8&created_at=gte.{cutoff}"
                            "&status=in.(pending,approved)&order=impact_score.desc")
+    # Cluster siblings come from the in-memory 48 h window (a delta fetch picks
+    # up this lap's inserts), not one query per candidate.
+    sources_by_cluster = {}
+    for r in recent_stories():
+        sources_by_cluster.setdefault(r["cluster_id"], []).append(r["source_name"])
     alerted = published = 0
     for s in candidates:
         cluster_size = independent_sources(
-            r["source_name"] for r in
-            sb("GET", f"stories?select=source_name&cluster_id=eq.{s['cluster_id']}"))
+            sources_by_cluster.get(s["cluster_id"]) or [s["source_name"]])
         age_minutes = (now - parse_ts(s["created_at"])).total_seconds() / 60
         if not gate_passes(s["impact_score"], cluster_size,
                            authority_by_source.get(s["source_name"], 5), age_minutes):
@@ -1335,6 +1339,10 @@ REJECTED_RETENTION_DAYS = 30  # 2026-08-23: rejected rows were 26% of stories (9
                               # nobody ever sees one; they only exist as "seen this url".
                               # ~2k stories/day since the throughput fix → 500 MB in ~4
                               # months; this roughly halves that. Approved cards: never.
+QA_CACHE_RETENTION_DAYS = 7   # 2026-09-13: never pruned before. Answers are valid for
+                              # <= 24 h anyway; glossary defines re-warm lazily (~100 terms).
+                              # ponytail: age-only prune; flag defines in answer_json if
+                              # edge_log ever shows the weekly re-warm costing real calls.
 
 
 def retention_sweep():
@@ -1356,6 +1364,9 @@ def retention_sweep():
         sb("DELETE", f"pipeline_runs?ok=eq.true&started_at=lt.{iso(now - timedelta(hours=48))}")
         sb("DELETE", f"pipeline_runs?started_at=lt.{iso(now - timedelta(days=14))}")
         sb("DELETE", f"edge_log?created_at=lt.{iso(now - timedelta(days=30))}")
+        # Last on purpose: a 404 here before some migration lands must not skip
+        # the deletes above.
+        sb("DELETE", f"qa_cache?created_at=lt.{iso(now - timedelta(days=QA_CACHE_RETENTION_DAYS))}")
     except requests.RequestException as e:
         print(f"RETENTION SWEEP FAILED: {e}")  # next run retries; nothing lost
 

@@ -21,7 +21,7 @@ import os
 import re
 import statistics
 import time
-from collections import namedtuple
+from collections import Counter, namedtuple
 from datetime import date as _date, datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -36,7 +36,9 @@ BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebK
 
 SPARK_URL = "https://query1.finance.yahoo.com/v8/finance/spark"
 SPARK_BATCH = 20            # Yahoo's hard cap per call
-EQUITY_CAP = 200            # ~10 spark calls per refresh; raise after a week of clean logs
+EQUITY_CAP = 200            # ~10 spark calls per refresh. ponytail: hard ceiling; symbols past
+                            # the 200 most-followed get no quote row. Raise, or split the
+                            # universe over two refresh cadences, once follows pass ~1k.
 TROY_OZ_G = 31.1035
 
 INDICES = {"^NSEI": "NIFTY 50", "^BSESN": "SENSEX", "^NSEBANK": "NIFTY Bank", "^CNXIT": "NIFTY IT",
@@ -263,6 +265,9 @@ def equity_universe(sb, now):
     since = (now - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
     followed = [int(f["target_id"]) for f in sb("GET", "follows?select=target_id&target_type=eq.company")
                 if str(f["target_id"]).isdigit()]
+    # Most-followed first (ties keep follow order): with EQUITY_CAP in play the
+    # popular symbols must survive, not whichever users followed earliest.
+    followed = [c for c, _ in Counter(followed).most_common()]
     tagged = [r["company_id"] for r in
               sb("GET", "story_companies?select=company_id,stories!inner(id)"
                         f"&stories.published_at=gte.{since}")]
