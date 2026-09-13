@@ -1,9 +1,52 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'theme.dart' show appVersion;
+
+/// Rows for one table, sent in a single insert instead of one per event.
+/// A view row per swipe made `events` the hottest table in the project and
+/// each swipe its own round trip on cellular; 1000 readers × 35 cards a day
+/// is 35k inserts. Flushes at [max] rows, after [every], and when the feed
+/// asks (app paused, sign-out).
+/// ponytail: in-memory only — a force-kill loses <= [max] view rows, which is
+/// bookkeeping, not data.
+class EventBuffer {
+  EventBuffer(this._send,
+      {this.max = 20, this.every = const Duration(seconds: 30)});
+  final Future<void> Function(List<Map<String, Object?>> rows) _send;
+  final int max;
+  final Duration every;
+  final _rows = <Map<String, Object?>>[];
+  Timer? _timer;
+
+  int get pending => _rows.length;
+
+  void add(Map<String, Object?> row) {
+    _rows.add(row);
+    _timer ??= Timer(every, flush);
+    if (_rows.length >= max) flush();
+  }
+
+  Future<void> flush() async {
+    _timer?.cancel();
+    _timer = null;
+    if (_rows.isEmpty) return;
+    final batch = List<Map<String, Object?>>.of(_rows);
+    _rows.clear();
+    try {
+      await _send(batch);
+    } catch (_) {
+      // Offline: bookkeeping lost, never an error surface.
+    }
+  }
+}
+
+/// The app's one buffer for `events` rows written from the client.
+final viewEvents =
+    EventBuffer((rows) => Supabase.instance.client.from('events').insert(rows));
 
 /// PostHog capture, by hand (M10). The public project token can only WRITE
 /// events — it reads nothing — which is why it may live in source and inside

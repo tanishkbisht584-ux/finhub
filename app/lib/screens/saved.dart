@@ -17,7 +17,9 @@ final savedProvider = FutureProvider<List<Story>>((ref) async {
       .from('saves')
       .select('stories($storyCols)')
       .eq('user_id', uid)
-      .order('saved_at', ascending: false);
+      .order('saved_at', ascending: false)
+      // ponytail: newest 100 with full story rows; page it if anyone saves more
+      .limit(100);
   return rows
       .map((r) => r['stories'])
       .whereType<Map<String, dynamic>>()

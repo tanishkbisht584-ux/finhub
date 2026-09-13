@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -17,6 +18,7 @@ import '../publishers.dart';
 import '../remote_config.dart';
 import '../share_palette.dart';
 import '../ticks.dart';
+import 'ask.dart';
 import 'saved.dart';
 import 'stock.dart';
 import 'story_detail.dart';
@@ -483,6 +485,18 @@ final storiesProvider = FutureProvider<List<Story>>((ref) async {
   }
 });
 
+/// The last saved page while it is still young enough to read as news, shown
+/// under the network fetch so a cold start opens on cards, not a spinner.
+/// ponytail: served only while storiesProvider is loading; the network page
+/// replaces it through _seeded's identity check.
+final warmFeedProvider = FutureProvider<List<Story>?>((ref) async {
+  final at = await FeedCache.savedAt();
+  if (at == null || DateTime.now().difference(at) > const Duration(hours: 6)) {
+    return null;
+  }
+  return (await FeedCache.load())?.map(Story.fromJson).toList();
+});
+
 /// One hydrated page of the feed for the infinite scroll. [before] pages
 /// downward (older than the reader's last card); [after] picks up fresh
 /// arrivals. Same 48h window, ordering and hydration as the first page.
@@ -529,7 +543,11 @@ Future<List<Map<String, dynamic>>> _attachOutlets(
     final members = await Supabase.instance.client
         .from('stories')
         .select('cluster_id,source_name,source_url,published_at,headline')
-        .inFilter('cluster_id', clusterIds);
+        .inFilter('cluster_id', clusterIds)
+        // ponytail: 50 cards x ~3 siblings is ~150 rows; a runaway cluster
+        // (43 seen) loses its oldest outlets past the cap, never the card.
+        .order('published_at', ascending: false)
+        .limit(400);
     final byCluster = <String, List<Map<String, dynamic>>>{};
     for (final m in members.cast<Map<String, dynamic>>()) {
       (byCluster[m['cluster_id'] as String] ??= []).add(m);
@@ -652,6 +670,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _freshTimer?.cancel();
+      viewEvents.flush(); // buffered view rows leave before the OS may kill us
     } else if (state == AppLifecycleState.resumed) {
       _pullFresh();
       _startFreshTimer();
@@ -674,13 +693,21 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     super.dispose();
   }
 
-  void _startFreshTimer() {
+  final _rng = Random();
+
+  void _startFreshTimer({bool first = true}) {
     _freshTimer?.cancel();
     // LIVE hugs the edge at 15s; ambient 90s matches the pipeline's cadence.
-    _freshTimer = Timer.periodic(
-        Duration(
-            seconds: liveMode.value ? livePollSeconds : ambientPollSeconds),
-        (_) => _pullFresh());
+    // Jittered (2026-09-13): the first tick lands anywhere in the period and
+    // each later one at +-20%, so a thousand phones don't poll on one beat.
+    final base = (liveMode.value ? livePollSeconds : ambientPollSeconds) * 1000;
+    final ms = first
+        ? _rng.nextInt(base) + 1
+        : (base * (0.8 + 0.4 * _rng.nextDouble())).round();
+    _freshTimer = Timer(Duration(milliseconds: ms), () {
+      _pullFresh();
+      if (mounted) _startFreshTimer(first: false);
+    });
   }
 
   void _onLiveToggle() {
@@ -796,6 +823,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     if (!mounted) return;
     // Alive-but-hidden on another tab: don't poll into the void.
     if (homeTab.value != 0) return;
+    // The first page is still loading (a warm copy may be on screen): a
+    // refresh now would only restart that load.
+    if (ref.read(storiesProvider).isLoading) return;
     // An empty feed has no newest-stamp to poll from; the full refresh is the
     // only way it can ever recover (pipeline stall, quiet-hour install).
     if (_feed.isEmpty) {
@@ -882,145 +912,153 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   Widget build(BuildContext context) {
     final stories = ref.watch(storiesProvider);
     final cachedAt = ref.watch(servingCacheProvider);
-    return stories.when(
-      loading: () => Center(child: appSpinner()),
-      error: (e, _) => _Offline(onRetry: () => ref.refresh(storiesProvider)),
-      data: (list) {
-        if (pendingStory.value != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) => _land());
-        }
-        _seeded(list);
-        _recordSeen();
-        final shown = _shownStories();
-        final entries = feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
-        // A short visible list can't reach onPageChanged's load trigger (one
-        // card can't swipe at all), so pull older pages until the filter has
-        // enough to show or the 48h window is drained. Each round either grows
-        // _feed or sets _exhausted, so this converges; _loadingMore serializes.
-        if (!_exhausted && !_loadingMore && shown.length < 5) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _loadMore();
-          });
-        }
-        // Cards keep the full screen; the filter is one round tile at top
-        // right, below the system inset so it clears every phone's status
-        // bar and notch.
-        final inset = MediaQuery.of(context).padding.top;
-        return list.isEmpty
-            // A dead-end with no way out kept new installs at quiet hours on
-            // a permanently blank screen (the pull-to-refresh only exists
-            // inside the PageView that isn't built here).
-            ? Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                const Text('No stories yet — check back soon'),
-                const SizedBox(height: 20),
-                OutlinedButton(
-                  onPressed: _manualRefresh,
-                  child: const Text('Try again'),
-                ),
-              ]))
-            : Column(children: [
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 200),
-                  child: cachedAt != null
-                      ? _CacheBanner(savedAt: cachedAt)
-                      : const SizedBox(width: double.infinity),
-                ),
-                const AnimatedSize(
-                    duration: Duration(milliseconds: 200),
-                    child: _TrendingStrip()),
-                Expanded(
-                  child: Stack(children: [
-                    shown.isEmpty
-                        ? Center(
-                            child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                const Icon(Icons.tune, size: 30, color: inkDim),
-                                const SizedBox(height: 12),
-                                Text('Nothing matches your filters',
-                                    style: serif.copyWith(
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.w700)),
-                                const SizedBox(height: 6),
-                                Text('Tap the dial to widen them.',
-                                    style: mono.copyWith(fontSize: 11.5)),
-                              ]))
-                        : NotificationListener<OverscrollNotification>(
-                            // RefreshIndicator on a vertical PageView loses
-                            // the gesture to the page snap (seen on device:
-                            // pull did nothing). Overscroll past the first
-                            // card IS the pull — trigger the refresh
-                            // directly, no arbitration to lose.
-                            onNotification: (n) {
-                              // depth 0 = the PageView itself; a card's inner
-                              // summary scroll must not refresh the feed.
-                              if (n.depth == 0 &&
-                                  n.overscroll < -6 &&
-                                  _pc.hasClients &&
-                                  (_pc.page ?? 1) < 0.5) {
-                                _manualRefresh();
+    // One body for the network page and, while that is still loading, a
+    // fresh-enough saved copy (warmFeedProvider): a cold start opens on
+    // cards, and _seeded swaps the real page in by identity when it lands.
+    Widget body(List<Story> list) {
+      if (pendingStory.value != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _land());
+      }
+      _seeded(list);
+      _recordSeen();
+      final shown = _shownStories();
+      final entries = feedEntries(shown, lastSeenAtLaunch.value, _exhausted);
+      // A short visible list can't reach onPageChanged's load trigger (one
+      // card can't swipe at all), so pull older pages until the filter has
+      // enough to show or the 48h window is drained. Each round either grows
+      // _feed or sets _exhausted, so this converges; _loadingMore serializes.
+      if (!_exhausted && !_loadingMore && shown.length < 5) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _loadMore();
+        });
+      }
+      // Cards keep the full screen; the filter is one round tile at top
+      // right, below the system inset so it clears every phone's status
+      // bar and notch.
+      final inset = MediaQuery.of(context).padding.top;
+      return list.isEmpty
+          // A dead-end with no way out kept new installs at quiet hours on
+          // a permanently blank screen (the pull-to-refresh only exists
+          // inside the PageView that isn't built here).
+          ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('No stories yet — check back soon'),
+              const SizedBox(height: 20),
+              OutlinedButton(
+                onPressed: _manualRefresh,
+                child: const Text('Try again'),
+              ),
+            ]))
+          : Column(children: [
+              AnimatedSize(
+                duration: const Duration(milliseconds: 200),
+                child: cachedAt != null
+                    ? _CacheBanner(savedAt: cachedAt)
+                    : const SizedBox(width: double.infinity),
+              ),
+              const AnimatedSize(
+                  duration: Duration(milliseconds: 200),
+                  child: _TrendingStrip()),
+              Expanded(
+                child: Stack(children: [
+                  shown.isEmpty
+                      ? Center(
+                          child:
+                              Column(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.tune, size: 30, color: inkDim),
+                          const SizedBox(height: 12),
+                          Text('Nothing matches your filters',
+                              style: serif.copyWith(
+                                  fontSize: 20, fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 6),
+                          Text('Tap the dial to widen them.',
+                              style: mono.copyWith(fontSize: 11.5)),
+                        ]))
+                      : NotificationListener<OverscrollNotification>(
+                          // RefreshIndicator on a vertical PageView loses
+                          // the gesture to the page snap (seen on device:
+                          // pull did nothing). Overscroll past the first
+                          // card IS the pull — trigger the refresh
+                          // directly, no arbitration to lose.
+                          onNotification: (n) {
+                            // depth 0 = the PageView itself; a card's inner
+                            // summary scroll must not refresh the feed.
+                            if (n.depth == 0 &&
+                                n.overscroll < -6 &&
+                                _pc.hasClients &&
+                                (_pc.page ?? 1) < 0.5) {
+                              _manualRefresh();
+                            }
+                            return false;
+                          },
+                          child: PageView.builder(
+                            controller: _pc,
+                            scrollDirection: Axis.vertical,
+                            itemCount: entries.length,
+                            onPageChanged: (i) {
+                              final s = entries[i].story;
+                              if (s != null) {
+                                _logView(s.id);
+                                recordSessionView(s);
                               }
-                              return false;
+                              // A few cards from the bottom: fetch the
+                              // next page before the reader gets there.
+                              if (i >= entries.length - 4) {
+                                _loadMore();
+                              }
                             },
-                            child: PageView.builder(
-                              controller: _pc,
-                              scrollDirection: Axis.vertical,
-                              itemCount: entries.length,
-                              onPageChanged: (i) {
-                                final s = entries[i].story;
-                                if (s != null) {
-                                  _logView(s.id);
-                                  recordSessionView(s);
-                                }
-                                // A few cards from the bottom: fetch the
-                                // next page before the reader gets there.
-                                if (i >= entries.length - 4) {
-                                  _loadMore();
-                                }
-                              },
-                              itemBuilder: (context, i) {
-                                final e = entries[i];
-                                return e.story != null
-                                    ? StoryPager(story: e.story!)
-                                    : e.isEnd
-                                        ? const _EndOfFeed()
-                                        : e.isRecap
-                                            ? const _RecapPage()
-                                            : _CaughtUpPage(
-                                                newCount: e.newCount!);
-                              },
-                            ),
+                            itemBuilder: (context, i) {
+                              final e = entries[i];
+                              return e.story != null
+                                  ? StoryPager(story: e.story!)
+                                  : e.isEnd
+                                      ? const _EndOfFeed()
+                                      : e.isRecap
+                                          ? const _RecapPage()
+                                          : _CaughtUpPage(
+                                              newCount: e.newCount!);
+                            },
                           ),
-                    if (_refreshing)
-                      Positioned(
-                          // banner up = the Stack starts below the notch
-                          // already; don't push the bar down a second time
-                          top: cachedAt != null ? 0 : inset,
-                          left: 0,
-                          right: 0,
-                          child: const LinearProgressIndicator(
-                              minHeight: 2,
-                              color: green,
-                              backgroundColor: Colors.transparent)),
+                        ),
+                  if (_refreshing)
                     Positioned(
-                        top: cachedAt != null ? 8 : inset + 8,
-                        left: 16,
-                        child: const LiveButton()),
-                    Positioned(
-                        top: cachedAt != null ? 8 : inset + 8,
-                        right: 16,
-                        child: const FeedFilterButton()),
-                    if (_showHints && entries.isNotEmpty)
-                      GestureHints(onDismiss: () {
-                        setState(() => _showHints = false);
-                        SharedPreferences.getInstance()
-                            .then((p) => p.setBool('gesture_hints_v1', true));
-                      }),
-                  ]),
-                ),
-              ]);
+                        // banner up = the Stack starts below the notch
+                        // already; don't push the bar down a second time
+                        top: cachedAt != null ? 0 : inset,
+                        left: 0,
+                        right: 0,
+                        child: const LinearProgressIndicator(
+                            minHeight: 2,
+                            color: green,
+                            backgroundColor: Colors.transparent)),
+                  Positioned(
+                      top: cachedAt != null ? 8 : inset + 8,
+                      left: 16,
+                      child: const LiveButton()),
+                  Positioned(
+                      top: cachedAt != null ? 8 : inset + 8,
+                      right: 16,
+                      child: const FeedFilterButton()),
+                  if (_showHints && entries.isNotEmpty)
+                    GestureHints(onDismiss: () {
+                      setState(() => _showHints = false);
+                      SharedPreferences.getInstance()
+                          .then((p) => p.setBool('gesture_hints_v1', true));
+                    }),
+                ]),
+              ),
+            ]);
+    }
+
+    return stories.when(
+      loading: () {
+        final warm = ref.watch(warmFeedProvider).valueOrNull;
+        return warm == null || warm.isEmpty
+            ? Center(child: appSpinner())
+            : body(warm);
       },
+      error: (e, _) => _Offline(onRetry: () => ref.refresh(storiesProvider)),
+      data: body,
     );
   }
 
@@ -1030,12 +1068,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
-      Supabase.instance.client
-          .from('events')
-          .insert({'user_id': uid, 'story_id': storyId, 'type': 'view'}).then(
-              (_) {},
-              onError: (_) {});
-      track('view', {'story_id': storyId});
+      // One insert per ~20 cards, not per swipe (analytics.dart).
+      viewEvents.add({'user_id': uid, 'story_id': storyId, 'type': 'view'});
+      // PostHog gets 1 in 10 views: its free tier is 1M events/month and a
+      // thousand readers' swipes alone would pass it. Other events stay whole.
+      if (_rng.nextInt(10) == 0) {
+        track('view', {'story_id': storyId, 'sample': 10});
+      }
     } catch (_) {}
   }
 }
@@ -2681,10 +2720,24 @@ class _StoryPagerState extends State<StoryPager> {
       return;
     }
     try {
-      final res = await Supabase.instance.client.functions.invoke('deepread',
-          body: {'story_id': id}).timeout(const Duration(seconds: 20));
+      // Generated already, by anyone? Read the column straight from the
+      // table: no function cold start, no auth round trip, no config read.
+      // Only a miss pays the function. (RLS shows readers approved rows; the
+      // column is out of storyCols for size, not secrecy.)
+      final row = await Supabase.instance.client
+          .from('stories')
+          .select('deep_read')
+          .eq('id', id)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
+      Object? data = row?['deep_read'];
+      if (data is! Map) {
+        final res = await Supabase.instance.client.functions.invoke('deepread',
+            body: {'story_id': id}).timeout(const Duration(seconds: 20));
+        data = res.data;
+      }
       final read = DeepRead.fromJson(
-          res.data is Map ? Map<String, dynamic>.from(res.data as Map) : null);
+          data is Map ? Map<String, dynamic>.from(data) : null);
       // A refusal isn't cached server-side either — leave it out of the memo
       // so a later encounter retries against a possibly-richer story.
       // Analytics moved to _maybeTrack (open-gated): a prefetch that is never
@@ -2780,6 +2833,10 @@ class _StoryPagerState extends State<StoryPager> {
           return DeepReadPages(
             read: read.hasContent ? read : DeepRead(const []),
             pageIndex: i - 1 - tOff,
+            onAsk: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => AskScreen(
+                    storyId: widget.story.id,
+                    contextLabel: widget.story.headline))),
             impactScore: widget.story.impactScore,
             category: widget.story.category,
             direction: widget.story.impactDirection,
@@ -2938,9 +2995,14 @@ class DeepReadPages extends StatelessWidget {
       this.category,
       this.direction,
       this.sourceUrl,
-      this.sourceName});
+      this.sourceName,
+      this.onAsk});
   final DeepRead read;
   final int pageIndex;
+
+  /// "Ask about this" on the last page (2026-09-13): the reader has just
+  /// finished the story, so the follow-up question is right there.
+  final VoidCallback? onAsk;
   final int? impactScore;
   final String? category;
   final String? direction;
@@ -3080,6 +3142,14 @@ class DeepReadPages extends StatelessWidget {
                     ),
             ),
           ),
+          if (onAsk != null && pageIndex >= dotCount - 1)
+            Center(
+              child: OutlinedButton.icon(
+                onPressed: onAsk,
+                icon: const Icon(Icons.question_answer_outlined, size: 16),
+                label: const Text('Ask about this'),
+              ),
+            ),
           const SizedBox(height: 8),
           Center(
             child: Row(mainAxisSize: MainAxisSize.min, children: [

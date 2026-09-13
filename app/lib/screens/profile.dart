@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../analytics.dart';
+
 import '../theme.dart';
 import 'saved.dart';
 import 'watchlist.dart';
@@ -134,6 +136,9 @@ class ProfileScreen extends StatelessWidget {
   /// sign-out button.
   Future<void> _signOut(BuildContext context) async {
     final uid = Supabase.instance.client.auth.currentUser?.id;
+    // Buffered view rows carry this user's id; after signOut the events RLS
+    // (user_id = auth.uid()) would reject them.
+    await viewEvents.flush();
     if (uid != null) {
       try {
         await Supabase.instance.client

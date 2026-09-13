@@ -15,6 +15,7 @@ import '../remote_config.dart';
 import '../section_ribbon.dart';
 import '../theme.dart';
 import '../ticks.dart';
+import 'ask.dart' show AskScreen;
 import 'feed.dart' show filterPill;
 import 'stock_sections.dart';
 import 'story_detail.dart';
@@ -39,13 +40,15 @@ class _StockScreenState extends State<StockScreen> {
   bool _storiesFailed = false;
   bool _following = false;
   bool _togglingFollow = false;
-  List<String> _events = const []; // NSE results/deals/insider lines (market_blobs)
+  List<String> _events =
+      const []; // NSE results/deals/insider lines (market_blobs)
   Timer? _analysisPoll;
   int _analysisPolls = 0;
   FundamentalsData _fund = FundamentalsData.fromRows(const []);
   Timer? _fundPoll;
   int _fundPolls = 0;
   List<Map<String, dynamic>> _peers = const [];
+
   /// The symbol's own screener_metrics row: Stock Analysis columns + `sa`
   /// jsonb (returns, records, street, calendar). Empty until the row has
   /// `sa_price_date`, i.e. the stockanalysis group has covered it.
@@ -59,10 +62,15 @@ class _StockScreenState extends State<StockScreen> {
 
   // Yahoo chart range/interval per pill; the 1M fetch doubles as the quote.
   // 3Y has no Yahoo range value — it fetches 5y and trims client-side.
-  static const _ranges = {'1M': ('1mo', '1d'), '6M': ('6mo', '1d'),
-                          '1Y': ('1y', '1d'), '3Y': ('5y', '1wk'),
-                          '5Y': ('5y', '1wk'), '10Y': ('10y', '1mo'),
-                          'MAX': ('max', '1mo')};
+  static const _ranges = {
+    '1M': ('1mo', '1d'),
+    '6M': ('6mo', '1d'),
+    '1Y': ('1y', '1d'),
+    '3Y': ('5y', '1wk'),
+    '5Y': ('5y', '1wk'),
+    '10Y': ('10y', '1mo'),
+    'MAX': ('max', '1mo')
+  };
 
   @override
   void initState() {
@@ -92,7 +100,9 @@ class _StockScreenState extends State<StockScreen> {
       if (d.summary.isNotEmpty) return;
       final sb = Supabase.instance.client;
       if (sb.auth.currentUser != null) {
-        sb.from('analysis_requests').insert({'symbol': sym}).then((_) {}, onError: (_) {});
+        sb
+            .from('analysis_requests')
+            .insert({'symbol': sym}).then((_) {}, onError: (_) {});
       }
       _fundPoll ??= Timer.periodic(const Duration(seconds: 75), (t) {
         if (!mounted || ++_fundPolls > 5 || _fund.summary.isNotEmpty) {
@@ -113,7 +123,8 @@ class _StockScreenState extends State<StockScreen> {
     final sb = Supabase.instance.client;
     sb
         .from('screener_metrics')
-        .select('sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
+        .select(
+            'sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
             'ath_pct,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
             'shares_yoy,sa,sa_price_date')
@@ -128,7 +139,8 @@ class _StockScreenState extends State<StockScreen> {
       if (sector == null || sector.isEmpty) return;
       sb
           .from('screener_metrics')
-          .select('symbol,name,price,pe,pb,mcap_cr,roe,roce,de,div_yield,opm,promoter_pct')
+          .select(
+              'symbol,name,price,pe,pb,mcap_cr,roe,roce,de,div_yield,opm,promoter_pct')
           .eq('sector', sector)
           .order('mcap_cr', ascending: false)
           .limit(11)
@@ -146,13 +158,11 @@ class _StockScreenState extends State<StockScreen> {
     setState(() => _range = label);
     final (rng, iv) = _ranges[label]!;
     try {
-      final r = await http
-          .get(
-            Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/'
-                '${widget.company.nseSymbol}.NS?range=$rng&interval=$iv'),
-            headers: {'User-Agent': 'Mozilla/5.0'},
-          )
-          .timeout(const Duration(seconds: 10));
+      final r = await http.get(
+        Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/'
+            '${widget.company.nseSymbol}.NS?range=$rng&interval=$iv'),
+        headers: {'User-Agent': 'Mozilla/5.0'},
+      ).timeout(const Duration(seconds: 10));
       if (!mounted || r.statusCode != 200) return;
       final q = Quote.fromChartJson(jsonDecode(r.body));
       var closes = q.closes, times = q.times;
@@ -184,7 +194,9 @@ class _StockScreenState extends State<StockScreen> {
     final sym = widget.company.nseSymbol;
     if (uid == null || sym.isEmpty) return;
     if (!needsAnalysisRequest(ticks.value[sym]?.meta ?? const {})) return;
-    sb.from('analysis_requests').insert({'symbol': sym}).then((_) {}, onError: (_) {});
+    sb
+        .from('analysis_requests')
+        .insert({'symbol': sym}).then((_) {}, onError: (_) {});
     _analysisPoll ??= Timer.periodic(const Duration(seconds: 75), (t) {
       if (!mounted ||
           ++_analysisPolls > 5 ||
@@ -274,11 +286,8 @@ class _StockScreenState extends State<StockScreen> {
     });
     // Smart-money lines for this symbol from the pipeline's NSE blobs. A miss
     // just hides the section.
-    sb
-        .from('market_blobs')
-        .select('key,payload')
-        .inFilter('key', ['results_calendar', 'bulk_deals', 'insider_trades'])
-        .then((rows) {
+    sb.from('market_blobs').select('key,payload').inFilter('key',
+        ['results_calendar', 'bulk_deals', 'insider_trades']).then((rows) {
       if (!mounted) return;
       final blobs = {for (final r in rows) r['key'] as String: r['payload']};
       setState(() => _events = companyEventLines(blobs, sym));
@@ -348,12 +357,14 @@ class _StockScreenState extends State<StockScreen> {
         ? ''
         : ((q.price - q.prevClose) / q.prevClose * 100).toStringAsFixed(2);
     final screener = remoteConfig.screenerPageEnabled;
-    final closes =
-        screener && _chartCloses.isNotEmpty ? _chartCloses : q?.closes ?? const <double>[];
+    final closes = screener && _chartCloses.isNotEmpty
+        ? _chartCloses
+        : q?.closes ?? const <double>[];
     final pe = _showPe && _fund.quarter.length >= 4
         ? peSeries(closes, _chartTimes, _fund.quarter)
         : null;
-    final peLatest = pe?.reversed.firstWhere((v) => v != null, orElse: () => null);
+    final peLatest =
+        pe?.reversed.firstWhere((v) => v != null, orElse: () => null);
     final meta = _meta;
     final f = (meta['f'] as Map?)?.cast<String, dynamic>() ?? const {};
     final t = (meta['t'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -386,12 +397,15 @@ class _StockScreenState extends State<StockScreen> {
           ),
         ]),
         const SizedBox(height: 16),
-        SizedBox(height: 96, child: Sparkline(closes, up ? green : red, secondary: pe)),
+        SizedBox(
+            height: 96,
+            child: Sparkline(closes, up ? green : red, secondary: pe)),
         const SizedBox(height: 10),
         if (peLatest != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
-            child: Text('P/E ${peLatest.toStringAsFixed(1)} · TTM, quarter-end steps',
+            child: Text(
+                'P/E ${peLatest.toStringAsFixed(1)} · TTM, quarter-end steps',
                 style: mono.copyWith(fontSize: 10, color: amber)),
           ),
         if (screener)
@@ -401,12 +415,14 @@ class _StockScreenState extends State<StockScreen> {
               for (final label in _ranges.keys)
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
-                  child: filterPill(label, _range == label, green,
-                      () => _fetchRange(label), fontSize: 10),
+                  child: filterPill(
+                      label, _range == label, green, () => _fetchRange(label),
+                      fontSize: 10),
                 ),
               if (_fund.quarter.length >= 4)
                 filterPill('P/E', _showPe, amber,
-                    () => setState(() => _showPe = !_showPe), fontSize: 10),
+                    () => setState(() => _showPe = !_showPe),
+                    fontSize: 10),
             ]),
           ),
         if (q.high52 > q.low52) ...[
@@ -416,14 +432,18 @@ class _StockScreenState extends State<StockScreen> {
             if (sma200 != null) (sma200, '200D'),
           ]),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Text('52-wk  ₹${q.low52.toStringAsFixed(0)}', style: mono.copyWith(fontSize: 10)),
-            Text('at ${((q.price - q.low52) / (q.high52 - q.low52) * 100).round()}%',
+            Text('52-wk  ₹${q.low52.toStringAsFixed(0)}',
                 style: mono.copyWith(fontSize: 10)),
-            Text('₹${q.high52.toStringAsFixed(0)}', style: mono.copyWith(fontSize: 10)),
+            Text(
+                'at ${((q.price - q.low52) / (q.high52 - q.low52) * 100).round()}%',
+                style: mono.copyWith(fontSize: 10)),
+            Text('₹${q.high52.toStringAsFixed(0)}',
+                style: mono.copyWith(fontSize: 10)),
           ]),
           const SizedBox(height: 6),
         ],
-        Text('Delayed price · Yahoo Finance', style: mono.copyWith(fontSize: 10)),
+        Text('Delayed price · Yahoo Finance',
+            style: mono.copyWith(fontSize: 10)),
       ] else if (_quoteFailed)
         GestureDetector(
           onTap: _load,
@@ -453,7 +473,8 @@ class _StockScreenState extends State<StockScreen> {
         if (tiles.isEmpty) return const SizedBox.shrink();
         return LedgerSection('Snapshot', children: [
           const SizedBox(height: 10),
-          StatGrid([for (final t in tiles) StatTile(t.label, t.value, sub: t.sub)]),
+          StatGrid(
+              [for (final t in tiles) StatTile(t.label, t.value, sub: t.sub)]),
         ]);
       });
 
@@ -461,11 +482,13 @@ class _StockScreenState extends State<StockScreen> {
   /// eight-quarter sales/profit bars.
   Widget _fundamentals() => _onTicks((meta) {
         final medians = sectorMedians(_peers, self: widget.company.nseSymbol);
-        final rows = fundamentalRows(meta, medians: medians, summary: _fund.summary);
+        final rows =
+            fundamentalRows(meta, medians: medians, summary: _fund.summary);
         if (rows.isEmpty) return const SizedBox.shrink();
         final qs = quarterSeries(_fund.quarter, meta, label: periodLabel);
         final hasBars = qs.sales.any((v) => v != null);
-        final nPeers = _peers.where((p) => p['symbol'] != widget.company.nseSymbol).length;
+        final nPeers =
+            _peers.where((p) => p['symbol'] != widget.company.nseSymbol).length;
         Widget swatch(Color c) =>
             SizedBox(width: 8, height: 8, child: ColoredBox(color: c));
         return LedgerSection('Fundamentals',
@@ -482,12 +505,14 @@ class _StockScreenState extends State<StockScreen> {
                   swatch(green.withValues(alpha: 0.55)),
                   Text(' sales   ', style: mono.copyWith(fontSize: 10)),
                   swatch(amber),
-                  Text(' net profit   (₹ Cr)', style: mono.copyWith(fontSize: 10)),
+                  Text(' net profit   (₹ Cr)',
+                      style: mono.copyWith(fontSize: 10)),
                 ]),
                 const SizedBox(height: 6),
                 SizedBox(
                     height: 84,
-                    child: BarChart(qs.sales, secondary: qs.profit, labels: qs.labels)),
+                    child: BarChart(qs.sales,
+                        secondary: qs.profit, labels: qs.labels)),
               ],
             ]);
       });
@@ -499,7 +524,8 @@ class _StockScreenState extends State<StockScreen> {
         if (tiles.isEmpty && rows.isEmpty) return const SizedBox.shrink();
         return LedgerSection('Technicals',
             action: _stamp('1y daily closes'),
-            footnote: 'computed from 1y daily closes · as of ${fmtDay(meta['t_at'])}',
+            footnote:
+                'computed from 1y daily closes · as of ${fmtDay(meta['t_at'])}',
             children: [
               if (tiles.isNotEmpty) ...[
                 const SizedBox(height: 10),
@@ -517,23 +543,23 @@ class _StockScreenState extends State<StockScreen> {
   /// RETURNS: the Stock Analysis columns of this symbol's screener_metrics
   /// row — returns ladder, records, risk, street view, fair values, dates.
   Widget _returns() => LedgerSection('Returns & street',
-      action: _stamp('as of ${dmy(_sa['sa_price_date'])}'),
-      footnote: 'Returns, risk and calendar: Stock Analysis (S&P Global)',
-      children: [
-        const SizedBox(height: 2),
-        KvTable(const ['METRIC', 'VALUE', '', 'READ'], saRows(_sa)),
-      ]);
+          action: _stamp('as of ${dmy(_sa['sa_price_date'])}'),
+          footnote: 'Returns, risk and calendar: Stock Analysis (S&P Global)',
+          children: [
+            const SizedBox(height: 2),
+            KvTable(const ['METRIC', 'VALUE', '', 'READ'], saRows(_sa)),
+          ]);
 
   Widget _tape() => LedgerSection('On the tape',
-      footnote: 'NSE · board meetings, bulk/block deals, insider filings',
-      children: [
-        const SizedBox(height: 6),
-        for (final e in _events.take(8))
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Text(e, style: mono.copyWith(fontSize: 12, height: 1.4)),
-          ),
-      ]);
+          footnote: 'NSE · board meetings, bulk/block deals, insider filings',
+          children: [
+            const SizedBox(height: 6),
+            for (final e in _events.take(8))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(e, style: mono.copyWith(fontSize: 12, height: 1.4)),
+              ),
+          ]);
 
   Widget _storyList() => LedgerSection('Recent stories', children: [
         if (_stories.isEmpty)
@@ -545,7 +571,8 @@ class _StockScreenState extends State<StockScreen> {
                     child: Text("Couldn't load stories — tap to retry",
                         style: mono.copyWith(fontSize: 13)),
                   )
-                : Text('No tagged stories yet', style: mono.copyWith(fontSize: 13)),
+                : Text('No tagged stories yet',
+                    style: mono.copyWith(fontSize: 13)),
           ),
         for (final s in _stories)
           ListTile(
@@ -553,7 +580,8 @@ class _StockScreenState extends State<StockScreen> {
             title: Text(s.hook ?? s.headline,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: ink, fontWeight: FontWeight.w600)),
+                style:
+                    const TextStyle(color: ink, fontWeight: FontWeight.w600)),
             subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => StoryDetailScreen(storyId: s.id))),
@@ -561,19 +589,23 @@ class _StockScreenState extends State<StockScreen> {
       ]);
 
   /// One statement section: heading + HEAT pill + table, Screener order.
-  Widget _table(String title, List<String> periods,
+  Widget _table(
+          String title,
+          List<String> periods,
           List<(String, String, CellFmt)> rows,
           Map<String, Map<String, dynamic>> byPeriod,
           {List<Widget> lead = const []}) =>
       LedgerSection(title,
-          action: filterPill('HEAT', _heat, amber,
-              () => setState(() => _heat = !_heat), fontSize: 10),
+          action: filterPill(
+              'HEAT', _heat, amber, () => setState(() => _heat = !_heat),
+              fontSize: 10),
           footnote:
               '₹ Cr · ${_heat ? 'tint = change vs previous period · ' : ''}Yahoo Finance + backfill',
           children: [
             ...lead,
             const SizedBox(height: 4),
-            StatementTable(periods: periods, rows: rows, byPeriod: byPeriod, heat: _heat),
+            StatementTable(
+                periods: periods, rows: rows, byPeriod: byPeriod, heat: _heat),
           ]);
 
   /// Latest quarter's holders as one 100% bar, ink alphas only (no
@@ -583,14 +615,21 @@ class _StockScreenState extends State<StockScreen> {
     if (f.shareholding.isEmpty) return const [];
     final latest = f.shareholding[f.shareholding.keys.last]!;
     const parts = [
-      ('promoters', 'Promoters', 0.8), ('fiis', 'FIIs', 0.6), ('diis', 'DIIs', 0.45),
-      ('govt', 'Govt', 0.3), ('public', 'Public', 0.2), ('employee_trusts', 'Trusts', 0.12),
+      ('promoters', 'Promoters', 0.8),
+      ('fiis', 'FIIs', 0.6),
+      ('diis', 'DIIs', 0.45),
+      ('govt', 'Govt', 0.3),
+      ('public', 'Public', 0.2),
+      ('employee_trusts', 'Trusts', 0.12),
     ];
     final segs = [
       for (final (k, label, a) in parts)
         if (latest[k] is num && (latest[k] as num) > 0)
-          ((latest[k] as num) / 100, ink.withValues(alpha: a),
-              '$label ${fmtCell(latest[k] as num, CellFmt.pct)}')
+          (
+            (latest[k] as num) / 100,
+            ink.withValues(alpha: a),
+            '$label ${fmtCell(latest[k] as num, CellFmt.pct)}'
+          )
     ];
     if (segs.isEmpty) return const [];
     return [
@@ -606,9 +645,10 @@ class _StockScreenState extends State<StockScreen> {
 
   List<({String id, String label, Widget child})> _sections() {
     final f = _fund;
-    final cagr = (f.summary['cagr'] as Map?)?.cast<String, dynamic>() ?? const {};
-    Widget col(List<Widget> children) =>
-        Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    final cagr =
+        (f.summary['cagr'] as Map?)?.cast<String, dynamic>() ?? const {};
+    Widget col(List<Widget> children) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start, children: children);
     return [
       (id: 'chart', label: 'CHART', child: col(_priceHeader())),
       (id: 'snapshot', label: 'SNAPSHOT', child: _snapshot()),
@@ -654,12 +694,14 @@ class _StockScreenState extends State<StockScreen> {
         (
           id: 'pnl',
           label: 'P&L',
-          child: _table('Profit & loss', f.annual.keys.toList(), pnlRows, f.annual)
+          child:
+              _table('Profit & loss', f.annual.keys.toList(), pnlRows, f.annual)
         ),
         (
           id: 'bs',
           label: 'BALANCE SHEET',
-          child: _table('Balance sheet', f.annual.keys.toList(), bsRows, f.annual)
+          child:
+              _table('Balance sheet', f.annual.keys.toList(), bsRows, f.annual)
         ),
         (
           id: 'cf',
@@ -677,7 +719,8 @@ class _StockScreenState extends State<StockScreen> {
           id: 'holders',
           label: 'SHAREHOLDING',
           child: _table('Shareholding pattern', f.shareholding.keys.toList(),
-              shareholdingRows, f.shareholding, lead: _holdersBar())
+              shareholdingRows, f.shareholding,
+              lead: _holdersBar())
         ),
       if (f.docs.isNotEmpty)
         (
@@ -705,9 +748,19 @@ class _StockScreenState extends State<StockScreen> {
                 style: serif.copyWith(fontSize: 18)),
             actions: [
               IconButton(
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => AskScreen(
+                        symbol: widget.company.nseSymbol,
+                        contextLabel: widget.company.name))),
+                icon: const Icon(Icons.question_answer_outlined, color: inkDim),
+                tooltip: 'Ask about ${widget.company.nseSymbol}',
+              ),
+              IconButton(
                 onPressed: _toggleFollow,
                 icon: Icon(
-                    _following ? Icons.star_rounded : Icons.star_outline_rounded,
+                    _following
+                        ? Icons.star_rounded
+                        : Icons.star_outline_rounded,
                     color: _following ? amber : inkDim),
                 tooltip: _following ? 'Unfollow' : 'Follow',
               ),
