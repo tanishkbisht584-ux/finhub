@@ -268,9 +268,13 @@ def equity_universe(sb, now):
     # Most-followed first (ties keep follow order): with EQUITY_CAP in play the
     # popular symbols must survive, not whichever users followed earliest.
     followed = [c for c, _ in Counter(followed).most_common()]
+    # created_at, not published_at: only created_at is indexed on stories, and
+    # the embed filter on published_at measured 17 s (timeout) vs 3.6 s on the
+    # throttled free-tier disk (13 Sep). Ingestion time is within hours of
+    # publication, which is all a 48 h tagging window needs.
     tagged = [r["company_id"] for r in
               sb("GET", "story_companies?select=company_id,stories!inner(id)"
-                        f"&stories.published_at=gte.{since}")]
+                        f"&stories.created_at=gte.{since}")]
     ids, seen = [], set()
     for cid in followed + tagged:
         if cid not in seen:
