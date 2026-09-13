@@ -201,9 +201,6 @@ Deno.serve(async (req) => {
   const user = userData?.user;
   if (!user) return new Response("unauthorized", { status: 401 });
 
-  edgeCfg = await loadCfg();
-  if (edgeCfg.deepread_enabled === false) return refusal(); // admin pause: honest refusal page
-
   const body = await req.json().catch(() => ({}));
   const storyId = Number(body?.story_id);
   if (!Number.isInteger(storyId)) return new Response("story_id required", { status: 400 });
@@ -217,8 +214,14 @@ Deno.serve(async (req) => {
   if (!row || row.status !== "approved") return new Response("not found", { status: 404 });
 
   // Already generated: return the cached read, no AI call, doesn't count
-  // against the generation cap below.
+  // against the generation cap below. (The app now reads stories.deep_read
+  // directly first, so this path is mostly older builds.)
   if (row.deep_read) return Response.json(row.deep_read);
+
+  // Config after the cache hit: the admin pause is a SPEND switch, so cached
+  // reads keep serving and hits skip the app_config select entirely.
+  edgeCfg = await loadCfg();
+  if (edgeCfg.deepread_enabled === false) return refusal(); // admin pause: honest refusal page
 
   // Cost guard: 50 GENERATIONS/user/day, silent (mirrors qa's abuse guard,
   // qa/index.ts:210-217). Cached reads above are free and never reach here.

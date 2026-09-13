@@ -2,8 +2,14 @@
 // chat never competes with the pipeline's Gemini pool. Tier 1: our stories via
 // FTS. Tier 2: Tavily over whitelisted domains. The model must never answer
 // from its own knowledge.
+//
+// 2026-09-13 (1000-user readiness): auth/config/cap reads run in parallel, the
+// config is memoised, every provider attempt is bounded and rotated, a global
+// daily budget sits above the per-user cap (over it, cached answers still
+// serve), Tavily is metered against its monthly free tier, and "ask about this"
+// context (story_id / symbol) skips the planner call altogether.
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { cachedAnswer } from "../_shared/cache.ts";
+import { cachedAnswer, peekAnswer } from "../_shared/cache.ts";
 
 const sb = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -32,20 +38,29 @@ type Lane = { provider: "groq" | "gemini"; key: string; model: string; lane: str
 const FN = "qa";
 
 // ---------- admin cockpit: remote config + call log ----------
-// app_config.edge is the admin's kill switch / daily cap / lane order for this
+// app_config.edge is the admin's kill switch / caps / lane order for this
 // function. {} (table missing, row missing, any error) = the defaults below.
+// Two flags gate Ask: app_config.app.flags.qa_enabled is the app's SOFT
+// pre-check (saves the round trip, shows maintenance copy); this row's
+// qa_enabled is the HARD switch (503 "paused by admin"). The admin flips both.
 type EdgeCfg = {
   qa_enabled?: boolean; deepread_enabled?: boolean; daily_cap?: number;
+  global_cap?: number; tavily_cap?: number;
   lanes?: Record<string, [string, string][]>;
 };
-let edgeCfg: EdgeCfg = {}; // set per request; identical for every concurrent request
+let edgeCfg: EdgeCfg = {};
+let cfgAt = 0;
+const CFG_MS = 60e3; // ponytail: 60 s admin-flag latency per warm isolate; one select a minute, not one per request
 async function loadCfg(): Promise<EdgeCfg> {
+  if (Date.now() - cfgAt < CFG_MS) return edgeCfg;
   try {
     const { data } = await sb.from("app_config").select("value").eq("key", "edge").maybeSingle();
-    return (data?.value as EdgeCfg) ?? {};
+    edgeCfg = (data?.value as EdgeCfg) ?? {};
   } catch {
-    return {};
+    edgeCfg = {};
   }
+  cfgAt = Date.now();
+  return edgeCfg;
 }
 // edge_log: one row per lane attempt, so the admin can see which provider is
 // failing and why instead of a silent "all lanes down". Never blocks, never throws.
@@ -76,59 +91,80 @@ const DEFAULT_ORDER: Record<"smart" | "fast", [("groq" | "gemini"), string][]> =
          ["gemini", "gemini-3.5-flash-lite"]],
 };
 
+// Lanes used to be walked strictly in order: key #0 of the first model absorbed
+// every request until it 429'd, then each request tried all 16 (key × model)
+// lanes with no timeout. Now keys rotate per call, a lane that failed sits out
+// BENCH_MS, each attempt is bounded, and a request gives up after MAX_ATTEMPTS.
+// ponytail: rr/bench live per warm isolate — a cold start forgets; edge_log
+// is the durable record. chat() is duplicated in deepread; extract to
+// _shared/llm.ts when a third function needs it.
+let rr = 0;
+const bench = new Map<string, number>(); // lane -> benched until (ms)
+const LANE_MS = 12e3, BENCH_MS = 60e3, MAX_ATTEMPTS = 6;
+
 // Lane order is overridable per kind from the admin (app_config.edge.lanes.smart / .fast).
 function lanes(kind: "smart" | "fast"): Lane[] {
   const groq = keysOf("GROQ_API_KEYS", "GROQ_API_KEY");
   const gemini = keysOf("GEMINI_API_KEYS", "GEMINI_API_KEY");
-  return laneOrder(kind, DEFAULT_ORDER[kind]).flatMap(([provider, model]) =>
-    (provider === "groq" ? groq : gemini).map((key, i) =>
-      ({ provider, key, model, lane: `${provider}/${model}#${i}` }))
-  );
+  return laneOrder(kind, DEFAULT_ORDER[kind]).flatMap(([provider, model]) => {
+    const keys = provider === "groq" ? groq : gemini;
+    return keys.map((_, j) => {
+      const i = (j + rr) % keys.length;
+      return { provider, key: keys[i], model, lane: `${provider}/${model}#${i}` };
+    });
+  });
 }
 
 async function chat(prompt: string, kind: "smart" | "fast" = "fast"): Promise<string | null> {
+  rr++;
+  let attempts = 0;
   for (const { provider, key, model, lane } of lanes(kind)) {
+    if ((bench.get(lane) ?? 0) > Date.now()) continue;
+    if (++attempts > MAX_ATTEMPTS) break;
     const t0 = Date.now();
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), LANE_MS);
     try {
-      if (provider === "groq") {
-        const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      const r = provider === "groq"
+        ? await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
+          signal: ctrl.signal,
           headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model, temperature: 0.2,
             response_format: { type: "json_object" },
             messages: [{ role: "user", content: prompt }],
           }),
-        });
-        if (!r.ok) { // 429/503/retired model/anything -> next lane
-          await logCall(lane, false, r.status, await r.text(), Date.now() - t0);
-          continue;
-        }
-        const text = (await r.json()).choices[0].message.content;
-        await logCall(lane, true, 200, null, Date.now() - t0);
-        return text;
-      }
-      const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: "POST",
-          headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { response_mime_type: "application/json", temperature: 0.2 },
-          }),
-        },
-      );
-      if (!r.ok) {
+        })
+        : await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          {
+            method: "POST",
+            signal: ctrl.signal,
+            headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { response_mime_type: "application/json", temperature: 0.2 },
+            }),
+          },
+        );
+      if (!r.ok) { // 429/503/retired model/anything -> bench it, next lane
+        bench.set(lane, Date.now() + BENCH_MS);
         await logCall(lane, false, r.status, await r.text(), Date.now() - t0);
         continue;
       }
-      const text = (await r.json()).candidates[0].content.parts[0].text;
+      const j = await r.json();
+      const text = provider === "groq"
+        ? j.choices[0].message.content
+        : j.candidates[0].content.parts[0].text;
       await logCall(lane, true, 200, null, Date.now() - t0);
       return text;
     } catch (e) {
+      bench.set(lane, Date.now() + BENCH_MS); // timeout, network, odd body: sit out
       await logCall(lane, false, null, String(e), Date.now() - t0);
       continue; // a provider outage must never surface as a 500
+    } finally {
+      clearTimeout(timer);
     }
   }
   await logCall("none", false, null, "all lanes failed", 0);
@@ -138,7 +174,7 @@ async function chat(prompt: string, kind: "smart" | "fast" = "fast"): Promise<st
 function prompt(question: string, sources: Source[]): string {
   const listing = sources.map((s, i) => `[${i + 1}] ${s.title}\n${s.body}`).join("\n\n");
   return `You explain Indian market news to retail investors. Answer ONLY from the numbered sources below. Never use outside knowledge. If the sources do not clearly answer the question, set refused=true.
-A source starting with "Live:" carries current market data — price, day move, and an Analysis line with ratios (P/E, P/B, ROE), holdings, RSI and trend. A question asking for one of those current numbers IS fully answered by that source: state the number plainly, never refuse it.
+A source starting with "Live:" carries current market data — price, day move, and an Analysis line with ratios (P/E, P/B, ROE), holdings, RSI and trend. A source starting with "Screener:" carries the company's fundamentals and returns. A question asking for one of those current numbers IS fully answered by that source: state the number plainly, never refuse it.
 HARD RULE: if the question asks for investment advice, a recommendation, or a prediction (should I buy/sell, will it rise, price targets, which stock to pick), set refused=true no matter what the sources say. Describing news about a company is not permission to advise on it. Reporting a current measured number (price, P/E, RSI, overbought/oversold state) is data, not advice.
 
 Question: ${question}
@@ -309,8 +345,8 @@ function quoteUrl(q: Record<string, unknown>): string {
 
 /** Live numbers from the pipeline's `quotes` table (market.py) as sources the
  *  model can cite — "what is the Nifty at?" gets the real level, not a
- *  refusal or a two-day-old headline. One DB query, no AI call; the 15-minute
- *  qa_cache bounds staleness. Empty when nothing matches. */
+ *  refusal or a two-day-old headline. One DB query, no AI call; the qa_cache
+ *  TTL bounds staleness. Empty when nothing matches. */
 async function liveQuotes(terms: string[]): Promise<Source[]> {
   const words = terms.filter((t) => t.length >= 3 && !QUOTE_STOP.has(t));
   if (!words.length) return [];
@@ -372,23 +408,92 @@ async function liveQuotes(terms: string[]): Promise<Source[]> {
   }
 }
 
+/** The symbol's screener_metrics row (stockanalysis + NSE filings, ~3.2k NSE
+ *  symbols) as one citable source — the fundamentals grounding the stock page
+ *  already shows, so "is TCS expensive?" from that page can cite sector P/E. */
+async function screenerSource(symbol: string): Promise<Source | null> {
+  try {
+    const { data } = await sb.from("screener_metrics")
+      .select("name,sector,price,mcap_cr,pe,sector_pe,pb,roe,roce,de,opm,div_yield,promoter_pct," +
+        "sales_cagr_3y,profit_cagr_3y,ret_1m,ret_1y,ath_pct,f_score")
+      .eq("symbol", symbol).maybeSingle();
+    const m = data as Record<string, unknown> | null;
+    if (!m) return null;
+    const n = (v: unknown) => Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+    const bits: string[] = [];
+    if (m.price != null) bits.push(`price ₹${n(m.price)}`);
+    if (m.mcap_cr != null) bits.push(`market cap ₹${n(m.mcap_cr)} cr`);
+    if (m.pe != null) bits.push(`P/E ${n(m.pe)}${m.sector_pe != null ? ` (sector P/E ${n(m.sector_pe)})` : ""}`);
+    if (m.pb != null) bits.push(`P/B ${n(m.pb)}`);
+    if (m.roe != null) bits.push(`ROE ${n(m.roe)}%`);
+    if (m.roce != null) bits.push(`ROCE ${n(m.roce)}%`);
+    if (m.de != null) bits.push(`debt/equity ${n(m.de)}`);
+    if (m.opm != null) bits.push(`operating margin ${n(m.opm)}%`);
+    if (m.div_yield != null) bits.push(`dividend yield ${n(m.div_yield)}%`);
+    if (m.promoter_pct != null) bits.push(`promoter holding ${n(m.promoter_pct)}%`);
+    if (m.sales_cagr_3y != null) bits.push(`3-year sales CAGR ${n(m.sales_cagr_3y)}%`);
+    if (m.profit_cagr_3y != null) bits.push(`3-year profit CAGR ${n(m.profit_cagr_3y)}%`);
+    if (m.ret_1m != null) bits.push(`1-month return ${n(m.ret_1m)}%`);
+    if (m.ret_1y != null) bits.push(`1-year return ${n(m.ret_1y)}%`);
+    if (m.ath_pct != null) bits.push(`${n(m.ath_pct)}% from its all-time high`);
+    if (m.f_score != null) bits.push(`Piotroski F-score ${n(m.f_score)}`);
+    if (!bits.length) return null;
+    return {
+      title: `Screener: ${m.name ?? symbol} (${symbol})`,
+      body: `${m.name ?? symbol}${m.sector ? `, ${m.sector} sector` : ""}: ${bits.join("; ")}. ` +
+        "Source: FinSwipe screener (Stock Analysis, NSE filings).",
+      source_name: "FinSwipe screener",
+      url: `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}.NS`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Tavily's free tier is 1,000 searches/month and nothing counted them. Every
+// call is now an edge_log row (lane 'tavily', kept 30 d), and past the cap
+// tier 2 simply returns nothing — Ask degrades to our own stories.
+let tavilyAt = 0, tavilyN = 0;
+const TAVILY_MS = 5 * 60e3;
+async function tavilyUsed(): Promise<number> {
+  if (Date.now() - tavilyAt < TAVILY_MS) return tavilyN;
+  try {
+    const first = new Date();
+    first.setUTCDate(1);
+    first.setUTCHours(0, 0, 0, 0);
+    const { count } = await sb.from("edge_log").select("fn", { count: "exact", head: true })
+      .eq("fn", FN).eq("lane", "tavily").gte("created_at", first.toISOString());
+    tavilyN = count ?? 0; // ponytail: 30 d log vs a 31 d month — off by <= 1 day; the cap has slack
+  } catch {
+    tavilyN = 0;
+  }
+  tavilyAt = Date.now();
+  return tavilyN;
+}
+
 async function tier2(question: string): Promise<Source[]> {
   const key = Deno.env.get("TAVILY_API_KEY");
   if (!key) return [];
+  if (await tavilyUsed() >= (edgeCfg.tavily_cap ?? 800)) return [];
+  const t0 = Date.now();
   try {
     const r = await fetch("https://api.tavily.com/search", {
       method: "POST",
+      signal: AbortSignal.timeout(8000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_key: key, query: question, max_results: 5, include_domains: WHITELIST,
       }),
     });
+    tavilyN++;
+    await logCall("tavily", r.ok, r.status, r.ok ? null : await r.text(), Date.now() - t0);
     if (!r.ok) return [];
     const results = (await r.json()).results ?? [];
     return results.map((x: { title: string; content: string; url: string }) => ({
       title: x.title, body: x.content, source_name: new URL(x.url).hostname, url: x.url,
     }));
-  } catch {
+  } catch (e) {
+    await logCall("tavily", false, null, String(e), Date.now() - t0);
     return [];
   }
 }
@@ -441,6 +546,47 @@ async function conceptAnswer(question: string, terms: string[]) {
   };
 }
 
+/** One sourced "smart" call over `sources`. null = the model refused or
+ *  returned bad JSON (caller tries the next tier); {error: 503} = every lane
+ *  down. Shared by the planner-routed path and the context path. */
+async function askSources(question: string, sources: Source[], tier: 1 | 2) {
+  const raw = await chat(prompt(question, sources), "smart");
+  if (raw === null) return { error: 503 as const };
+  let out;
+  try {
+    out = JSON.parse(raw);
+  } catch {
+    return null; // bad JSON -> try next tier
+  }
+  if (out.refused) return null; // tier 1 refusal -> try web
+  // Models (gpt-oss especially) often answer well but leave `cited` empty.
+  // The answer was generated ONLY from these sources, so attaching them is
+  // honest — an empty citation list on a real answer would break the
+  // "every claim sourced" promise the whole Q&A design rests on.
+  const cited: number[] = (Array.isArray(out.cited) ? out.cited : [])
+    .map(Number).filter((i: number) => Number.isInteger(i));
+  // Guard the resolved list, not just `cited.length`: models also cite
+  // numbers that don't exist ([4,5] for three sources), which filtered down
+  // to nothing and shipped a sourceless answer — the exact failure the
+  // citation contract is meant to prevent.
+  const resolved = cited.map((i) => sources[i - 1]).filter(Boolean);
+  const picked = resolved.length ? resolved : sources.slice(0, 3);
+  return {
+    whats_happening: String(out.whats_happening ?? ""),
+    why: String(out.why ?? ""),
+    who_is_affected: String(out.who_is_affected ?? ""),
+    what_to_watch: String(out.what_to_watch ?? ""),
+    confidence: ["high", "medium", "low"].includes(out.confidence) ? out.confidence : "low",
+    sources: picked.map(({ title, url, source_name }) => ({ title, url, source_name })),
+    followups: (Array.isArray(out.followups) ? out.followups : []).slice(0, 3).map(String),
+    // Empty on this lane: sections are what marks an answer as an explainer,
+    // and the app picks its disclaimer off exactly that.
+    sections: [],
+    tier,
+    refused: false,
+  };
+}
+
 async function answer(question: string) {
   const plan_ = await plan(question);
   if (plan_?.kind === "refuse") return refusal(); // advice/off-topic: no second call
@@ -455,53 +601,71 @@ async function answer(question: string) {
   // the number first, a news question gets the number as context. They are
   // never enough on their own to skip the sourced-answer contract — the model
   // still cites [n], and a quote-only answer is still an answer from sources.
-  const live = await liveQuotes(terms);
+  // Two independent DB reads: one round trip, not two.
+  const [live, ours] = await Promise.all([liveQuotes(terms), tier1(question, terms)]);
   for (const tier of [1, 2] as const) {
-    const sources = [...live, ...(tier === 1 ? await tier1(question, terms) : await tier2(question))];
+    const sources = [...live, ...(tier === 1 ? ours : await tier2(question))];
     if (!sources.length) continue;
-    const raw = await chat(prompt(question, sources), "smart");
-    if (raw === null) return { error: 503 as const };
-    let out;
-    try {
-      out = JSON.parse(raw);
-    } catch {
-      continue; // bad JSON -> try next tier
-    }
-    if (out.refused) continue; // tier 1 refusal -> try web
-    // Models (gpt-oss especially) often answer well but leave `cited` empty.
-    // The answer was generated ONLY from these sources, so attaching them is
-    // honest — an empty citation list on a real answer would break the
-    // "every claim sourced" promise the whole Q&A design rests on.
-    const cited: number[] = (Array.isArray(out.cited) ? out.cited : [])
-      .map(Number).filter((i: number) => Number.isInteger(i));
-    // Guard the resolved list, not just `cited.length`: models also cite
-    // numbers that don't exist ([4,5] for three sources), which filtered down
-    // to nothing and shipped a sourceless answer — the exact failure the
-    // citation contract is meant to prevent.
-    const resolved = cited.map((i) => sources[i - 1]).filter(Boolean);
-    const picked = resolved.length ? resolved : sources.slice(0, 3);
-    return {
-      whats_happening: String(out.whats_happening ?? ""),
-      why: String(out.why ?? ""),
-      who_is_affected: String(out.who_is_affected ?? ""),
-      what_to_watch: String(out.what_to_watch ?? ""),
-      confidence: ["high", "medium", "low"].includes(out.confidence) ? out.confidence : "low",
-      sources: picked.map(({ title, url, source_name }) => ({ title, url, source_name })),
-      followups: (Array.isArray(out.followups) ? out.followups : []).slice(0, 3).map(String),
-      // Empty on this lane: sections are what marks an answer as an explainer,
-      // and the app picks its disclaimer off exactly that.
-      sections: [],
-      tier,
-      refused: false,
-    };
+    const out = await askSources(question, sources, tier);
+    if (out === null) continue; // refused / bad JSON -> next tier
+    return out;
   }
   return refusal();
 }
 
+// ---------- "ask about this" (2026-09-13) ----------
+// The app sends story_id from the deep-read pages or symbol from the stock
+// page. The planner call is skipped — the context already says what the
+// question is about — and the sources are the story's own cluster, or the
+// symbol's live quote + screener row, plus our archive. One smart call.
+const SYMBOL_RE = /^[A-Z0-9][A-Z0-9&-]{0,19}$/; // migration 018's symbol shape
+const NAME_STOP = new Set(["ltd", "limited", "india", "the", "and", "company", "corporation"]);
+
+/** null = the context is unusable (unknown or unpublished story): the caller
+ *  falls back to the plain path, so status is never leaked. */
+async function contextAnswer(question: string, storyId: number | null, symbol: string | null) {
+  const own: Source[] = [];
+  let terms: string[] = [];
+  let archive: Promise<Source[]> = Promise.resolve([]);
+  if (storyId !== null) {
+    const { data: row } = await sb.from("stories")
+      .select("id, headline, summary, source_name, source_url, cluster_id, status")
+      .eq("id", storyId).maybeSingle();
+    if (!row || row.status !== "approved") return null;
+    const [{ data: members }, { data: links }] = await Promise.all([
+      row.cluster_id
+        ? sb.from("stories").select("headline, summary, source_name, source_url")
+          .eq("cluster_id", row.cluster_id).neq("id", storyId)
+          .in("status", ["approved", "duplicate"]).limit(12)
+        : Promise.resolve({ data: [] as Record<string, string>[] }),
+      sb.from("story_companies").select("companies(nse_symbol)").eq("story_id", storyId),
+    ]);
+    for (const s of [row, ...(members ?? [])]) {
+      own.push({ title: s.headline, body: s.summary ?? "", source_name: s.source_name, url: s.source_url });
+    }
+    // supabase-js types a many-to-one embed as an array; at runtime it is one object. Take either.
+    terms = ((links ?? []) as { companies?: unknown }[])
+      .map((l) => Array.isArray(l.companies) ? l.companies[0] : l.companies)
+      .map((c) => String((c as { nse_symbol?: string } | null)?.nse_symbol ?? "").toLowerCase())
+      .filter(Boolean);
+  } else if (symbol !== null) {
+    const scr = await screenerSource(symbol);
+    if (scr) own.push(scr);
+    terms = [symbol.toLowerCase()];
+    const nameWords = (scr?.title.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+      .filter((w) => w.length > 2 && !NAME_STOP.has(w) && w !== "screener" && w !== symbol.toLowerCase());
+    archive = tier1(question, [...terms, ...nameWords]);
+  }
+  const [live, ours] = await Promise.all([terms.length ? liveQuotes(terms) : [], archive]);
+  const sources = [...live, ...own, ...ours];
+  if (!sources.length) return refusal();
+  return (await askSources(question, sources, 1)) ?? refusal();
+}
+
 // Jargon glossary (2026-08-28): the CANONICAL term whitelist — the app ships a
 // copy for highlighting, but this set is what the server accepts. Bounded on
-// purpose: with ~40 terms cached forever in qa_cache, the glossary costs at
-// most ~40 AI calls EVER, globally, so defines can skip the per-user cap.
+// purpose: with ~40 terms cached in qa_cache, the glossary costs at most ~40
+// AI calls per retention window, globally, so defines can skip the per-user cap.
 const DEFINE_TERMS = new Set([
   "crr", "slr", "repo rate", "reverse repo", "mclr", "basis points",
   "qip", "ofs", "fpo", "buyback", "rights issue", "bonus issue",
@@ -526,23 +690,61 @@ async function questionHash(norm: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// ---------- cost guards ----------
+// Caps reset at IST midnight (was UTC = 05:30 IST, mid-morning for the market
+// open). Both counts fail OPEN — a failed count allows the call, mirroring
+// deepread: this is cost protection, not a security boundary.
+function istMidnightIso(): string {
+  const d = new Date(Date.now() + 5.5 * 3600e3);
+  d.setUTCHours(0, 0, 0, 0);
+  return new Date(d.getTime() - 5.5 * 3600e3).toISOString();
+}
+async function asksSince(since: string, userId?: string): Promise<number> {
+  try {
+    let q = sb.from("events").select("id", { count: "exact", head: true })
+      .eq("type", "qa_ask").gte("created_at", since);
+    if (userId) q = q.eq("user_id", userId);
+    const { count } = await q;
+    return count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+// The whole free pool is shared by every user, so a per-user cap alone lets
+// 1,000 users × 50 ask 50,000 times against ~2,000 free calls a day. One
+// count a minute (per warm isolate) is plenty for a budget with slack in it.
+let globalAt = 0, globalN = 0;
+async function globalAsks(since: string): Promise<number> {
+  if (Date.now() - globalAt < 60e3) return globalN;
+  globalN = await asksSince(since);
+  globalAt = Date.now();
+  return globalN;
+}
+
+// How long a cached answer stays valid depends on what it is: an explainer
+// doesn't age, a Tavily-backed answer is scarce (metered), news moves.
+const freshOf = (a: Record<string, unknown>): number =>
+  Array.isArray(a.sections) && a.sections.length ? 24 * 3600e3
+  : a.tier === 2 ? 60 * 60e3
+  : 30 * 60e3;
+
 Deno.serve(async (req) => {
   const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
-  const { data: userData } = await sb.auth.getUser(jwt);
+  // Three independent reads, one round trip.
+  const [{ data: userData }, , reqBody] = await Promise.all([
+    sb.auth.getUser(jwt), loadCfg(), req.json().catch(() => ({})),
+  ]);
   const user = userData?.user;
   if (!user) return new Response("unauthorized", { status: 401 });
-
-  edgeCfg = await loadCfg();
   if (edgeCfg.qa_enabled === false) return new Response("paused by admin", { status: 503 });
 
-  const reqBody = await req.json().catch(() => ({}));
   const question = String(reqBody?.question ?? "").trim().slice(0, 300);
   if (!question) return new Response("question required", { status: 400 });
 
   // mode:"define" — a tapped glossary term. No daily-cap count (a term tap
   // must not burn one of the reader's 50 questions), no qa_ask event, and no
-  // 15-min TTL: the first define of a term is the ONLY AI call it ever costs,
-  // then qa_cache serves it forever, to every user.
+  // TTL: one AI call per term per retention window, then qa_cache serves it
+  // to every user.
   if (reqBody?.mode === "define") {
     const term = question.toLowerCase().replace(/\s+/g, " ");
     if (!DEFINE_TERMS.has(term)) return new Response("unknown term", { status: 400 });
@@ -556,28 +758,45 @@ Deno.serve(async (req) => {
     return Response.json(out);
   }
 
-  // Abuse guard: 50/user/day, silent (spec §5.5).
-  const midnight = new Date();
-  midnight.setUTCHours(0, 0, 0, 0);
-  const { count } = await sb.from("events")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id).eq("type", "qa_ask")
-    .gte("created_at", midnight.toISOString());
-  if ((count ?? 0) >= (edgeCfg.daily_cap ?? 50)) return new Response("daily limit", { status: 429 });
+  // Context, when the app sends it. Number(null) is 0, hence the null check.
+  const storyId = reqBody?.story_id != null && Number.isInteger(Number(reqBody.story_id))
+    ? Number(reqBody.story_id) : null;
+  const symbol = typeof reqBody?.symbol === "string" && SYMBOL_RE.test(reqBody.symbol)
+    ? reqBody.symbol : null;
 
-  // Cache: identical question inside 15 min costs zero AI (market panic guard).
+  // Abuse guard: 50/user/day, silent (spec §5.5) — plus the global budget.
+  const since = istMidnightIso();
+  const [mine, all] = await Promise.all([asksSince(since, user.id), globalAsks(since)]);
+  if (mine >= (edgeCfg.daily_cap ?? 50)) return new Response("daily limit", { status: 429 });
+
+  // Cache: identical question inside the TTL costs zero AI (market panic guard).
   // cachedAnswer adds the stampede guard: N concurrent misses on a breaking
   // story cost one model call, not N; a failure answers "busy" for 2 min.
+  // A context question is keyed with its context so it never collides with
+  // the bare question.
   const norm = question.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ");
-  const hash = await questionHash(norm);
+  const ctx = storyId !== null ? `story:${storyId}::` : symbol !== null ? `sym:${symbol}::` : "";
+  const hash = await questionHash(ctx + norm);
 
-  // qa_ask logged for cache hits too — the guard counts questions, not AI calls.
-  await sb.from("events").insert({ user_id: user.id, type: "qa_ask" });
+  if (all >= (edgeCfg.global_cap ?? 1500)) {
+    // Budget spent for the day: what is already answered still serves; nothing new is computed.
+    const hit = await peekAnswer(sb, hash, freshOf);
+    return hit ? Response.json(hit) : new Response("busy today", { status: 503 });
+  }
+  globalN++; // count ourselves until the next memo refresh
 
-  const out = await cachedAnswer(sb, hash, 15 * 60e3, async () => {
-    const a = await answer(question);
+  const compute = async () => {
+    const a = storyId !== null || symbol !== null
+      ? (await contextAnswer(question, storyId, symbol)) ?? await answer(question)
+      : await answer(question);
     return "error" in a ? null : a;
-  });
+  };
+  // qa_ask logged for cache hits too — the guard counts questions, not AI
+  // calls. The insert and the cache read do not depend on each other.
+  const [, out] = await Promise.all([
+    sb.from("events").insert({ user_id: user.id, type: "qa_ask" }),
+    cachedAnswer(sb, hash, freshOf, compute),
+  ]);
   if (!out) return new Response("all providers busy", { status: 503 });
   return Response.json(out);
 });

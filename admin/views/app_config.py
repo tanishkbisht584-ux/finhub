@@ -5,7 +5,8 @@ APP_DEFAULTS = {"min_version": "0.0.0", "force_update_message": "Please update F
                 "update_url": "", "maintenance": "",
                 "flags": {"deep_read_enabled": True, "qa_enabled": True, "live_default": True,
                           "live_poll_seconds": 15, "ambient_poll_seconds": 90}}
-EDGE_DEFAULTS = {"qa_enabled": True, "deepread_enabled": True, "daily_cap": 50, "lanes": {}}
+EDGE_DEFAULTS = {"qa_enabled": True, "deepread_enabled": True, "daily_cap": 50,
+                 "global_cap": 1500, "tavily_cap": 800, "lanes": {}}
 app = {**APP_DEFAULTS, **cfg("app")}
 flags = {**APP_DEFAULTS["flags"], **(app.get("flags") or {})}
 edge = {**EDGE_DEFAULTS, **cfg("edge")}
@@ -73,6 +74,10 @@ with tab_e:
         qa_on = e1.toggle("qa enabled", bool(edge["qa_enabled"]), help="OFF → app shows its 'busy' message")
         dr_on = e2.toggle("deepread enabled", bool(edge["deepread_enabled"]), help="OFF → honest refusal page")
         cap = e3.number_input("daily cap per user (asks, generations)", 1, 1000, int(edge["daily_cap"]))
+        g1, g2 = st.columns(2)
+        gcap = g1.number_input("global asks per day (all users; past it only cached answers serve)",
+                               1, 100000, int(edge["global_cap"]))
+        tcap = g2.number_input("Tavily searches per month (free tier 1,000)", 0, 100000, int(edge["tavily_cap"]))
         lanes_txt = st.text_area(
             "Lane order overrides (JSON) — keys: smart, fast, deepread; each a list of [provider, model]",
             jdump(edge.get("lanes") or {}), height=140,
@@ -87,7 +92,7 @@ with tab_e:
                     assert all(isinstance(p, list) and len(p) == 2 and p[0] in ("groq", "gemini") and p[1]
                                for p in v), f"bad lane list for {k}"
                 cfg_save("edge", {"qa_enabled": qa_on, "deepread_enabled": dr_on, "daily_cap": int(cap),
-                                  "lanes": lanes})
+                                  "global_cap": int(gcap), "tavily_cap": int(tcap), "lanes": lanes})
                 refresh()
             except (ValueError, AssertionError) as e:
                 st.error(f"not saved: {e}")
