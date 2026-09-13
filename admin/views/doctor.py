@@ -22,6 +22,7 @@ SQL_MARKERS = {
            " and pg_get_constraintdef(oid) like '%cluster%'",
     "018": "select 1 from pg_constraint where conname='fundamentals_symbol_check'"
            " and pg_get_constraintdef(oid) like '%[A-Z0-9][A-Z0-9&-]%'",
+    "021": "select 1 from pg_indexes where indexname='stories_alerted_at_idx'",
 }
 MIG_DIR = REPO / "pipeline" / "migrations"
 
