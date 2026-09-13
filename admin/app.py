@@ -20,6 +20,7 @@ def gate():
     with mid:
         st.markdown("<div style='height:18vh'></div>", unsafe_allow_html=True)
         with st.container(border=True):
+            st.image(str(REPO / "docs" / "brand" / "mark-1024.png"), width=72)
             st.markdown("<div class='fs-title'>FinSwipe Admin</div>"
                         "<div class='fs-sub'>Cockpit for the pipeline, content, alerts, users and the app.</div>",
                         unsafe_allow_html=True)
