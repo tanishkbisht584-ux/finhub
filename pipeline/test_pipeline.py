@@ -21,6 +21,8 @@ def _fresh_process_caches():
     run._known_hashes.clear()
     run._companies_cache.update(at=None, by_key={})
     run._seen_images_cache.update(at=None, counts={})
+    run._pa_cache.update(at=None, profiles=[], follows_by_user={}, ledger=None)
+    run._fcm.update(creds=None)
 
 
 def test_url_hash_strips_tracking_and_normalizes():
@@ -529,26 +531,30 @@ def test_fcm_token_dead_only_on_404_or_unregistered_400():
     assert not _fcm_token_is_dead(500, "")
 
 
-def test_personal_alert_engine_patches_pa_state_even_if_story_loop_raises(monkeypatch):
+def test_personal_alert_engine_records_ledger_even_if_story_loop_raises(monkeypatch):
     """A mid-loop exception (bad story shape, companies_of blip) must not lose
     the user's cursor/count -- otherwise a retry re-buzzes stories already
-    sent, burning into the 5/day cap for nothing."""
+    sent, burning into the 5/day cap for nothing. State goes to personal_sends
+    (migration 020) as ONE merge-duplicates POST per lap, never a profiles PATCH."""
     import run
 
-    patches = []
+    posts = []
 
     def fake_sb(method, path, json=None, **kw):
         if path.startswith("profiles?select"):
-            return [{"id": "u1", "fcm_token": "tok",
-                     "alert_settings": {"personalized": True, "pa": {}}}]
+            return [{"id": "u1", "fcm_token": "tok", "alert_settings": {"personalized": True}},
+                    {"id": "u2", "fcm_token": "tok2", "alert_settings": {}}]
         if path.startswith("follows"):
-            return [{"user_id": "u1", "target_type": "category", "target_id": "Markets"}]
+            return [{"user_id": "u1", "target_type": "category", "target_id": "Markets"},
+                    {"user_id": "u2", "target_type": "category", "target_id": "Markets"}]
+        if path.startswith("personal_sends?select"):
+            return [{"user_id": "u2", "day": "x", "n": 0, "cur": 0}]
         if path.startswith("stories"):
             return [{"id": 1, "hook": "h", "headline": "h", "impact_score": 9,
                      "category": "Markets", "sectors": []}]
-        if method == "PATCH" and path.startswith("profiles?id=eq.u1"):
-            patches.append(json)
-            return {}
+        if method == "POST" and path == "personal_sends":
+            posts.append((json, kw.get("headers")))
+            return []
         raise AssertionError(f"unexpected sb call: {method} {path}")
 
     def boom(*a, **k):
@@ -558,8 +564,65 @@ def test_personal_alert_engine_patches_pa_state_even_if_story_loop_raises(monkey
     monkeypatch.setattr(run, "send_fcm_token", boom)
     run.personal_alert_engine()
 
-    assert len(patches) == 1
-    assert patches[0]["alert_settings"]["pa"]["cur"] == 1  # cursor still advanced
+    assert len(posts) == 1                                   # one write for both users
+    rows, headers = posts[0]
+    assert headers == {"Prefer": "resolution=merge-duplicates"}
+    assert sorted(r["cur"] for r in rows) == [1, 1]          # cursors still advanced
+    # second lap: audience and ledger come from memory, nothing moved, no write
+    monkeypatch.setattr(run, "sb", lambda m, p, **k: [] if p.startswith("stories") or
+                        p.startswith("market_blobs") else (_ for _ in ()).throw(AssertionError(p)))
+    run.personal_alert_engine()
+    assert len(posts) == 1
+
+
+def test_personal_alert_engine_idle_until_migration_020(monkeypatch):
+    """No personal_sends table (020 not applied yet) = engine says so and
+    sends nothing, rather than crashing the lap or starting from cursor 0
+    and re-buzzing everyone's last 6 hours."""
+    import requests
+    import run
+
+    def fake_sb(method, path, **kw):
+        if path.startswith("profiles?select"):
+            return [{"id": "u1", "fcm_token": "tok", "alert_settings": {}}]
+        if path.startswith("follows"):
+            return [{"user_id": "u1", "target_type": "category", "target_id": "Markets"}]
+        if path.startswith("personal_sends"):
+            raise requests.HTTPError("404 personal_sends: relation does not exist")
+        if path.startswith("stories"):
+            return [{"id": 1, "hook": "h", "headline": "h", "impact_score": 9,
+                     "category": "Markets", "sectors": []}]
+        return []
+
+    monkeypatch.setattr(run, "sb", fake_sb)
+    monkeypatch.setattr(run, "send_fcm_token", lambda *a: (_ for _ in ()).throw(AssertionError("sent")))
+    assert run.personal_alert_engine() == 0
+
+
+def test_fcm_creds_refreshes_once_while_valid(monkeypatch):
+    """The service-account credential is built once per process and refreshed
+    only when its token has expired -- not re-minted on every push."""
+    import run
+    from google.oauth2 import service_account
+
+    class Stub:
+        valid = False
+        refreshes = 0
+
+        def refresh(self, request):
+            self.refreshes += 1
+            self.valid = True
+
+    stub = Stub()
+    monkeypatch.setenv("FIREBASE_SERVICE_ACCOUNT_JSON", "{}")
+    monkeypatch.setattr(service_account.Credentials, "from_service_account_info",
+                        classmethod(lambda cls, info, scopes: stub))
+    assert run._fcm_creds() is stub
+    assert run._fcm_creds() is stub
+    assert stub.refreshes == 1
+    stub.valid = False  # token expired an hour later
+    run._fcm_creds()
+    assert stub.refreshes == 2
 
 
 def test_usable_image_rejects_junk_paths():

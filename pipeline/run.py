@@ -815,19 +815,35 @@ def gate_passes(score, cluster_size, authority, age_minutes=0):
             or (authority >= TRUSTED_AUTHORITY and age_minutes >= TRUSTED_SOLO_MINUTES))
 
 
+_fcm = {"creds": None}
+
+
+def _fcm_creds():
+    """One service-account credential per process, refreshed only once its
+    token has expired (~hourly). Every send used to re-parse the JSON and mint
+    a fresh OAuth token: two extra HTTPS round trips per push, serially, inside
+    the per-user loop. None when FCM is not configured."""
+    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if not sa_json:
+        return None
+    if _fcm["creds"] is None:
+        import json as _json
+        from google.oauth2 import service_account
+        _fcm["creds"] = service_account.Credentials.from_service_account_info(
+            _json.loads(sa_json), scopes=["https://www.googleapis.com/auth/firebase.messaging"])
+    if not _fcm["creds"].valid:
+        import google.auth.transport.requests
+        _fcm["creds"].refresh(google.auth.transport.requests.Request())
+    return _fcm["creds"]
+
+
 def send_fcm(hook, headline, story_id, score):
     """Push to the 'alerts' FCM topic (the app subscribes in M4). No-op until
     FIREBASE_SERVICE_ACCOUNT_JSON is configured."""
-    import json as _json
-    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
-    if not sa_json:
+    creds = _fcm_creds()
+    if creds is None:
         print(f"ALERT (FCM not configured): {hook}")
         return False
-    from google.oauth2 import service_account
-    import google.auth.transport.requests
-    creds = service_account.Credentials.from_service_account_info(
-        _json.loads(sa_json), scopes=["https://www.googleapis.com/auth/firebase.messaging"])
-    creds.refresh(google.auth.transport.requests.Request())
     r = requests.post(
         f"https://fcm.googleapis.com/v1/projects/{creds.project_id}/messages:send",
         headers={"Authorization": f"Bearer {creds.token}"},
@@ -853,16 +869,10 @@ def send_fcm_token(token, hook, headline, story_id, score):
     """Direct-to-device variant of send_fcm for personalized alerts. Returns
     "sent" | "dead" | "fail" — the caller clears "dead" tokens and only
     counts "sent" against the daily cap."""
-    import json as _json
-    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
-    if not sa_json:
+    creds = _fcm_creds()
+    if creds is None:
         print(f"PERSONAL ALERT (FCM not configured): {hook}")
         return "fail"
-    from google.oauth2 import service_account
-    import google.auth.transport.requests
-    creds = service_account.Credentials.from_service_account_info(
-        _json.loads(sa_json), scopes=["https://www.googleapis.com/auth/firebase.messaging"])
-    creds.refresh(google.auth.transport.requests.Request())
     r = requests.post(
         f"https://fcm.googleapis.com/v1/projects/{creds.project_id}/messages:send",
         headers={"Authorization": f"Bearer {creds.token}"},
@@ -902,27 +912,60 @@ def personal_matches(story, follows_by_user, companies_of):
 
 PERSONAL_CAP_PER_DAY = 5     # spec §7
 PERSONAL_MIN_SCORE = 6
+PA_REFRESH_SECONDS = 300     # profiles + follows reload; a new follow or token waits <= 5 min
+
+# 2026-09-13 (1000-user readiness): every 45 s lap re-read every profile and the
+# whole follows table and PATCHed one profile per user. At 1000 users that is
+# ~11k rows in and up to 1000 writes out, ~1,900 laps a day, on a 5 GB/month
+# egress budget. The audience is now cached per process; the per-user ledger
+# lives in personal_sends (migration 020), read once and written back as ONE
+# bulk upsert per lap.
+_pa_cache = {"at": None, "profiles": [], "follows_by_user": {}, "ledger": None}
+
+
+def _pa_audience():
+    """(profiles with a token who want personal alerts, follows_by_user),
+    reloaded together every PA_REFRESH_SECONDS.
+    ponytail: 5-min staleness; a profiles.updated_at delta if anyone notices."""
+    c = _pa_cache
+    if c["at"] is None or time.monotonic() - c["at"] > PA_REFRESH_SECONDS:
+        profiles = [p for p in sb("GET", "profiles?select=id,fcm_token,alert_settings"
+                                         "&fcm_token=not.is.null")
+                    if (p.get("alert_settings") or {}).get("personalized", True)]
+        follows_by_user = {}
+        for f in sb("GET", "follows?select=user_id,target_type,target_id"):
+            follows_by_user.setdefault(f["user_id"], []).append(
+                (f["target_type"], f["target_id"]))
+        c.update(at=time.monotonic(), profiles=profiles, follows_by_user=follows_by_user)
+    return c["profiles"], c["follows_by_user"]
+
+
+def _pa_ledger():
+    """user_id -> {user_id, day, n, cur} from personal_sends, read once per
+    process. This process is the only writer, so the in-memory copy is the
+    truth afterwards. None (engine idle) until migration 020 is applied."""
+    if _pa_cache["ledger"] is None:
+        try:
+            rows = sb("GET", "personal_sends?select=user_id,day,n,cur")
+        except requests.HTTPError as e:
+            if "personal_sends" in str(e):
+                print("PERSONAL ALERT: migration 020 missing, engine idle")
+                return None
+            raise
+        _pa_cache["ledger"] = {r["user_id"]: r for r in rows}
+    return _pa_cache["ledger"]
 
 
 def personal_alert_engine(now=None):
     """Spec §7 personalized alerts: impact >= 6 touching a followed
     company/sector/category -> direct push, max 5/day/user, quiet hours
-    pierced only by >= 9. Per-user state in profiles.alert_settings.pa
-    (ponytail: jsonb counter+cursor; a real sends table when DDL access
-    returns / beta grows). Globally-alerted stories are excluded — the topic
-    push already reached everyone."""
+    pierced only by >= 9. Per-user state (day count + id cursor) in
+    personal_sends via _pa_ledger. Globally-alerted stories are excluded: the
+    topic push already reached everyone."""
     now = now or datetime.now(timezone.utc)
-    profiles = sb("GET", "profiles?select=id,fcm_token,alert_settings"
-                         "&fcm_token=not.is.null")
-    profiles = [p for p in profiles
-                if (p.get("alert_settings") or {}).get("personalized", True)]
+    profiles, follows_by_user = _pa_audience()
     if not profiles:
         return 0
-    all_follows = sb("GET", "follows?select=user_id,target_type,target_id")
-    follows_by_user = {}
-    for f in all_follows:
-        follows_by_user.setdefault(f["user_id"], []).append(
-            (f["target_type"], f["target_id"]))
     # Keyword-spike alerts (signals.py `trending`, high confidence only) ride
     # this engine rather than the topic broadcast so the profile's
     # keyword_spike toggle can opt a user out; the cursor/cap/quiet-hours
@@ -965,6 +1008,9 @@ def personal_alert_engine(now=None):
         stories = sorted(stories + extra, key=lambda s: s["id"])
     if not stories:
         return 0
+    ledger = _pa_ledger()
+    if ledger is None:
+        return 0
 
     link_cache = {}
     def companies_of(sid):
@@ -975,52 +1021,63 @@ def personal_alert_engine(now=None):
 
     sent = 0
     quiet = in_quiet_hours(now)
-    for p in profiles:
-        uid = p["id"]
-        if uid not in follows_by_user and not spike_ids:
-            continue
-        try:
-            settings = p.get("alert_settings") or {}
-            wants_spikes = settings.get("keyword_spike", True)
-            pa = settings.get("pa") or {}
-            n_today = pa.get("n", 0) if pa.get("d") == today else 0
-            cursor = pa.get("cur", 0)
-            new_cursor = cursor
-            # A mid-loop exception (bad story shape, companies_of network blip)
-            # must not lose this user's pa state — the finally still PATCHes
-            # whatever cursor/count were reached, so a retry next pass resumes
-            # instead of re-buzzing the same stories.
+    dirty = set()
+    try:
+        # ponytail: sequential per-token POSTs (~10/s); ThreadPoolExecutor(8)
+        # over users if a story ever matches >300 followers.
+        for p in profiles:
+            uid = p["id"]
+            if not p.get("fcm_token") or (uid not in follows_by_user and not spike_ids):
+                continue
             try:
-                for s in stories:
-                    if s["id"] <= cursor:
-                        continue
-                    new_cursor = max(new_cursor, s["id"])
-                    if n_today >= PERSONAL_CAP_PER_DAY:
-                        continue  # cursor still advances: stale news never buzzes later
-                    if quiet and (s["impact_score"] or 0) < QUIET_PIERCE_SCORE:
-                        continue
-                    spike = s["id"] in spike_ids and wants_spikes
-                    if not spike and uid not in personal_matches(
-                            s, {uid: follows_by_user.get(uid, [])}, companies_of):
-                        continue
-                    result = send_fcm_token(p["fcm_token"], s["hook"] or s["headline"],
-                                            s["headline"], s["id"], s["impact_score"])
-                    if result == "sent":
-                        n_today += 1
-                        sent += 1
-                    elif result == "dead":
-                        sb("PATCH", f"profiles?id=eq.{uid}", json={"fcm_token": None})
-                        break  # token's gone: no point trying it against later stories
-            finally:
-                if new_cursor != cursor or n_today != (pa.get("n", 0) if pa.get("d") == today else 0):
-                    sb("PATCH", f"profiles?id=eq.{uid}",
-                       json={"alert_settings": {**settings,
-                             "pa": {"d": today, "n": n_today, "cur": new_cursor}}})
-        except Exception as e:
-            # one bad user (dead creds, malformed token, transient network blip)
-            # never stops the rest of the run's pushes
-            print(f"PERSONAL ALERT failed for user {uid}: {str(e)[:80]}")
-            continue
+                settings = p.get("alert_settings") or {}
+                wants_spikes = settings.get("keyword_spike", True)
+                pa = ledger.get(uid) or {}
+                was_today = pa.get("n", 0) if pa.get("day") == today else 0
+                n_today = was_today
+                cursor = pa.get("cur", 0)
+                new_cursor = cursor
+                # A mid-loop exception (bad story shape, companies_of network
+                # blip) must not lose this user's state: the finally still
+                # records whatever cursor/count were reached, so a retry next
+                # pass resumes instead of re-buzzing the same stories.
+                try:
+                    for s in stories:
+                        if s["id"] <= cursor:
+                            continue
+                        new_cursor = max(new_cursor, s["id"])
+                        if n_today >= PERSONAL_CAP_PER_DAY:
+                            continue  # cursor still advances: stale news never buzzes later
+                        if quiet and (s["impact_score"] or 0) < QUIET_PIERCE_SCORE:
+                            continue
+                        spike = s["id"] in spike_ids and wants_spikes
+                        if not spike and uid not in personal_matches(
+                                s, {uid: follows_by_user.get(uid, [])}, companies_of):
+                            continue
+                        result = send_fcm_token(p["fcm_token"], s["hook"] or s["headline"],
+                                                s["headline"], s["id"], s["impact_score"])
+                        if result == "sent":
+                            n_today += 1
+                            sent += 1
+                        elif result == "dead":
+                            sb("PATCH", f"profiles?id=eq.{uid}", json={"fcm_token": None})
+                            p["fcm_token"] = None  # cached copy too: no retries for 5 min
+                            break  # token's gone: no point trying it against later stories
+                finally:
+                    if new_cursor != cursor or n_today != was_today:
+                        ledger[uid] = {"user_id": uid, "day": today, "n": n_today, "cur": new_cursor}
+                        dirty.add(uid)
+            except Exception as e:
+                # one bad user (dead creds, malformed token, transient network blip)
+                # never stops the rest of the run's pushes
+                print(f"PERSONAL ALERT failed for user {uid}: {str(e)[:80]}")
+                continue
+    finally:
+        if dirty:
+            # ponytail: the in-memory ledger is authoritative (single writer); a
+            # crash between the sends and this POST loses <= 1 lap of state.
+            sb("POST", "personal_sends", json=[ledger[u] for u in dirty],
+               headers={"Prefer": "resolution=merge-duplicates"})
     return sent
 
 
