@@ -62,9 +62,11 @@ Internal testing is what opens that gate.
 
 ## Graphics you must attach
 
-- App icon 512×512 and a feature graphic 1024×500 (Play requires both).
-  The app icon source is `app/android/app/src/main/res/` /
-  `finswipe.ico` in admin — if you want, ask me and I'll generate both PNGs.
+- App icon 512×512 and a feature graphic 1024×500 (Play requires both):
+  `docs/brand/play-icon-512.png` and `docs/brand/play-feature-1024x500.png`.
+  Both come from `docs/brand/render.py` (source `docs/brand/mark.svg`), which
+  also installs the adaptive/mono/round launcher icons, splash mark, FCM small
+  icon and web icons shipped in-app since v0.42.0.
 - At least 2 phone screenshots — take them from the installed app (feed card
   + newspaper page are the best two).
 

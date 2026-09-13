@@ -1,6 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="168" height="32" viewBox="0 0 168 32">
-  <rect x="0" y="0" width="32" height="32" rx="8" fill="#3ECF8E"/>
-  <path d="M8 22 L14 13 L18 18 L24 9" fill="none" stroke="#0C0F0E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="42" y="22" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="17" font-weight="700" fill="#E7EAE8">FinSwipe</text>
-  <text x="118" y="22" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#8E9792">Admin</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="32" viewBox="0 0 200 32">
+  <!-- FinSwipe mark (docs/brand/mark.svg) at 32 px + "FinSwipe Admin". Regenerate the .ico via docs/brand/render.py. -->
+  <g transform="translate(0 0) scale(0.32)">
+    <path d="M74 44 L74 73 A24 24 0 0 1 26 73 L26 44" fill="none" stroke="#9BA09C" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+    <g stroke="#3ECF8E" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M26 44 L50 32 L74 44" opacity="1"/>
+      <path d="M26 35 L50 23 L74 35" opacity="0.72"/>
+      <path d="M26 26 L50 14 L74 26" opacity="0.46"/>
+      <path d="M26 17 L50 5 L74 17" opacity="0.26"/>
+    </g>
+    <text x="50" y="62" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="18" fill="#E8E6E3">F</text>
+    <text x="50" y="78" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="18" fill="#E8E6E3">I</text>
+    <text x="50" y="94" text-anchor="middle" font-family="Georgia,'Noto Serif',serif" font-size="18" fill="#E8E6E3">N</text>
+  </g>
+  <text x="42" y="22" font-family="Georgia,'Noto Serif',serif" font-size="18" font-weight="700" fill="#E8E6E3"><tspan fill="#3ECF8E">Fin</tspan>Swipe</text>
+  <text x="140" y="22" font-family="Georgia,'Noto Serif',serif" font-size="17" fill="#9BA09C">Admin</text>
 </svg>
