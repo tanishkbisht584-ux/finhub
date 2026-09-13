@@ -2,4 +2,6 @@
 <resources>
     <!-- theme.dart `bg` — the window behind and before every Flutter frame -->
     <color name="clay_black">#FF0E100F</color>
+    <!-- theme.dart `green` — FCM notification accent -->
+    <color name="green">#FF3ECF8E</color>
 </resources>

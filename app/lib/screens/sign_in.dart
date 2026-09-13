@@ -56,7 +56,15 @@ class _SignInScreenState extends State<SignInScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('FinSwipe',
+            Image.asset('assets/brand/mark.png',
+                width: 96, height: 96, semanticLabel: 'FinSwipe mark'),
+            const SizedBox(height: 16),
+            // Text.rich keeps find.text('FinSwipe') working (plain text of the span).
+            Text.rich(
+                const TextSpan(children: [
+                  TextSpan(text: 'Fin', style: TextStyle(color: green)),
+                  TextSpan(text: 'Swipe'),
+                ]),
                 textAlign: TextAlign.center,
                 style:
                     serif.copyWith(fontSize: 40, fontWeight: FontWeight.w700)),

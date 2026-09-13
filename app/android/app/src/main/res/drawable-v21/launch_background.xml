@@ -3,10 +3,10 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/clay_black" />
 
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
+    <!-- 160 dp mark, per-density PNGs from docs/brand/render.py -->
+    <item>
         <bitmap
             android:gravity="center"
-            android:src="@mipmap/launch_image" />
-    </item> -->
+            android:src="@drawable/splash_mark" />
+    </item>
 </layer-list>
