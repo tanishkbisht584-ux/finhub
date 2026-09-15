@@ -414,7 +414,7 @@ QUARTERS_EPS = {"2026-06": {"eps": 4.0}, "2026-03": {"eps": 3.5},
 
 
 def row_for(**kw):
-    args = {"sym": "TCS", "name": "TCS Ltd", "sector": "IT",
+    args = {"sym": "TCS", "name": "TCS Ltd",
             "annuals": annuals_for_screen(), "quarters": QUARTERS_EPS,
             "promoter_pct": 50.5, "price": 280.0, "now": NOW,
             "shares": None, "dps_ttm": None}

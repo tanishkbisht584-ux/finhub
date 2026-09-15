@@ -89,6 +89,58 @@ def results():
         print(r.text[:1500])
 
 
+def results_listing():
+    """15 Sep 2026: every NSE-sourced quarter in the table is 2024-09 or
+    2024-12 and no 2025+ filing was ever picked — print the newest listing
+    rows in full (Quarterly + Annual, an industrial + a bank) and the element
+    names of a 2025+ filing so pick_results_filings/RESULTS_ELEMENTS can be
+    fixed against the real shape."""
+    import re
+    from market import parse_nse_date
+
+    def when(r):
+        return parse_nse_date(r.get("toDate")) or parse_nse_date("01-Jan-1900")
+
+    for sym in ("RELIANCE", "HDFCBANK"):
+        for period in ("Quarterly", "Annual"):
+            j = get("corporates-financial-results", index="equities", symbol=sym, period=period)
+            rows = rows_of(j)
+            print(f"\n-- {sym} {period}: {len(rows)} rows; top-level keys:",
+                  sorted(j) if isinstance(j, dict) else type(j).__name__)
+            if not rows:
+                continue
+            print("   row keys:", sorted(rows[0]))
+            rows = sorted(rows, key=when, reverse=True)
+            for r in rows[:6]:
+                print("  ", json.dumps(r))
+            newest = next((r for r in rows if when(r).year >= 2025), None)
+            if newest and period == "Quarterly":
+                urls = {k: v for k, v in newest.items() if isinstance(v, str) and v.startswith("http")}
+                print("   url-ish fields of the newest 2025+ row:", json.dumps(urls))
+                for k, u in urls.items():
+                    if any(t in u.lower() for t in (".xml", "xbrl", ".zip")):
+                        print(f"   fetching {k}: {u}")
+                        xml = s.get(u, timeout=25).text
+                        seen = {}
+                        for m in re.finditer(r"<(?:[\w.-]+:)?(\w+)[^>]*contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
+                            name, ctx, val = m.group(1), m.group(2), m.group(3).strip()
+                            if name not in seen and val and re.search(
+                                    r"Revenue|Income|Profit|Tax|Expense|Interest|Deposit|Advance|Share|Earning", name):
+                                seen[name] = (ctx, val)
+                        print(f"   {len(seen)} matching elements:")
+                        for name, (ctx, val) in list(seen.items())[:120]:
+                            print(f"     {name} = ({ctx[:40]}, {val[:40]})")
+                        print("   raw head:", xml[:600].replace(chr(10), " "))
+                        break
+    # is the listing windowed? ask for 2025+ explicitly
+    j = get("corporates-financial-results", index="equities", symbol="RELIANCE", period="Quarterly",
+            from_date="01-01-2025", to_date="15-09-2026")
+    rows = rows_of(j)
+    print(f"\n-- RELIANCE Quarterly with from/to 2025+: {len(rows)} rows")
+    for r in rows[:3]:
+        print("  ", json.dumps(r)[:600])
+
+
 def ratings():
     for path in ("corporate-credit-rating", "corporates-credit-rating"):
         r = s.get(NSE_API + path, params={"index": "equities", "symbol": SYM}, timeout=25)
@@ -134,6 +186,7 @@ def market_rows(j):
     return [r for r in _rows(j) if isinstance(r, dict)]
 
 
+show("results listing 2025+ (industrial + bank)", results_listing)
 show("market shapes (F&O, 52wk, announcements)", market_shapes)
 show("SHP master + XBRL", shp)
 show("financial results + XBRL", results)

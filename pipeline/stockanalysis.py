@@ -4,9 +4,11 @@ found 12 Sep 2026; answers browser-ish UAs from the dev IP AND GitHub runners
 (probe run 34678287615). Column ids: column-meta?type=quote.
 
 Ownership rule (council, 12 Sep): this module writes ONLY the columns listed
-here (migration 019) - never pe/pb/de/opm/roe/roce/div_yield/price/mcap_cr,
-which stay ours; the site disagreed with us on 34 of the top-100 P/Es, so the
-two sets never mix and the app's "Stock Analysis" footnote is true per column.
+here (migration 019, plus sector + industry on every row since 022 - the
+companies table never had a sector, so peers had nothing to group by) - never
+pe/pb/de/opm/roe/roce/div_yield/price/mcap_cr, which stay ours; the site
+disagreed with us on 34 of the top-100 P/Es, so the two sets never mix and the
+app's "Stock Analysis" footnote is true per column.
 ToS: "not allowed to republish content in full" - attributed, additive fields.
 """
 import re
@@ -31,7 +33,7 @@ SA_KEYS = ("allTimeHigh", "allTimeHighDate", "high52Date", "low52Date", "grahamN
            "nextEarningsDate", "lastReportDate", "exDivDate", "paymentDate", "employees",
            "founded", "website", "isin", "float", "buybackYield", "analystRatings",
            "analystCount", "priceTarget", "priceTargetChange")
-COLUMNS = ",".join(("n", "sector", "priceDate", "dollarVolume", *NUM, *SA_KEYS))
+COLUMNS = ",".join(("n", "sector", "industry", "priceDate", "dollarVolume", *NUM, *SA_KEYS))
 SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9&-]{0,19}$")  # = migration 018 CHECK; one bad row fails a 100-row batch
 
 
@@ -73,9 +75,10 @@ def resolve_symbol(sym, known):
 
 
 def sa_rows(raw, existing, now, known=None):
-    """Site row -> screener_metrics row, SA-owned columns only. Every row
-    carries the same keys (one PGRST102 bucket); symbols not yet in the table
-    also get name+sector (a second bucket) so they aren't blank."""
+    """Site row -> screener_metrics row, SA-owned columns only, sector and
+    industry included (the peer keys). Every row carries the same keys (one
+    PGRST102 bucket); symbols not yet in the table also get a name (a second
+    bucket) so they aren't blank."""
     out, known = [], known or existing
     for sym, r in raw.items():
         sym = resolve_symbol(sym, known)
@@ -83,10 +86,11 @@ def sa_rows(raw, existing, now, known=None):
             continue
         row = {"symbol": sym, **{col: _num(r.get(k)) for k, col in NUM.items()},
                "turnover_cr": _num(r.get("dollarVolume"), 1e7),
+               "sector": r.get("sector") or None, "industry": r.get("industry") or None,
                "sa": {k: r[k] for k in SA_KEYS if r.get(k) not in (None, "")},
                "sa_price_date": r.get("priceDate"), "sa_at": now.isoformat()}
         if sym not in existing:
-            row["name"], row["sector"] = r.get("n"), r.get("sector")
+            row["name"] = r.get("n")
         out.append(row)
     return out
 

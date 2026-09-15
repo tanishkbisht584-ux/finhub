@@ -866,7 +866,7 @@ def deep_fetch(sb, symbols, now, nse=True):
 
 # ---------- screening engine: fundamentals -> screener_metrics, daily ----------
 
-SCREENER_COLS = ("symbol", "name", "sector", "price", "mcap_cr", "pe", "pb",
+SCREENER_COLS = ("symbol", "name", "price", "mcap_cr", "pe", "pb",
                  "div_yield", "roe", "roce", "de", "opm",
                  "sales_cagr_3y", "profit_cagr_3y", "sales_cagr_5y",
                  "profit_cagr_5y", "promoter_pct", "updated_at")
@@ -879,12 +879,13 @@ def ttm_eps(quarters):
     return round(sum(vals), 2) if len(vals) == 4 else None
 
 
-def screener_metrics_row(sym, name, sector, annuals, quarters, promoter_pct, price, now,
+def screener_metrics_row(sym, name, annuals, quarters, promoter_pct, price, now,
                          shares=None, dps_ttm=None):
     """One screener_metrics row; every SCREENER_COLS key always present (None
     where uncomputable) so upsert() lands in one PGRST102 bucket. `shares` is
     the REPORTED count (defaultKeyStatistics) and `dps_ttm` real trailing
-    dividends — inference is a fallback only."""
+    dividends — inference is a fallback only. sector/industry are not ours:
+    stockanalysis.py owns them (migration 022) and the merge upsert keeps them."""
     eps_used = ttm_eps(quarters) or _latest(annuals, "eps")
     np_, eps_a = _latest(annuals, "net_profit"), _latest(annuals, "eps")
     shares_cr = shares / 1e7 if shares else None
@@ -900,7 +901,7 @@ def screener_metrics_row(sym, name, sector, annuals, quarters, promoter_pct, pri
     bv = _latest(annuals, "book_value")  # reported ₹/share when a deep pass ran
     if bv is None and equity is not None and equity > 0 and shares_cr:
         bv = equity / shares_cr
-    r = {"symbol": sym, "name": name, "sector": sector, "price": price,
+    r = {"symbol": sym, "name": name, "price": price,
          "mcap_cr": round(price * shares_cr, 1) if price and shares_cr and shares_cr > 0 else None,
          "pe": round(price / eps_used, 2) if price and eps_used and eps_used > 0 else None,
          "pb": round(price / bv, 2) if price and bv and bv > 0 else None,
@@ -946,8 +947,8 @@ def refresh_screener(sb, now):
                       "dps_ttm:data->dps_ttm&kind=eq.summary&order=symbol")}
     if not annuals:
         return 0
-    names = {c["nse_symbol"]: (c.get("name"), c.get("sector")) for c in
-             sb("GET", "companies?select=nse_symbol,name,sector") if c.get("nse_symbol")}
+    names = {c["nse_symbol"]: c.get("name") for c in
+             sb("GET", "companies?select=nse_symbol,name") if c.get("nse_symbol")}
     prev = {r["symbol"]: r["price"] for r in
             sb("GET", "screener_metrics?select=symbol,price")}
     syms = sorted(annuals)
@@ -956,8 +957,7 @@ def refresh_screener(sb, now):
     for s in syms:
         p = parse_spark(data.get(f"{s}.NS", {}) or {})
         price = p.price if p else prev.get(s)
-        name, sector = names.get(s, (None, None))
-        rows.append(screener_metrics_row(s, name, sector, annuals[s],
+        rows.append(screener_metrics_row(s, names.get(s), annuals[s],
                                          quarters.get(s, {}), sh.get(s), price, now,
                                          shares=summ.get(s, {}).get("shares"),
                                          dps_ttm=summ.get(s, {}).get("dps_ttm")))

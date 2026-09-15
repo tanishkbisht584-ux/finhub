@@ -11,7 +11,8 @@ NOW = datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc)
 
 
 def site_row(sym, **kw):
-    base = {"s": f"NSE-{sym}", "n": f"{sym} Ltd", "sector": "Energy", "priceDate": "2026-09-11",
+    base = {"s": f"NSE-{sym}", "n": f"{sym} Ltd", "sector": "Energy", "industry": "Oil & Gas Refining",
+            "priceDate": "2026-09-11",
             "dollarVolume": 11038003020, "ch1y": -8.678294, "ch1w": -4.87897, "allTimeHighChange": -21.98,
             "allTimeHigh": 1611.8, "allTimeHighDate": "2026-01-05", "fScore": 3, "nextEarningsDate": "2026-09-20",
             "analystRatings": None, "isin": ""}
@@ -53,7 +54,8 @@ def test_sa_rows_maps_rounds_filters_and_buckets():
     assert ril["sa"] == {"allTimeHigh": 1611.8, "allTimeHighDate": "2026-01-05",
                          "nextEarningsDate": "2026-09-20"}       # None/"" dropped
     assert ril["sa_price_date"] == "2026-09-11" and ril["sa_at"] == NOW.isoformat()
-    assert set(mm) - set(ril) == {"name", "sector"} and mm["name"] == "M_M Ltd"
+    assert set(mm) - set(ril) == {"name"} and mm["name"] == "M_M Ltd"
+    assert ril["sector"] == "Energy" and ril["industry"] == "Oil & Gas Refining"  # peer keys on every row
     for owned in ("pe", "pb", "de", "opm", "roe", "price", "mcap_cr"):
         assert owned not in ril                                     # never ours
 
@@ -116,7 +118,8 @@ def test_resolve_symbol(site, known, out):
 
 def test_columns_cover_every_mapped_id():
     cols = set(sa.COLUMNS.split(","))
-    assert set(sa.NUM) <= cols and set(sa.SA_KEYS) <= cols and {"n", "sector", "priceDate", "dollarVolume"} <= cols
+    assert set(sa.NUM) <= cols and set(sa.SA_KEYS) <= cols
+    assert {"n", "sector", "industry", "priceDate", "dollarVolume"} <= cols
 
 
 @pytest.mark.parametrize("v,scale,out", [(None, 1, None), (True, 1, None), ("x", 1, None),
