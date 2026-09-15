@@ -111,6 +111,31 @@ with tab_c:
     section("Screener nulls", "symbols that silently drop out of screens on these metrics")
     kv_rows([("pe null", f"{n_pe} — stale TTM: needs all 4 recent quarters (NSE XBRL drains the holes)"),
              ("pb null", n_pb), ("roe null", n_roe)])
+    roll = cfg("fund_audit") or {}
+    section("Fundamentals panel completeness",
+            "fund_audit: every stock's page sections checked on its last deep pass; deep_warm "
+            "refetches the largest fixable deficit first (rollup written at 17:30 IST)")
+    if roll:
+        pct = roll.get("pct_complete") or 0
+        kpis([("Complete", f"{pct}%", f"{roll.get('complete')} of {roll.get('n')} stocks · "
+                                       f"audited {roll.get('audited')}",
+               GREEN if pct >= ops.FUND_MIN_COMPLETE_PCT else AMBER),
+              ("Prev day", f"{roll.get('prev_pct') if roll.get('prev_pct') is not None else '—'}%",
+               "alert fires on a 5-point drop", BLUE),
+              ("Unfixable", sum((roll.get("unfixable") or {}).values()),
+               "no source carries it (basis-dropped NSE-only annuals, young listings)", DIM),
+              ("Rollup", ago(roll.get("at")) if roll.get("at") else "—", "as of", DIM)])
+        kv_rows([(k, v) for k, v in (roll.get("by_code") or {}).items()] or [("gaps", "none")])
+        if roll.get("issues"):
+            kv_rows([(f"issue {k}", v) for k, v in roll["issues"].items()])
+        worst = roll.get("worst") or []
+        if worst:
+            st.dataframe([{"symbol": w["symbol"], "deficit": w["deficit"],
+                           "gaps": ", ".join(w["codes"])} for w in worst],
+                         use_container_width=True, hide_index=True)
+    else:
+        st.caption("no fund_audit rollup yet — lands with the next CI deep_warm (17:30 IST) "
+                   "or `py -3 warm_local.py audit --bootstrap`")
     section("Fetch failures", "process-lifetime tallies from the current CI run (reset on restart)")
     fund = status.get("fund") or {}
     if fund:

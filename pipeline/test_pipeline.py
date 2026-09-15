@@ -1355,6 +1355,29 @@ def test_ops_evaluate_platform_and_deep_checks():
     assert all(p["area"] for p in v["problems"]) and {p["area"] for p in v["problems"]} == {"ai", "market"}
 
 
+def test_ops_evaluate_fund_audit_rollup():
+    import ops
+    healthy = {"errors": {}, "private": False, "crash_loop": False, "gh_active": False,
+               "approved_age": 0.5, "ingested_age": 0.2, "top_age": 1.0, "flagged_hour": 0,
+               "switches": {}, "last_run_ok": True, "edge_calls": 10, "edge_failed": 1}
+    ok = {**healthy, "fund_audit": {"pct_complete": 91.0, "prev_pct": 90.0, "by_code": {}},
+          "fund_audit_age_h": 5.0}
+    assert not [p for p in ops.evaluate(ok)["problems"] if "fund" in p["name"]]
+    low = ops.evaluate({**ok, "fund_audit": {"pct_complete": 61.5, "prev_pct": None,
+                                             "by_code": {"bs.missing": 900, "q.stale": 40}}})
+    (p,) = [p for p in low["problems"] if p["name"] == "fundamentals incomplete"]
+    assert "61.5%" in p["msg"] and "bs.missing 900" in p["msg"] and p["fix"] == "market"
+    drop = ops.evaluate({**ok, "fund_audit": {"pct_complete": 84.0, "prev_pct": 92.0, "by_code": {}}})
+    assert any(p["name"] == "fundamentals incomplete" and "(was 92.0%)" in p["msg"]
+               for p in drop["problems"])
+    stale = ops.evaluate({**ok, "fund_audit_age_h": 50.0})
+    assert any(p["name"] == "fund audit stale" for p in stale["problems"])
+    # deep_warm switched off from admin: silent, like the other owners
+    quiet = ops.evaluate({**ok, "groups_off": ["deep_warm"],
+                          "fund_audit": {"pct_complete": 10.0, "prev_pct": None, "by_code": {}}})
+    assert not [p for p in quiet["problems"] if "fund" in p["name"]]
+
+
 def test_ops_evaluate_market_groups_and_fund_freshness():
     import ops
     healthy = {"errors": {}, "private": False, "crash_loop": False, "gh_active": False,

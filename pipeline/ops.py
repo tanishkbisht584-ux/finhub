@@ -43,6 +43,9 @@ SLOW_MS = 3000       # median empty-read above this => gateway degraded
 MAX_QUOTE_AGE_H = {"fx": 4, "commodity": 4, "crypto": 4, "equity": 4, "index": 4,
                    "mf": 30, "macro": 30}
 FUND_MAX_AGE_H = 36  # fundamentals/screener_metrics rebuild daily; 36 h absorbs cron lag
+FUND_MIN_COMPLETE_PCT = 80  # fund_audit rollup: below this the panel is visibly patchy
+FUND_DROP_PCT = 5           # or a day-over-day drop this big (a source went dark)
+WARM_HINT = "250 symbols"
 SA_MAX_AGE_H = 100   # stockanalysis sa_at is stamped only on a real pull: Fri close -> Tue close over a Monday holiday = 96 h
 # Blob content-age: the date the data INSIDE the blob claims, not when we wrote
 # the row. A frozen upstream keeps answering 200 with old data — row updated_at
@@ -198,6 +201,10 @@ def gather(repo, gh_token, deep=False):
             if r2 and r2[0].get(col):
                 ages[t] = _age_h(r2[0][col], now)
         f["fund_age_h"] = ages
+        rows = sb("GET", "app_config?select=value,updated_at&key=eq.fund_audit")
+        if rows:  # the fundamentals-panel completeness rollup (deep_warm writes it daily)
+            f["fund_audit"] = rows[0]["value"] or {}
+            f["fund_audit_age_h"] = _age_h(rows[0]["updated_at"], now)
     except Exception as e:  # noqa: BLE001
         f["errors"]["fund"] = str(e)
 
@@ -416,6 +423,22 @@ def evaluate(f):
             if age > lim and not owners & off:
                 prob(f"{t} stale", f"Newest {t} row is {age:.0f}h old (refreshes daily) — the screener "
                      "and stock pages are serving stale numbers.", "market", "market")
+        fa = f.get("fund_audit")
+        if fa and "deep_warm" not in off:
+            pct, prev = fa.get("pct_complete"), fa.get("prev_pct")
+            age = f.get("fund_audit_age_h")
+            if age is not None and age > FUND_MAX_AGE_H:
+                prob("fund audit stale", f"The fundamentals completeness rollup is {age:.0f}h old — "
+                     "deep_warm has not run; the stock pages stop converging.", "market", "market")
+            elif pct is not None and (pct < FUND_MIN_COMPLETE_PCT
+                                      or (prev is not None and prev - pct > FUND_DROP_PCT)):
+                top = ", ".join(f"{k} {v}" for k, v in
+                                sorted((fa.get("by_code") or {}).items(), key=lambda kv: -kv[1])[:3])
+                prob("fundamentals incomplete",
+                     f"Only {pct}% of stocks have a complete fundamentals panel"
+                     + (f" (was {prev}%)" if prev is not None else "")
+                     + f" — top gaps: {top or 'n/a'}. deep_warm drains {WARM_HINT} a day; "
+                     "see Markets → Coverage.", "market", "market")
 
     # deep-only facts (Health page); absent in the hourly watchdog, so silent there
     stale_kinds = [(k, a) for k, a in (f.get("quote_age_h") or {}).items()

@@ -16,9 +16,11 @@ the whole screener_metrics universe pre-warms daily, biggest names first.
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import requests
 
+import fund_audit
 from market import (BROWSER_UA, IST, NSE_API, QS_URL, TIMEOUT, fetch_spark,
                     nse_session, parse_nse_date, parse_spark, upsert,
                     yahoo_session)
@@ -72,7 +74,7 @@ DEEP_NEW_CAP = 5     # requested-symbol deep fetches per 5-min pass
 # process-lifetime failure tallies, mirrored to the app_config `market_status`
 # row by market.refresh — a basis-gate spike is a number, not a stdout grep
 counters = {"basis_drop": 0, "results_fail": 0, "chart_fail": 0,
-            "sym_fail": 0, "shp_fail": 0, "ts_fail": 0}
+            "sym_fail": 0, "shp_fail": 0, "ts_fail": 0, "junk_deleted": 0}
 
 
 def fy_label(end):
@@ -865,14 +867,26 @@ def _complete_quarters(rows):
             if d.get("src") in ("nse", "kaggle") or d.get("op_profit") is not None}
 
 
-def deep_fetch(sb, symbols, now, nse=True):
+def _junk(d):
+    """A legacy-Yahoo row with zero sales and zero profit: Yahoo answered an
+    empty period and the old code stored it — renders as a fake 0 column.
+    Deleted on the symbol's next pass (rule shown to and approved by Tanis,
+    15 Sep 2026: 23 rows). Nothing from kaggle/nse/yahoo_ts is ever deleted."""
+    return (d.get("src") == "yahoo" and not d.get("sales") and not d.get("net_profit"))
+
+
+def deep_fetch(sb, symbols, now, nse=True, q_cap=2):
     """nse=False = Yahoo-only (statements + chart) — runnable from machines
     NSE blocks; the NSE pieces (shareholding/results/docs) drain via CI. A
-    Yahoo miss never skips the NSE pieces for that symbol."""
+    Yahoo miss never skips the NSE pieces for that symbol. Every pass ends
+    with the symbol's audit (fund_audit.audit_symbol) written into its
+    summary row, computed on the very rows just merged. `q_cap` = NSE XBRL
+    docs per pass (refresh_deep_warm raises it for symbols with many holes)."""
     n = 0
     nse_s = nse_session() if symbols and nse else None
     for sym in symbols:
         try:
+            qsym = quote(sym, safe="")  # M&M: '&' would split the query string
             annuals, quarters, stats = {}, {}, {}
             try:
                 annuals, quarters, stats = fetch_statements(sym, now)
@@ -884,29 +898,39 @@ def deep_fetch(sb, symbols, now, nse=True):
             # merge with what the table already holds (kaggle/nse/older yahoo
             # rows) for the CAGR math — the upsert itself never deletes periods.
             prior = {r["period"]: r["data"] for r in
-                     sb("GET", f"fundamentals?select=period,data&kind=eq.annual&symbol=eq.{sym}")}
+                     sb("GET", f"fundamentals?select=period,data&kind=eq.annual&symbol=eq.{qsym}")}
             prior_q = {r["period"]: {k: v for k, v in r.items() if k != "period" and v is not None}
                        for r in sb("GET", "fundamentals?select=period,src:data->src,"
                                           "op_profit:data->op_profit,sales:data->sales,"
-                                          f"net_profit:data->net_profit&kind=eq.quarter&symbol=eq.{sym}")}
+                                          "net_profit:data->net_profit,eps:data->eps,"
+                                          "expenses:data->expenses,interest:data->interest"
+                                          f"&kind=eq.quarter&symbol=eq.{qsym}")}
+            for kind, rows in (("annual", prior), ("quarter", prior_q)):
+                for p in [p for p, d in rows.items() if _junk(d)]:
+                    sb("DELETE", f"fundamentals?symbol=eq.{qsym}&kind=eq.{kind}&period=eq.{p}")
+                    del rows[p]
+                    counters["junk_deleted"] += 1
+            basis_drop = False
             if annuals and not basis_ok(annuals, prior):
                 # standalone/mis-defined Yahoo statements: never written; the
                 # NSE consolidated XBRL below is the only statement source.
                 counters["basis_drop"] += 1
+                basis_drop = True
                 print(f"FUND basis mismatch {sym}: yahoo statements dropped")
                 annuals, quarters = {}, {}
             annuals, quarters = _overwritable(annuals, prior), _overwritable(quarters, prior_q)
             shareholding, docs = {}, None
             if nse:
                 try:  # NSE results XBRL fills quarters Yahoo doesn't serve
-                      # complete (older ones, no-depreciation ones), 2 doc
+                      # complete (older ones, no-depreciation ones), q_cap doc
                       # fetches per pass — the gap drains over passes.
                     quarters.update(fetch_results_quarters(
-                        sym, nse_s, _complete_quarters(prior_q) | _complete_quarters(quarters)))
+                        sym, nse_s, _complete_quarters(prior_q) | _complete_quarters(quarters),
+                        cap=q_cap))
                     # annual filings fill FYs Yahoo couldn't provide (basis
                     # mismatch) — full-year consolidated P&L, same parser.
                     missing_fy = fetch_results_quarters(
-                        sym, nse_s, set(prior) | set(annuals),
+                        sym, nse_s, set(prior) | set(annuals), cap=q_cap,
                         period="Annual", keyfn=fy_of_nse)
                     annuals.update(missing_fy)
                 except Exception as e:
@@ -919,15 +943,23 @@ def deep_fetch(sb, symbols, now, nse=True):
             except Exception as e:
                 counters["chart_fail"] += 1
                 print(f"FUND chart {sym}: {e}")
-            prior_sh = {r["period"]: r["data"] for r in
-                        sb("GET", "fundamentals?select=period,data"
-                                  f"&kind=eq.shareholding&symbol=eq.{sym}")}
-            summary = compute_summary({**prior, **annuals}, {**prior_q, **quarters}, closes,
-                                      shareholding={**prior_sh, **shareholding})
+            prior_sh, docs_at = {}, None
+            for r in sb("GET", "fundamentals?select=kind,period,data,updated_at"
+                               f"&kind=in.(shareholding,docs)&symbol=eq.{qsym}"):
+                if r["kind"] == "shareholding":
+                    prior_sh[r["period"]] = r["data"]
+                else:  # the docs stamp is read even on a Yahoo-only pass
+                    docs_at = r.get("updated_at")
+            all_a, all_q = {**prior, **annuals}, {**prior_q, **quarters}
+            all_sh = {**prior_sh, **shareholding}
+            summary = compute_summary(all_a, all_q, closes, shareholding=all_sh)
             if stats.get("shares"):
                 summary["shares"] = stats["shares"]
             if dps is not None:
                 summary["dps_ttm"] = dps
+            summary["audit"] = fund_audit.audit_symbol(
+                all_a, all_q, all_sh, now.isoformat() if docs is not None else docs_at,
+                basis_drop, now, complete_q=_complete_quarters(all_q))
             n += upsert(sb, fundamentals_rows(sym, annuals, quarters, summary, now,
                                               shareholding=shareholding, docs=docs),
                         table="fundamentals", key="symbol,kind,period")
@@ -1086,27 +1118,64 @@ def refresh_deep_new(sb, now):
 WARM_CAP = 250  # deep symbols per daily warm pass; the 3.2k universe in ~13 days
 
 
-def warm_universe(ages, priority, now, cap):
-    """Symbols to deep-warm today: priority names first, then oldest summary
-    first; anything summarized within DEEP_MAX_AGE_D is skipped. `ages` is
-    {symbol: summary updated_at iso or ''} — iso strings compare fine."""
+def warm_universe(ages, priority, now, cap, deficit=None):
+    """Symbols to deep-warm today: priority names first, then the largest
+    fixable deficit (fund_audit; never-audited = INF), oldest first within a
+    tie; anything refreshed within DEEP_MAX_AGE_D is skipped. `ages` is
+    {symbol: updated_at iso or ''} — iso strings compare fine."""
     cutoff = (now - timedelta(days=DEEP_MAX_AGE_D)).isoformat()
     stale = {s for s, at in ages.items() if (at or "") < cutoff}
     out = [s for s in priority if s in stale]
+    deficit = deficit or {}
     rest = sorted((s for s in stale if s not in set(priority)),
-                  key=lambda s: ages.get(s) or "")
+                  key=lambda s: (-deficit.get(s, fund_audit.INF), ages.get(s) or ""))
     return (out + rest)[:cap]
+
+
+def load_audits(sb):
+    """(audits {symbol: audit|None}, ages {symbol: docs updated_at or ''},
+    lrd {symbol: SA lastReportDate}) for the whole screener universe — the
+    one read (~1 MB) both the warm ordering and the rollup need."""
+    audits = {r["symbol"]: None for r in sb("GET", "screener_metrics?select=symbol&order=symbol")}
+    lrd = {r["symbol"]: r.get("lrd") for r in
+           sb("GET", "screener_metrics?select=symbol,lrd:sa->>lastReportDate&order=symbol")}
+    for r in sb("GET", "fundamentals?select=symbol,audit:data->audit&kind=eq.summary&order=symbol"):
+        if r["symbol"] in audits:
+            audits[r["symbol"]] = r.get("audit") or None
+    ages = {s: "" for s in audits}
+    for r in sb("GET", "fundamentals?select=symbol,updated_at&kind=eq.docs&order=symbol"):
+        if r["symbol"] in ages:
+            ages[r["symbol"]] = r["updated_at"]
+    return audits, ages, lrd
+
+
+def write_rollup(sb, audits, lrd, now):
+    """The Health/admin summary in app_config `fund_audit`, keeping the
+    previous pct so ops can alert on a drop."""
+    prev = None
+    try:
+        rows = sb("GET", "app_config?select=value&key=eq.fund_audit")
+        prev = ((rows[0]["value"] if rows else {}) or {}).get("pct_complete")
+    except Exception:
+        pass
+    roll = fund_audit.rollup(((s, a, lrd.get(s)) for s, a in audits.items()), now, prev_pct=prev)
+    upsert(sb, [{"key": "fund_audit", "value": roll, "updated_at": now.isoformat()}],
+           table="app_config", key="key")
+    return roll
 
 
 def refresh_deep_warm(sb, now):
     """Daily 17:30 IST: the whole screener_metrics universe converges — the
-    50 biggest names and followed companies every pass, then whoever's NSE
-    pieces (docs row) are oldest. Symbols with no docs row yet (never had a
-    CI deep pass: the stockanalysis-only 1,375, plus anything only warmed
-    locally) sort first."""
-    ages = {r["symbol"]: "" for r in sb("GET", "screener_metrics?select=symbol&order=symbol")}
-    for r in sb("GET", "fundamentals?select=symbol,updated_at&kind=eq.docs&order=symbol"):
-        ages[r["symbol"]] = r["updated_at"]
+    50 biggest names and followed companies every pass, then the largest
+    fixable deficit first (fund_audit verdicts; never-audited symbols such as
+    the stockanalysis-only 1,375 sort first), oldest docs stamp within a
+    tie. Writes the rollup before fetching, so Health shows the state the
+    pass started from."""
+    audits, ages, lrd = load_audits(sb)
+    write_rollup(sb, audits, lrd, now)
+    deficits = {s: fund_audit.deficit(a, now, lrd.get(s))[0] for s, a in audits.items()}
+    holes = {s: sum(1 for c in fund_audit.deficit(a, now, lrd.get(s))[1] if c.startswith("q."))
+             for s, a in audits.items() if a}
     priority = [r["symbol"] for r in
                 sb("GET", "screener_metrics?select=symbol&order=mcap_cr.desc.nullslast&limit=50")]
     followed = [int(f["target_id"]) for f in
@@ -1117,5 +1186,9 @@ def refresh_deep_warm(sb, now):
         priority = [c["nse_symbol"] for c in
                     sb("GET", f"companies?select=nse_symbol&id=in.({chunk})")
                     if c.get("nse_symbol")] + priority
-    todo = warm_universe(ages, list(dict.fromkeys(priority)), now, WARM_CAP)
-    return deep_fetch(sb, todo, now)
+    todo = warm_universe(ages, list(dict.fromkeys(priority)), now, WARM_CAP, deficit=deficits)
+    # symbols with quarter holes get a deeper NSE drain (4 filings a pass);
+    # 250 x 4 = 1,000 XBRL fetches/day at most — watch counters["results_fail"]
+    deep = [s for s in todo if holes.get(s, 0) >= 2]
+    n = deep_fetch(sb, [s for s in todo if s not in set(deep)], now)
+    return n + deep_fetch(sb, deep, now, q_cap=4)

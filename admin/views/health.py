@@ -151,6 +151,9 @@ group("Market data", "quotes, list blobs, fundamentals + the screener", "market"
          for t, a in sorted(fund_h.items())]
       + ([pill(f"{sum(1 for s in gst.values() if not s.get('ok'))}/{len(gst)} groups failing",
                all(s.get("ok") for s in gst.values()))] if gst else [])
+      + ([pill(f"fund complete {f['fund_audit'].get('pct_complete')}%",
+               (f["fund_audit"].get("pct_complete") or 0) >= ops.FUND_MIN_COMPLETE_PCT)]
+         if f.get("fund_audit") else [])
       or [pill("no quote rows / not probed", True, DIM)])
 for n in notes_for("market"):
     note(n, AMBER)
