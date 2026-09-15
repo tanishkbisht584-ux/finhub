@@ -48,6 +48,7 @@ class _StockScreenState extends State<StockScreen> {
   Timer? _fundPoll;
   int _fundPolls = 0;
   List<Map<String, dynamic>> _peers = const [];
+  String _peerKey = 'sector'; // 'industry' when the symbol has one
 
   /// The symbol's own screener_metrics row: Stock Analysis columns + `sa`
   /// jsonb (returns, records, street, calendar). Empty until the row has
@@ -87,9 +88,9 @@ class _StockScreenState extends State<StockScreen> {
     super.dispose();
   }
 
-  /// Statement history from the `fundamentals` table. Empty -> ask the
-  /// pipeline (same analysis_requests door as meta.f/t) and poll it in, the
-  /// exact rhythm of _maybeRequestAnalysis.
+  /// Statement history from the `fundamentals` table. Empty or incomplete
+  /// (needsDeepRefresh) -> ask the pipeline (same analysis_requests door as
+  /// meta.f/t) and poll it in, the exact rhythm of _maybeRequestAnalysis.
   void _loadFundamentals() {
     if (!remoteConfig.screenerPageEnabled) return;
     final sym = widget.company.nseSymbol;
@@ -97,7 +98,7 @@ class _StockScreenState extends State<StockScreen> {
     loadFundamentals(sym).then((d) {
       if (!mounted) return;
       setState(() => _fund = d);
-      if (d.summary.isNotEmpty) return;
+      if (!needsDeepRefresh(d)) return;
       final sb = Supabase.instance.client;
       if (sb.auth.currentUser != null) {
         sb
@@ -105,7 +106,7 @@ class _StockScreenState extends State<StockScreen> {
             .insert({'symbol': sym}).then((_) {}, onError: (_) {});
       }
       _fundPoll ??= Timer.periodic(const Duration(seconds: 75), (t) {
-        if (!mounted || ++_fundPolls > 5 || _fund.summary.isNotEmpty) {
+        if (!mounted || ++_fundPolls > 5 || !needsDeepRefresh(_fund)) {
           t.cancel();
           return;
         }
@@ -116,15 +117,16 @@ class _StockScreenState extends State<StockScreen> {
     });
   }
 
-  /// Same-sector rows from screener_metrics — the full covered market, not
-  /// just the hot quote universe. No metrics row yet just means no section.
+  /// Same-industry rows from screener_metrics (Screener's peer key; sector
+  /// when a symbol has no industry) — the full covered market, not just the
+  /// hot quote universe. No metrics row yet just means no section.
   void _loadPeers() {
     if (!remoteConfig.screenerPageEnabled || _peers.isNotEmpty) return;
     final sb = Supabase.instance.client;
     sb
         .from('screener_metrics')
         .select(
-            'sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
+            'industry,sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
             'ath_pct,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
             'shares_yoy,sa,sa_price_date')
@@ -135,13 +137,18 @@ class _StockScreenState extends State<StockScreen> {
       if (self?['sa_price_date'] != null) {
         setState(() => _sa = Map<String, dynamic>.from(self!));
       }
+      final industry = self?['industry'] as String?;
       final sector = self?['sector'] as String?;
-      if (sector == null || sector.isEmpty) return;
+      final (column, value) = industry != null && industry.isNotEmpty
+          ? ('industry', industry)
+          : ('sector', sector ?? '');
+      if (value.isEmpty) return;
+      _peerKey = column;
       sb
           .from('screener_metrics')
           .select(
               'symbol,name,price,pe,pb,mcap_cr,roe,roce,de,div_yield,opm,promoter_pct')
-          .eq('sector', sector)
+          .eq(column, value)
           .order('mcap_cr', ascending: false)
           .limit(11)
           .then((rows) {
@@ -600,7 +607,7 @@ class _StockScreenState extends State<StockScreen> {
               'HEAT', _heat, amber, () => setState(() => _heat = !_heat),
               fontSize: 10),
           footnote:
-              '₹ Cr · ${_heat ? 'tint = change vs previous period · ' : ''}Yahoo Finance + backfill',
+              '₹ Cr · consolidated · ${_heat ? 'tint = change vs previous period · ' : ''}Yahoo Finance + NSE filings + backfill',
           children: [
             ...lead,
             const SizedBox(height: 4),
@@ -679,7 +686,7 @@ class _StockScreenState extends State<StockScreen> {
           id: 'peers',
           label: 'PEERS',
           child: LedgerSection('Peers',
-              action: _stamp('same sector · by mkt cap'),
+              action: _stamp('same $_peerKey · by mkt cap'),
               footnote: 'bar = market cap vs largest · screener_metrics',
               children: [PeersTable(_peers, self: widget.company.nseSymbol)])
         ),

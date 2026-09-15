@@ -34,6 +34,53 @@ void main() {
       expect(d.isEmpty, isTrue);
       expect(d.annual, isEmpty);
       expect(d.summary, isEmpty);
+      expect(d.summaryAt, isNull);
+      expect(d.hasDocsRow, isFalse);
+    });
+
+    test('summary updated_at and docs presence are carried', () {
+      final d = FundamentalsData.fromRows([
+        {...row('summary', 'latest', {}), 'updated_at': '2026-09-10T12:00:00+00:00'},
+        row('docs', 'latest', {}),
+      ]);
+      expect(d.summaryAt, DateTime.utc(2026, 9, 10, 12));
+      expect(d.hasDocsRow, isTrue);
+    });
+  });
+
+  group('needsDeepRefresh', () {
+    final now = DateTime(2026, 9, 15);
+    List<Map<String, dynamic>> complete({String quarter = '2026-06',
+        String at = '2026-09-12T00:00:00Z', bool docs = true}) => [
+          {...row('summary', 'latest', {'cagr': {}}), 'updated_at': at},
+          row('quarter', quarter, {'sales': 1}),
+          if (docs) row('docs', 'latest', {}),
+        ];
+
+    test('complete and fresh -> no request', () {
+      expect(needsDeepRefresh(FundamentalsData.fromRows(complete()), now: now), isFalse);
+    });
+
+    test('nothing at all -> request', () {
+      expect(needsDeepRefresh(FundamentalsData.fromRows(const []), now: now), isTrue);
+    });
+
+    test('no docs row (NSE pieces never ran) -> request', () {
+      expect(needsDeepRefresh(FundamentalsData.fromRows(complete(docs: false)), now: now),
+          isTrue);
+    });
+
+    test('newest quarter older than nine months -> request', () {
+      expect(needsDeepRefresh(FundamentalsData.fromRows(complete(quarter: '2025-09')), now: now),
+          isTrue);
+      expect(needsDeepRefresh(FundamentalsData.fromRows(complete(quarter: '2026-03')), now: now),
+          isFalse);
+    });
+
+    test('summary older than the 7-day pipeline gate -> request', () {
+      expect(needsDeepRefresh(FundamentalsData.fromRows(complete(at: '2026-09-01T00:00:00Z')),
+              now: now),
+          isTrue);
     });
   });
 

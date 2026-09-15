@@ -6,25 +6,32 @@ import 'models.dart';
 /// one row per (kind, period), data jsonb shaped by pipeline/fundamentals.py.
 class FundamentalsData {
   const FundamentalsData(
-      this.annual, this.quarter, this.shareholding, this.summary, this.docs);
+      this.annual, this.quarter, this.shareholding, this.summary, this.docs,
+      {this.summaryAt, this.hasDocsRow = false});
 
   final Map<String, Map<String, dynamic>> annual; // 'FY2026' -> data, oldest first
   final Map<String, Map<String, dynamic>> quarter; // '2026-06' -> data
   final Map<String, Map<String, dynamic>> shareholding;
   final Map<String, dynamic> summary; // cagr/pros/cons/roce/book_value
   final Map<String, dynamic> docs;
+  final DateTime? summaryAt; // summary row's updated_at: when the deep pass last ran
+  final bool hasDocsRow; // an NSE pass ran at all (the row may be empty)
 
   bool get isEmpty =>
       annual.isEmpty && quarter.isEmpty && shareholding.isEmpty && summary.isEmpty;
 
   factory FundamentalsData.fromRows(List<dynamic> rows) {
     final byKind = <String, Map<String, Map<String, dynamic>>>{};
+    DateTime? summaryAt;
     for (final r in rows) {
       final m = Map<String, dynamic>.from(r as Map);
       final data = m['data'] is Map
           ? Map<String, dynamic>.from(m['data'] as Map)
           : <String, dynamic>{};
       byKind.putIfAbsent('${m['kind']}', () => {})['${m['period']}'] = data;
+      if (m['kind'] == 'summary') {
+        summaryAt = DateTime.tryParse('${m['updated_at'] ?? ''}');
+      }
     }
     Map<String, Map<String, dynamic>> sorted(String kind) {
       final m = byKind[kind] ?? const {};
@@ -34,8 +41,24 @@ class FundamentalsData {
 
     return FundamentalsData(sorted('annual'), sorted('quarter'),
         sorted('shareholding'), byKind['summary']?['latest'] ?? const {},
-        byKind['docs']?['latest'] ?? const {});
+        byKind['docs']?['latest'] ?? const {},
+        summaryAt: summaryAt, hasDocsRow: byKind.containsKey('docs'));
   }
+}
+
+/// Should the page ask the pipeline for a deep pass? Not only when nothing
+/// exists: a stock whose statements stop short of the latest filing, whose
+/// NSE pieces (docs row) never ran, or whose summary is older than the
+/// pipeline's own 7-day freshness gate gets refilled within minutes of being
+/// opened (deep_new, 5-min group) instead of waiting its turn in the daily
+/// warm. Every section on every stock fills the same way.
+bool needsDeepRefresh(FundamentalsData d, {DateTime? now}) {
+  now ??= DateTime.now();
+  if (d.summary.isEmpty || !d.hasDocsRow || d.quarter.isEmpty) return true;
+  final newest = DateTime.tryParse('${d.quarter.keys.last}-01');
+  if (newest == null || now.difference(newest).inDays > 270) return true;
+  final at = d.summaryAt;
+  return at == null || now.difference(at).inDays > 7;
 }
 
 /// One select per symbol — a few KB. Errors surface as empty data; the page
@@ -44,7 +67,7 @@ Future<FundamentalsData> loadFundamentals(String symbol) async {
   try {
     final rows = await Supabase.instance.client
         .from('fundamentals')
-        .select('kind,period,data')
+        .select('kind,period,data,updated_at')
         .eq('symbol', symbol);
     return FundamentalsData.fromRows(rows);
   } catch (_) {
