@@ -32,6 +32,7 @@ def industrial_ts():
          "PretaxIncome": [("2026-03-31", 190 * CR), ("2025-03-31", 140 * CR)],
          "TaxProvision": [("2026-03-31", 47 * CR), ("2025-03-31", 35 * CR)],
          "NetIncome": [("2026-03-31", 143 * CR), ("2025-03-31", 105 * CR)],
+         "MinorityInterests": [("2026-03-31", -7 * CR)],  # Yahoo's deduction; Screener's PAT keeps it
          "BasicEPS": [("2026-03-31", 14.3), ("2025-03-31", 10.5)],
          "BasicAverageShares": [("2026-03-31", 10 * CR), ("2025-03-31", 10 * CR)],
          "TotalAssets": [("2026-03-31", 2000 * CR), ("2025-03-31", 1800 * CR)],
@@ -118,10 +119,11 @@ def test_shape_statements_pnl_in_crores_screener_way():
     assert a["op_profit"] == 190 + 30 + 60 - 20 and a["expenses"] == 1000 - 260
     assert a["opm"] == 26.0
     assert a["interest"] == 30 and a["depreciation"] == 60
-    assert a["pbt"] == 190 and a["net_profit"] == 143
+    assert a["pbt"] == 190 and a["net_profit"] == 150  # total PAT: owners' 143 + minority 7
+    assert annuals["FY2025"]["net_profit"] == 105  # no minority line: as reported
     assert a["tax_pct"] == round(47 / 190 * 100, 1)
     assert a["eps"] == 14.3  # reported BasicEPS, never inferred
-    assert a["div_payout"] == round(30 / 143 * 100, 1)
+    assert a["div_payout"] == 20.0  # 30 / 150
     assert a["end"] == "2026-03-31" and list(annuals) == ["FY2026", "FY2025"]
 
 
@@ -151,7 +153,7 @@ def test_shape_statements_ratio_inputs():
     assert a["payable_days"] == round(115 / 500 * 365)
     assert a["wc_days"] == round((700 - 400) / 1000 * 365)
     assert a["roce"] == round((190 + 30) / (2000 - 400) * 100, 1)
-    assert a["roe"] == round(143 / 900 * 100, 1)
+    assert a["roe"] == round(143 / 900 * 100, 1)  # owners' share over owners' equity
 
 
 def test_shape_statements_quarters_eps_fallback_and_no_fake_opm():
@@ -565,13 +567,38 @@ def test_pick_results_filings_prefers_consolidated_skips_banks_and_known():
     ]
     picked = fu.pick_results_filings(rows, have={"2023-12"}, cap=5)
     assert [(f["xbrl"], fu.quarter_of_nse(f["toDate"])) for f in picked] == \
-        [("u-con", "2024-12"), ("u-q2", "2024-09")]
+        [("u-con", "2024-12"), ("u-q2", "2024-09"), ("u-bank", "2024-06")]
 
 
-def test_pick_results_filings_skips_nse_bank_flag_b():
-    rows = [{"fromDate": "01-Oct-2024", "toDate": "31-Dec-2024", "consolidated": "Consolidated",
-             "bank": "B", "xbrl": "u-bank"}]
-    assert fu.pick_results_filings(rows, have=set()) == []
+def test_is_bank_filing_flag_or_banking_url():
+    assert fu.is_bank_filing({"bank": "B", "xbrl": "u"})
+    assert fu.is_bank_filing({"xbrl": "https://x/INTEGRATED_FILING_BANKING_1.xml"})
+    assert not fu.is_bank_filing({"bank": "N", "xbrl": "https://x/INDAS_1.xml"})
+
+
+BANK_XML = f"""<?xml version="1.0"?><xbrli:xbrl>
+<xbrli:context id="OneD"><xbrli:period><xbrli:startDate>2026-04-01</xbrli:startDate>
+<xbrli:endDate>2026-06-30</xbrli:endDate></xbrli:period></xbrli:context>
+{_fin("InterestEarned", "OneD", "905753300000")}
+{_fin("OtherIncome", "OneD", "425350300000")}
+{_fin("InterestExpended", "OneD", "476256300000")}
+{_fin("OperatingExpenses", "OneD", "544887300000")}
+{_fin("ProfitLossFromOrdinaryActivitiesBeforeTax", "OneD", "271931600000")}
+{_fin("TaxExpense", "OneD", "68104700000")}
+{_fin("ProfitLossForThePeriod", "OneD", "203826900000")}
+{_fin("BasicEarningsPerShareAfterExtraordinaryItems", "OneD", "12.5")}
+</xbrli:xbrl>"""
+
+
+def test_parse_results_xml_bank_taxonomy_is_screeners_bank_layout():
+    # HDFCBANK Jun-2026 integrated filing (probe 2026-09-15)
+    q = fu.parse_results_xml(BANK_XML, "01-Apr-2026", "30-Jun-2026", bank=True)
+    assert q["sales"] == 90575 and q["interest"] == 47626 and q["other_income"] == 42535
+    assert q["pbt"] == 27193 and q["net_profit"] == 20383 and q["eps"] == 12.5
+    assert q["op_profit"] == 27193 - 42535  # financing profit
+    assert q["expenses"] == 90575 - 47626 - q["op_profit"]  # = opex + provisions
+    assert "depreciation" not in q
+    assert fu.parse_results_xml(BANK_XML, "01-Apr-2026", "30-Jun-2026") == {}  # industrial map: nothing
 
 
 def test_integrated_rows_shape_like_legacy_filings():
@@ -582,15 +609,20 @@ def test_integrated_rows_shape_like_legacy_filings():
             {"qe_Date": "31-MAR-2026", "type": "Integrated Filing- Governance", "xbrl": "https://x/g.xml"},
             {"qe_Date": "30-SEP-2025", "type": "Integrated Filing- Financials", "xbrl": "-"},
             {"qe_Date": "not a date", "type": "Integrated Filing- Financials", "xbrl": "https://x/z.xml"}]
+    rows.append({"qe_Date": "30-JUN-2026", "consolidated": "Consolidated",
+                 "type": "Integrated Filing- Financials",
+                 "xbrl": "https://x/INTEGRATED_FILING_BANKING_9.xml"})
     out = fu.integrated_rows(rows)
     assert out == [
         {"fromDate": "01-Jan-2026", "toDate": "31-Mar-2026", "consolidated": "Consolidated",
          "bank": "N", "xbrl": "https://x/INDAS_1.xml"},
         {"fromDate": "01-Oct-2025", "toDate": "31-Dec-2025", "consolidated": "Non-Consolidated",
-         "bank": "N", "xbrl": "https://x/INDAS_2.xml"}]
+         "bank": "N", "xbrl": "https://x/INDAS_2.xml"},
+        {"fromDate": "01-Apr-2026", "toDate": "30-Jun-2026", "consolidated": "Consolidated",
+         "bank": "B", "xbrl": "https://x/INTEGRATED_FILING_BANKING_9.xml"}]
     # derived quarter start feeds the legacy picker and context matcher unchanged
     picked = fu.pick_results_filings(out, have=set(), cap=5)
-    assert [fu.quarter_of_nse(f["toDate"]) for f in picked] == ["2026-03", "2025-12"]
+    assert [fu.quarter_of_nse(f["toDate"]) for f in picked] == ["2026-06", "2026-03", "2025-12"]
 
 
 def test_basis_ok_accepts_matching_overlap_rejects_standalone():

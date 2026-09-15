@@ -39,6 +39,7 @@ TS_PNL = {
     "OtherNonOperatingIncomeExpenses": "totalOtherIncomeExpenseNet",
     "ReconciledDepreciation": "depreciation", "PretaxIncome": "incomeBeforeTax",
     "TaxProvision": "incomeTaxExpense", "NetIncome": "netIncome",
+    "MinorityInterests": "minorityInterests",  # Yahoo's NetIncome is the owners' share
     "BasicEPS": "basicEps", "BasicAverageShares": "basicAverageShares",
     "NetInterestIncome": "netInterestIncome", "NonInterestIncome": "nonInterestIncome",
 }
@@ -114,9 +115,14 @@ def _pnl(s, shares):
     ICICIBANK): revenue = interest earned, interest = a cost, other income =
     non-interest income, operating profit = financing profit = pbt +
     depreciation - other income. No depreciation reported (some quarterly
-    filings) -> no op_profit/opm rather than a wrong one."""
+    filings) -> no op_profit/opm rather than a wrong one. Net profit is the
+    TOTAL PAT (Screener's row, what the kaggle and NSE rows carry: RELIANCE
+    FY2023 74,088), so Yahoo's owners-share NetIncome gets the minority
+    interest it deducted added back; EPS stays the reported per-share figure."""
     rev, pbt, tax, np_ = (s.get("totalRevenue"), s.get("incomeBeforeTax"),
                           s.get("incomeTaxExpense"), s.get("netIncome"))
+    if np_ is not None and s.get("minorityInterests") is not None:
+        np_ -= s["minorityInterests"]  # Yahoo reports the deduction as a negative
     interest = abs(s["interestExpense"]) if s.get("interestExpense") is not None else None
     dep, other, earned = s.get("depreciation"), s.get("totalOtherIncomeExpenseNet"), s.get("interestIncome")
     if _is_lender(s):
@@ -241,9 +247,9 @@ def shape_statements(ts, stats):
         if _is_lender(s):  # Screener shows lenders ROE only — no working-capital days, no ROCE
             ratios = {"roe": ratios.get("roe")}
         d.update(ratios)
-        np_, div = s.get("netIncome"), s.get("dividendsPaid")
+        np_, div = d.get("net_profit"), s.get("dividendsPaid")
         if np_ and div is not None:
-            d["div_payout"] = round(abs(div) / np_ * 100, 1)
+            d["div_payout"] = round(abs(div) / CR / np_ * 100, 1)
         annuals[fy_label(end)] = {k: v for k, v in d.items() if v is not None}
     quarters = {}
     for end in sorted(ts.get("quarterly") or {}, reverse=True):
@@ -540,6 +546,23 @@ RESULTS_ELEMENTS = {
     "ProfitLossForPeriod": "net_profit",
     "BasicEarningsLossPerShareFromContinuingAndDiscontinuedOperations": "eps",
 }
+# Banks file under the BANKING taxonomy (NSE flags them "B"; the integrated
+# feed's xml URL carries BANKING). Verified on HDFCBANK's Dec-2024 and
+# Jun-2026 filings (probe 2026-09-15): Screener's bank rows — revenue =
+# interest earned, interest = a cost, financing profit = pbt - other income.
+BANK_ELEMENTS = {
+    "InterestEarned": "sales",
+    "OtherIncome": "other_income",
+    "InterestExpended": "interest",
+    "ProfitLossFromOrdinaryActivitiesBeforeTax": "pbt",
+    "TaxExpense": "_tax",
+    "ProfitLossForThePeriod": "net_profit",
+    "BasicEarningsPerShareAfterExtraordinaryItems": "eps",
+}
+
+
+def is_bank_filing(row):
+    return row.get("bank") in ("Y", "B") or "BANKING" in (row.get("xbrl") or "").upper()
 
 
 def _nse_dmy(s):
@@ -557,9 +580,11 @@ def fy_of_nse(to_date):
     return fy_label(d.isoformat()) if d else None
 
 
-def parse_results_xml(xml, from_date, to_date):
+def parse_results_xml(xml, from_date, to_date, bank=False):
     """One filing's XBRL -> our quarter dict, reading only facts whose context
-    period matches the filing's own quarter (YTD contexts are ignored)."""
+    period matches the filing's own quarter (YTD contexts are ignored). Same
+    element names in the legacy in-bse-fin and the SEBI in-capmkt taxonomy."""
+    elements = BANK_ELEMENTS if bank else RESULTS_ELEMENTS
     want = (_nse_dmy(from_date), _nse_dmy(to_date))
     if not all(want):
         return {}
@@ -574,7 +599,7 @@ def parse_results_xml(xml, from_date, to_date):
     raw = {}
     for m in re.finditer(
             r"<[\w.-]+:(\w+) contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
-        field = RESULTS_ELEMENTS.get(m.group(1))
+        field = elements.get(m.group(1))
         if field and m.group(2) in ctxs and field not in raw:
             try:
                 raw[field] = float(m.group(3))
@@ -587,7 +612,11 @@ def parse_results_xml(xml, from_date, to_date):
          "pbt": _cr(raw.get("pbt")), "net_profit": _cr(raw["net_profit"]),
          "eps": round(raw["eps"], 2) if raw.get("eps") is not None else None,
          "tax_pct": _pct(raw.get("_tax"), raw.get("pbt"))}
-    if q["pbt"] is not None:
+    if q["pbt"] is not None and bank:  # financing profit; interest is a cost
+        q["op_profit"] = q["pbt"] - (q["other_income"] or 0)
+        q["expenses"] = q["sales"] - (q["interest"] or 0) - q["op_profit"]
+        q["opm"] = _pct(q["op_profit"], q["sales"])
+    elif q["pbt"] is not None:
         q["op_profit"] = q["pbt"] + (q["interest"] or 0) + (q["depreciation"] or 0) \
             - (q["other_income"] or 0)
         q["expenses"] = q["sales"] - q["op_profit"]
@@ -627,19 +656,17 @@ def integrated_rows(rows):
                     "toDate": end.strftime("%d-%b-%Y"),
                     "consolidated": "Consolidated" if con.startswith("consol") or con in ("y", "yes", "true")
                     else "Non-Consolidated",
-                    "bank": r.get("bank") or "N", "xbrl": xbrl})
+                    "bank": "B" if "BANKING" in xbrl.upper() else "N", "xbrl": xbrl})
     return out
 
 
 def pick_results_filings(rows, have, cap=2, keyfn=quarter_of_nse):
     """Newest-first filings worth fetching: consolidated preferred per period,
-    banks skipped (NSE flags them "B"; their BANKING taxonomy has no
-    RevenueFromOperations, so the industrial map yields nothing), known
-    periods skipped."""
+    known periods skipped. Banks are parsed with BANK_ELEMENTS."""
     by_q = {}
     for r in rows or []:
         period = keyfn(r.get("toDate"))
-        if not period or period in have or not r.get("xbrl") or r.get("bank") in ("Y", "B"):
+        if not period or period in have or not r.get("xbrl"):
             continue
         cur = by_q.get(period)
         if cur is None or (cur.get("consolidated") != "Consolidated"
@@ -674,7 +701,7 @@ def fetch_results_quarters(sym, session, have, cap=2, period="Quarterly",
     for f in pick_results_filings(rows, have, cap, keyfn):
         try:
             q = parse_results_xml(session.get(f["xbrl"], timeout=25).text,
-                                  f.get("fromDate"), f.get("toDate"))
+                                  f.get("fromDate"), f.get("toDate"), bank=is_bank_filing(f))
             if q:
                 out[keyfn(f["toDate"])] = q
         except Exception as e:
