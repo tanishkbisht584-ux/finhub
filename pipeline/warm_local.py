@@ -1,9 +1,10 @@
-"""Local Yahoo-only deep warm: statements (FY2024+ annuals, latest quarters,
-real shares/book value) + chart (closes, TTM dps) + fresh summaries for every
-symbol with fundamentals rows, then a screener rebuild. NSE pieces are skipped
-(this machine is blocked) and drain via CI's deep passes instead.
+"""Local Yahoo-only deep warm: consolidated statements (FY2023+ annuals with
+balance sheet + cash flow, quarters to the latest filing, real shares/book
+value) + chart (closes, TTM dps) + fresh summaries for every screener_metrics
+symbol, then a screener rebuild. NSE pieces are skipped (this machine is
+blocked) and drain via CI's deep passes instead.
 
-    py -3 warm_local.py            # all covered symbols (~80 min)
+    py -3 warm_local.py            # the whole universe (~2 h for 3.2k)
     py -3 warm_local.py SYM1,SYM2  # just these
 """
 import sys
@@ -18,14 +19,14 @@ import fundamentals  # noqa: E402  (needs env for nothing, but keep order tidy)
 def main():
     now = datetime.now(timezone.utc)
     syms = sorted({r["symbol"] for r in
-                   sb("GET", "fundamentals?select=symbol&kind=eq.annual&order=symbol")})
+                   sb("GET", "screener_metrics?select=symbol&order=symbol")})
     if len(sys.argv) > 1:
         only = set(sys.argv[1].split(","))
         syms = [s for s in syms if s in only]
-    else:  # resume: reported shares only ever land via this warm — skip done
+    else:  # resume: a timeseries-sourced annual row marks a symbol done
         done = {r["symbol"] for r in
-                sb("GET", "fundamentals?select=symbol,shares:data->shares"
-                          "&kind=eq.summary&order=symbol") if r.get("shares")}
+                sb("GET", "fundamentals?select=symbol&kind=eq.annual"
+                          "&data->>src=eq.yahoo_ts&order=symbol")}
         syms = [s for s in syms if s not in done]
     print(f"warming {len(syms)} symbols (Yahoo only)…")
     done = 0

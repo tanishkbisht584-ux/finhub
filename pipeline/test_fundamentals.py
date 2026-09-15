@@ -11,51 +11,72 @@ def n(v):
     return {"raw": v}
 
 
-def stmt_fixture():
-    """Condensed quoteSummary payload: 2 annual periods + 2 quarters, all six
-    statement modules plus defaultKeyStatistics for shares/book value."""
-    def pnl(end, rev, op, other, interest, pbt, tax, np_):
-        return {"endDate": {"fmt": end}, "totalRevenue": n(rev), "operatingIncome": n(op),
-                "totalOtherIncomeExpenseNet": n(other), "interestExpense": n(-interest),
-                "incomeBeforeTax": n(pbt), "incomeTaxExpense": n(tax), "netIncome": n(np_),
-                "costOfRevenue": n(rev // 2)}
+def ts_payload(series):
+    """Condensed fundamentals-timeseries payload: {type: [(asOfDate, raw)]}
+    plus one value-less entry (Yahoo emits meta+timestamp only for those)."""
+    results = [{"meta": {"type": [t]}, "timestamp": [1],
+                t: [{"asOfDate": d, "periodType": "12M", "reportedValue": {"raw": v}}
+                    for d, v in vals]} for t, vals in series.items()]
+    results.append({"meta": {"type": ["annualNothingHere"]}, "timestamp": []})
+    return {"timeseries": {"result": results}}
 
-    def bs(end, assets, cur_assets, cur_liab, equity, common, debt_st, debt_lt, ppe, inv_lt,
-           receivables, inventory, payable):
-        return {"endDate": {"fmt": end}, "totalAssets": n(assets),
-                "totalCurrentAssets": n(cur_assets), "totalCurrentLiabilities": n(cur_liab),
-                "totalStockholderEquity": n(equity), "commonStock": n(common),
-                "shortLongTermDebt": n(debt_st), "longTermDebt": n(debt_lt),
-                "propertyPlantEquipment": n(ppe), "longTermInvestments": n(inv_lt),
-                "netReceivables": n(receivables), "inventory": n(inventory),
-                "accountsPayable": n(payable), "totalLiab": n(assets - equity)}
 
-    def cf(end, cfo, cfi, cff, capex, dep, div):
-        return {"endDate": {"fmt": end}, "totalCashFromOperatingActivities": n(cfo),
-                "totalCashflowsFromInvestingActivities": n(cfi),
-                "totalCashFromFinancingActivities": n(cff), "changeInCash": n(cfo + cfi + cff),
-                "capitalExpenditures": n(-capex), "depreciation": n(dep),
-                "dividendsPaid": n(-div)}
+def industrial_ts():
+    """2 FYs + 2 quarters (+ a balance-sheet-only quarter end) for a maker."""
+    a = {"TotalRevenue": [("2026-03-31", 1000 * CR), ("2025-03-31", 800 * CR)],
+         "CostOfRevenue": [("2026-03-31", 500 * CR), ("2025-03-31", 400 * CR)],
+         "InterestExpense": [("2026-03-31", 30 * CR), ("2025-03-31", 25 * CR)],
+         "InterestIncome": [("2026-03-31", 12 * CR), ("2025-03-31", 10 * CR)],
+         "OtherNonOperatingIncomeExpenses": [("2026-03-31", 8 * CR), ("2025-03-31", 5 * CR)],
+         "ReconciledDepreciation": [("2026-03-31", 60 * CR), ("2025-03-31", 50 * CR)],
+         "PretaxIncome": [("2026-03-31", 190 * CR), ("2025-03-31", 140 * CR)],
+         "TaxProvision": [("2026-03-31", 47 * CR), ("2025-03-31", 35 * CR)],
+         "NetIncome": [("2026-03-31", 143 * CR), ("2025-03-31", 105 * CR)],
+         "BasicEPS": [("2026-03-31", 14.3), ("2025-03-31", 10.5)],
+         "BasicAverageShares": [("2026-03-31", 10 * CR), ("2025-03-31", 10 * CR)],
+         "TotalAssets": [("2026-03-31", 2000 * CR), ("2025-03-31", 1800 * CR)],
+         "StockholdersEquity": [("2026-03-31", 900 * CR), ("2025-03-31", 800 * CR)],
+         "CommonStock": [("2026-03-31", 50 * CR), ("2025-03-31", 50 * CR)],
+         "TotalDebt": [("2026-03-31", 300 * CR), ("2025-03-31", 400 * CR)],
+         "TotalLiabilitiesNetMinorityInterest": [("2026-03-31", 1100 * CR), ("2025-03-31", 1000 * CR)],
+         "NetPPE": [("2026-03-31", 850 * CR), ("2025-03-31", 700 * CR)],
+         "ConstructionInProgress": [("2026-03-31", 50 * CR)],
+         "LongTermEquityInvestment": [("2026-03-31", 100 * CR), ("2025-03-31", 250 * CR)],
+         "InvestmentinFinancialAssets": [("2026-03-31", 150 * CR)],
+         "OtherShortTermInvestments": [("2026-03-31", 50 * CR)],
+         "CurrentAssets": [("2026-03-31", 700 * CR), ("2025-03-31", 600 * CR)],
+         "CurrentLiabilities": [("2026-03-31", 400 * CR), ("2025-03-31", 350 * CR)],
+         "AccountsReceivable": [("2026-03-31", 110 * CR), ("2025-03-31", 90 * CR)],
+         "Inventory": [("2026-03-31", 137 * CR), ("2025-03-31", 120 * CR)],
+         "AccountsPayable": [("2026-03-31", 115 * CR), ("2025-03-31", 100 * CR)],
+         "OperatingCashFlow": [("2026-03-31", 250 * CR), ("2025-03-31", 200 * CR)],
+         "InvestingCashFlow": [("2026-03-31", -120 * CR), ("2025-03-31", -100 * CR)],
+         "FinancingCashFlow": [("2026-03-31", -80 * CR), ("2025-03-31", -60 * CR)],
+         "CapitalExpenditure": [("2026-03-31", -100 * CR), ("2025-03-31", -90 * CR)],
+         "ChangesInCash": [("2026-03-31", 50 * CR), ("2025-03-31", 40 * CR)],
+         "CashDividendsPaid": [("2026-03-31", -30 * CR), ("2025-03-31", -25 * CR)]}
+    q = {"TotalRevenue": [("2026-06-30", 280 * CR), ("2026-03-31", 260 * CR)],
+         "InterestExpense": [("2026-06-30", 8 * CR), ("2026-03-31", 8 * CR)],
+         "InterestIncome": [("2026-06-30", 2 * CR), ("2026-03-31", 2 * CR)],
+         "OtherNonOperatingIncomeExpenses": [("2026-06-30", 3 * CR), ("2026-03-31", 2 * CR)],
+         "ReconciledDepreciation": [("2026-06-30", 15 * CR)],  # Mar quarter: none reported
+         "PretaxIncome": [("2026-06-30", 57 * CR), ("2026-03-31", 51 * CR)],
+         "TaxProvision": [("2026-06-30", 14 * CR), ("2026-03-31", 13 * CR)],
+         "NetIncome": [("2026-06-30", 43 * CR), ("2026-03-31", 38 * CR)],
+         "BasicAverageShares": [("2026-06-30", 10 * CR), ("2026-03-31", 10 * CR)],
+         "TotalAssets": [("2025-12-31", 1900 * CR)]}  # balance-sheet-only asOfDate
+    series = {f"annual{k}": v for k, v in a.items()}
+    series.update({f"quarterly{k}": v for k, v in q.items()})
+    series["trailingTotalRevenue"] = [("2026-06-30", 1020 * CR)]
+    series["quarterlyUnmappedThing"] = [("2026-06-30", 1)]
+    return ts_payload(series)
 
-    return {"quoteSummary": {"result": [{
-        "incomeStatementHistory": {"incomeStatementHistory": [
-            pnl("2026-03-31", 1000 * CR, 200 * CR, 20 * CR, 30 * CR, 190 * CR, 47 * CR, 143 * CR),
-            pnl("2025-03-31", 800 * CR, 150 * CR, 15 * CR, 25 * CR, 140 * CR, 35 * CR, 105 * CR)]},
-        "balanceSheetHistory": {"balanceSheetStatements": [
-            bs("2026-03-31", 2000 * CR, 700 * CR, 400 * CR, 900 * CR, 50 * CR, 100 * CR,
-               200 * CR, 800 * CR, 300 * CR, 110 * CR, 137 * CR, 115 * CR),
-            bs("2025-03-31", 1800 * CR, 600 * CR, 350 * CR, 800 * CR, 50 * CR, 150 * CR,
-               250 * CR, 700 * CR, 250 * CR, 90 * CR, 120 * CR, 100 * CR)]},
-        "cashflowStatementHistory": {"cashflowStatements": [
-            cf("2026-03-31", 250 * CR, -120 * CR, -80 * CR, 100 * CR, 60 * CR, 30 * CR),
-            cf("2025-03-31", 200 * CR, -100 * CR, -60 * CR, 90 * CR, 50 * CR, 25 * CR)]},
-        "incomeStatementHistoryQuarterly": {"incomeStatementHistory": [
-            pnl("2026-06-30", 280 * CR, 60 * CR, 5 * CR, 8 * CR, 57 * CR, 14 * CR, 43 * CR),
-            pnl("2026-03-31", 260 * CR, 55 * CR, 4 * CR, 8 * CR, 51 * CR, 13 * CR, 38 * CR)]},
-        "balanceSheetHistoryQuarterly": {"balanceSheetStatements": []},
-        "cashflowStatementHistoryQuarterly": {"cashflowStatements": []},
-        "defaultKeyStatistics": {"sharesOutstanding": n(10 * CR), "bookValue": n(90.0)},
-    }]}}
+
+STATS = {"shares": 10 * CR, "book_value": 90.0}
+
+
+def shaped():
+    return fu.shape_statements(fu.parse_timeseries(industrial_ts()), STATS)
 
 
 # ---------- FY labels ----------
@@ -69,50 +90,62 @@ def test_fy_label_after_march_rolls_into_next_fy():
     assert fu.fy_label("2024-06-30") == "FY2025"
 
 
-# ---------- statement parsing ----------
+# ---------- statement parsing (Yahoo fundamentals-timeseries) ----------
 
-def test_parse_statements_returns_reported_stats():
-    _, _, stats = fu.parse_statements(stmt_fixture())
-    assert stats["shares"] == 10 * CR   # real share count, not np/eps inference
-    assert stats["book_value"] == 90.0
+def test_parse_timeseries_routes_prefixes_and_skips_empty_or_unmapped():
+    ts = fu.parse_timeseries(industrial_ts())
+    assert set(ts) == {"annual", "quarterly", "trailing"}
+    assert ts["annual"]["2026-03-31"]["totalRevenue"] == 1000 * CR
+    assert ts["annual"]["2026-03-31"]["cwip"] == 50 * CR
+    assert ts["quarterly"]["2026-06-30"]["netIncome"] == 43 * CR
+    assert ts["trailing"]["2026-06-30"] == {"totalRevenue": 1020 * CR}
+    assert "unmappedThing" not in str(ts)
+    assert fu.parse_timeseries({}) == {"annual": {}, "quarterly": {}, "trailing": {}}
 
 
-def test_parse_statements_pnl_in_crores():
-    annuals, _, _ = fu.parse_statements(stmt_fixture())
+def test_parse_stats_reported_shares_and_book_value():
+    j = {"quoteSummary": {"result": [{"defaultKeyStatistics": {
+        "sharesOutstanding": n(10 * CR), "bookValue": n(90.0)}}]}}
+    assert fu.parse_stats(j) == {"shares": 10 * CR, "book_value": 90.0}
+    assert fu.parse_stats({"quoteSummary": {"result": []}}) == {}
+
+
+def test_shape_statements_pnl_in_crores_screener_way():
+    annuals, _ = shaped()
     a = annuals["FY2026"]
-    assert a["sales"] == 1000 and a["op_profit"] == 200 and a["expenses"] == 800
-    assert a["opm"] == 20.0
-    assert a["other_income"] == 20 and a["interest"] == 30
-    assert a["depreciation"] == 60  # from the cash-flow statement
+    assert a["sales"] == 1000 and a["other_income"] == 20  # 8 non-operating + 12 interest earned
+    # Screener's operating profit: pbt + interest + depreciation - other income
+    assert a["op_profit"] == 190 + 30 + 60 - 20 and a["expenses"] == 1000 - 260
+    assert a["opm"] == 26.0
+    assert a["interest"] == 30 and a["depreciation"] == 60
     assert a["pbt"] == 190 and a["net_profit"] == 143
     assert a["tax_pct"] == round(47 / 190 * 100, 1)
-    assert a["eps"] == round(143 * 1e7 / (10 * 1e7), 2)  # Cr back to rupees / shares
+    assert a["eps"] == 14.3  # reported BasicEPS, never inferred
     assert a["div_payout"] == round(30 / 143 * 100, 1)
-    assert a["end"] == "2026-03-31"
+    assert a["end"] == "2026-03-31" and list(annuals) == ["FY2026", "FY2025"]
 
 
-def test_parse_statements_balance_sheet():
-    annuals, _, _ = fu.parse_statements(stmt_fixture())
+def test_shape_statements_balance_sheet_sums_like_screener():
+    annuals, _ = shaped()
     a = annuals["FY2026"]
-    assert a["equity_cap"] == 50 and a["reserves"] == 850  # equity - common stock
-    assert a["borrowings"] == 300
-    assert a["other_liab"] == 2000 - 900 - 300  # totalLiab - borrowings
-    assert a["fixed_assets"] == 800 and a["investments"] == 300
-    assert a["other_assets"] == 2000 - 800 - 300
+    assert a["equity_cap"] == 50 and a["reserves"] == 850
+    assert a["borrowings"] == 300  # TotalDebt outranks the short+long sum
+    assert a["other_liab"] == 2000 - 900 - 300  # liabilities side sums to total
+    assert a["fixed_assets"] == 850 - 50 and a["cwip"] == 50  # CWIP split out of NetPPE
+    assert a["investments"] == 100 + 150 + 50
+    assert a["other_assets"] == 2000 - 800 - 50 - 300
     assert a["total_assets"] == 2000
+    assert a["book_value"] == 90.0 and "book_value" not in annuals["FY2025"]
 
 
-def test_parse_statements_cash_flow_and_fcf():
-    annuals, _, _ = fu.parse_statements(stmt_fixture())
-    a = annuals["FY2026"]
+def test_shape_statements_cash_flow_and_fcf():
+    a = shaped()[0]["FY2026"]
     assert a["cfo"] == 250 and a["cfi"] == -120 and a["cff"] == -80
-    assert a["net_cf"] == 50
-    assert a["fcf"] == 150  # cfo - capex
+    assert a["net_cf"] == 50 and a["fcf"] == 150  # cfo - |capex|
 
 
-def test_parse_statements_ratio_inputs():
-    annuals, _, _ = fu.parse_statements(stmt_fixture())
-    a = annuals["FY2026"]
+def test_shape_statements_ratio_inputs():
+    a = shaped()[0]["FY2026"]
     assert a["debtor_days"] == round(110 / 1000 * 365)
     assert a["inventory_days"] == round(137 / 500 * 365)
     assert a["payable_days"] == round(115 / 500 * 365)
@@ -121,32 +154,72 @@ def test_parse_statements_ratio_inputs():
     assert a["roe"] == round(143 / 900 * 100, 1)
 
 
-def test_parse_statements_quarters():
-    _, quarters, _ = fu.parse_statements(stmt_fixture())
+def test_shape_statements_quarters_eps_fallback_and_no_fake_opm():
+    _, quarters = shaped()
+    assert list(quarters) == ["2026-06", "2026-03"]  # the BS-only Dec end is not a quarter
     q = quarters["2026-06"]
-    assert q["sales"] == 280 and q["op_profit"] == 60 and q["opm"] == round(60 / 280 * 100, 1)
-    assert q["net_profit"] == 43 and q["eps"] == round(43 * 1e7 / (10 * 1e7), 2)
+    assert q["sales"] == 280 and q["op_profit"] == 57 + 8 + 15 - 5 and q["opm"] == 26.8
+    assert q["eps"] == 4.3  # no BasicEPS: net income / reported average shares
     assert "div_payout" not in q
-    assert list(quarters) == ["2026-06", "2026-03"]
+    q2 = quarters["2026-03"]  # no depreciation reported -> no operating profit at all
+    assert q2["net_profit"] == 38 and "op_profit" not in q2 and "opm" not in q2
 
 
-def test_parse_statements_bank_missing_lines_no_crash():
-    j = stmt_fixture()
-    r = j["quoteSummary"]["result"][0]
-    for s in r["incomeStatementHistory"]["incomeStatementHistory"]:
-        del s["costOfRevenue"], s["operatingIncome"]
-    for s in r["balanceSheetHistory"]["balanceSheetStatements"]:
-        del s["inventory"], s["totalCurrentAssets"], s["totalCurrentLiabilities"]
-    annuals, _, _ = fu.parse_statements(j)
-    a = annuals["FY2026"]
-    assert a["sales"] == 1000 and a["net_profit"] == 143
-    for gone in ("op_profit", "opm", "inventory_days", "wc_days", "roce"):
+def test_shape_statements_lender_layout():
+    # ICICIBANK-shaped: revenue = interest earned, interest = a cost, operating
+    # profit = financing profit (pbt + depreciation - other income), no WC days
+    ts = fu.parse_timeseries(ts_payload({
+        "annualTotalRevenue": [("2026-03-31", 160 * CR)],
+        "annualInterestIncome": [("2026-03-31", 400 * CR)],
+        "annualNetInterestIncome": [("2026-03-31", 100 * CR)],
+        "annualNonInterestIncome": [("2026-03-31", 60 * CR)],
+        "annualInterestExpense": [("2026-03-31", 250 * CR)],
+        "annualReconciledDepreciation": [("2026-03-31", 5 * CR)],
+        "annualPretaxIncome": [("2026-03-31", 90 * CR)],
+        "annualTaxProvision": [("2026-03-31", 20 * CR)],
+        "annualNetIncome": [("2026-03-31", 70 * CR)],
+        "annualBasicEPS": [("2026-03-31", 7.0)],
+        "annualTotalAssets": [("2026-03-31", 5000 * CR)],
+        "annualStockholdersEquity": [("2026-03-31", 800 * CR)],
+        "annualCommonStock": [("2026-03-31", 10 * CR)],
+        "annualInvestmentsAndAdvances": [("2026-03-31", 900 * CR)],
+        "annualAccountsReceivable": [("2026-03-31", 40 * CR)],
+        "annualCurrentAssets": [("2026-03-31", 1000 * CR)],
+        "annualCurrentLiabilities": [("2026-03-31", 900 * CR)]}))
+    a = fu.shape_statements(ts, {})[0]["FY2026"]
+    assert a["sales"] == 400 and a["interest"] == 250 and a["other_income"] == 60
+    assert a["op_profit"] == 90 + 5 - 60 and a["expenses"] == 400 - 250 - 35
+    assert a["opm"] == round(35 / 400 * 100, 1)
+    assert a["investments"] == 900 and a["roe"] == round(70 / 800 * 100, 1)
+    for gone in ("debtor_days", "wc_days", "roce"):
         assert gone not in a
 
 
-def test_parse_statements_empty_payload():
-    assert fu.parse_statements({"quoteSummary": {"result": []}}) == ({}, {}, {})
-    assert fu.parse_statements({}) == ({}, {}, {})
+def test_shape_statements_missing_lines_no_crash():
+    ts = fu.parse_timeseries(ts_payload({
+        "annualTotalRevenue": [("2026-03-31", 1000 * CR)],
+        "annualNetIncome": [("2026-03-31", 143 * CR)]}))
+    annuals, quarters = fu.shape_statements(ts, {})
+    a = annuals["FY2026"]
+    assert a["sales"] == 1000 and a["net_profit"] == 143 and "eps" not in a
+    for gone in ("op_profit", "opm", "inventory_days", "wc_days", "roce", "total_assets"):
+        assert gone not in a
+    assert quarters == {}
+    assert fu.shape_statements(fu.parse_timeseries({}), {}) == ({}, {})
+
+
+def test_overwritable_keeps_kaggle_and_nse_periods():
+    new = {"FY2026": {"sales": 1}, "FY2024": {"sales": 2}, "FY2023": {"sales": 3},
+           "FY2022": {"sales": 4}}
+    prior = {"FY2024": {"src": "yahoo"}, "FY2023": {"src": "kaggle"}, "FY2022": {"src": "nse"}}
+    assert set(fu._overwritable(new, prior)) == {"FY2026", "FY2024"}
+
+
+def test_complete_quarters_filing_rows_or_yahoo_with_op_profit():
+    rows = {"2026-06": {"src": "yahoo_ts", "sales": 1},  # no op_profit: the filing may fill it
+            "2026-03": {"src": "yahoo_ts", "op_profit": 5},
+            "2024-12": {"src": "nse"}, "2023-09": {"src": "kaggle"}}
+    assert fu._complete_quarters(rows) == {"2026-03", "2024-12", "2023-09"}
 
 
 # ---------- summary: CAGR + pros/cons ----------
@@ -275,22 +348,22 @@ def test_shape_docs_splits_concalls_out_of_announcements():
     assert [a["url"] for a in d["announcements"]] == ["u4"]
 
 
-def test_shape_ratings_filters_global_feed_by_symbol():
-    # real corporate-credit-rating shape (probe 2026-08-29): a global recent-
-    # filings list; the symbol param is ignored server-side.
-    rows = [{"Symbol": "RELIANCE", "NameOfCRAgency": "CRISIL Ratings Limited",
-             "CreditRating": "AAA", "RatingAction": "Reaffirm", "DateofCR": "28-08-2026"},
-            {"Symbol": "RELIANCE", "NameOfCRAgency": "ICRA", "CreditRating": "AA+",
-             "RatingAction": "", "DateofCR": "29-01-2026"},
-            {"Symbol": "Not listed", "NameOfCRAgency": "CRISIL Ratings Limited",
-             "CreditRating": "AAA", "DateofCR": "28-08-2026"},
-            {"Symbol": "TCS", "NameOfCRAgency": "CARE", "CreditRating": "AAA"}]
-    out = fu.shape_ratings(rows, "RELIANCE")
-    assert len(out) == 2
-    assert out[0] == {"agency": "CRISIL Ratings Limited", "rating": "AAA (Reaffirm)",
-                      "date": "28-08-2026", "url": None}
-    assert out[1]["rating"] == "AA+"
-    assert fu.shape_ratings(rows, "WIPRO") == []
+def test_shape_docs_credit_ratings_from_rating_agency_filings():
+    anns = [{"desc": "Credit Rating", "an_dt": "1", "attchmntFile": "u1",
+             "attchmntText": "CRISIL Ratings reaffirms AAA/Stable"},
+            {"desc": "Announcement under Regulation 30 (LODR)-Credit Rating", "an_dt": "2",
+             "attchmntFile": "u2"},
+            {"desc": "Intimation", "an_dt": "3", "attchmntFile": "u3",
+             "attchmntText": "ICRA has assigned [ICRA]AA+ to the NCD programme"},
+            {"desc": "Transcript of earnings call", "an_dt": "4", "attchmntFile": "u4"},
+            {"desc": "Board Meeting outcome", "an_dt": "5", "attchmntFile": "u5"}]
+    d = fu.shape_docs(None, anns)
+    assert [r["url"] for r in d["credit_ratings"]] == ["u1", "u2", "u3"]
+    assert d["credit_ratings"][0]["agency"] is None  # matched on "credit rating" itself
+    assert d["credit_ratings"][2]["agency"] == "ICRA"
+    assert [c["url"] for c in d["concalls"]] == ["u4"]
+    assert [a["url"] for a in d["announcements"]] == ["u5"]
+    assert "credit_ratings" not in fu.shape_docs(None, anns[3:])
 
 
 # ---------- SHP XBRL: FII/DII split (plain XBRL, contexts probed 2026-08-29) ----------
@@ -575,10 +648,19 @@ def test_fundamentals_rows_shapes_and_pk():
     assert keyed[("TCS", "shareholding", "2026-06")]["data"] == {"promoters": 50.5}
     assert ("TCS", "docs", "latest") in keyed
     a = keyed[("TCS", "annual", "FY2026")]
-    assert a["data"]["src"] == "yahoo" and a["data"]["sales"] == 10
+    assert a["data"]["src"] == "yahoo_ts" and a["data"]["sales"] == 10
     assert all(r["updated_at"] == NOW.isoformat() for r in rows)
 
 
 def test_fundamentals_rows_without_nse_pieces():
     rows = fu.fundamentals_rows("TCS", {"FY2026": {"sales": 10}}, {}, {}, NOW)
     assert {r["kind"] for r in rows} == {"annual"}
+    # an NSE pass that found no documents still stamps the docs row (the warm
+    # queue orders by it); a Yahoo-only pass (docs=None) does not
+    rows = fu.fundamentals_rows("TCS", {}, {}, {}, NOW, docs={})
+    assert [(r["kind"], r["data"]) for r in rows] == [("docs", {})]
+
+
+def test_warm_universe_unseen_symbols_come_first():
+    ages = {"OLD": "2026-08-01T00:00:00", "NEVER": "", "FRESH": "2026-08-29T11:00:00"}
+    assert fu.warm_universe(ages, priority=[], now=NOW, cap=5) == ["NEVER", "OLD"]
