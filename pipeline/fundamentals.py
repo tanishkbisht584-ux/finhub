@@ -597,13 +597,49 @@ def parse_results_xml(xml, from_date, to_date):
     return {k: v for k, v in q.items() if v is not None}
 
 
+INTEGRATED_TYPE = "Integrated Filing- Financials"
+
+
+def quarter_start(end):
+    """First day of the quarter a quarter-end date falls in."""
+    return end.replace(month=end.month - (end.month - 1) % 3, day=1)
+
+
+def integrated_rows(rows):
+    """integrated-filing-results rows -> legacy-shaped filing rows. SEBI's
+    Integrated Filing regime took over from the Mar-2025 quarter and NSE's
+    legacy corporates-financial-results listing stopped at Dec-2024 (probed
+    2026-09-15: RELIANCE's 130 rows end there) — which is why no 2025 quarter
+    ever landed. The new rows carry only `qe_Date`; the quarter's start is
+    derived so parse_results_xml can pick the current-quarter context. Rows
+    whose `xbrl` is not a real .xml are placeholders."""
+    out = []
+    for r in rows or []:
+        kind = str(r.get("type") or "")
+        if kind and "financial" not in kind.lower():
+            continue  # governance filings share the feed
+        end = parse_nse_date(r.get("qe_Date") or r.get("toDate"))
+        xbrl = (r.get("xbrl") or "").strip()
+        if not end or not xbrl.lower().endswith(".xml"):
+            continue
+        con = str(r.get("consolidated") or "").strip().lower()
+        out.append({"fromDate": quarter_start(end).strftime("%d-%b-%Y"),
+                    "toDate": end.strftime("%d-%b-%Y"),
+                    "consolidated": "Consolidated" if con.startswith("consol") or con in ("y", "yes", "true")
+                    else "Non-Consolidated",
+                    "bank": r.get("bank") or "N", "xbrl": xbrl})
+    return out
+
+
 def pick_results_filings(rows, have, cap=2, keyfn=quarter_of_nse):
     """Newest-first filings worth fetching: consolidated preferred per period,
-    banks skipped (different element set), known periods skipped."""
+    banks skipped (NSE flags them "B"; their BANKING taxonomy has no
+    RevenueFromOperations, so the industrial map yields nothing), known
+    periods skipped."""
     by_q = {}
     for r in rows or []:
         period = keyfn(r.get("toDate"))
-        if not period or period in have or not r.get("xbrl") or r.get("bank") == "Y":
+        if not period or period in have or not r.get("xbrl") or r.get("bank") in ("Y", "B"):
             continue
         cur = by_q.get(period)
         if cur is None or (cur.get("consolidated") != "Consolidated"
@@ -623,6 +659,17 @@ def fetch_results_quarters(sym, session, have, cap=2, period="Quarterly",
     r.raise_for_status()
     rows = r.json()
     rows = (rows.get("data") if isinstance(rows, dict) else rows) or []
+    if period == "Quarterly":  # the SEBI integrated-filing feed holds Mar-2025 onward
+        try:
+            r2 = session.get(NSE_API + "integrated-filing-results",
+                             params={"index": "equities", "symbol": sym, "period": "Quarterly",
+                                     "period_ended": "Quarterly", "type": INTEGRATED_TYPE},
+                             timeout=25)
+            r2.raise_for_status()
+            j2 = r2.json()
+            rows = integrated_rows((j2.get("data") if isinstance(j2, dict) else j2) or []) + rows
+        except Exception as e:
+            print(f"FUND integrated listing {sym}: {e}")
     out = {}
     for f in pick_results_filings(rows, have, cap, keyfn):
         try:

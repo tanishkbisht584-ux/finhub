@@ -568,6 +568,31 @@ def test_pick_results_filings_prefers_consolidated_skips_banks_and_known():
         [("u-con", "2024-12"), ("u-q2", "2024-09")]
 
 
+def test_pick_results_filings_skips_nse_bank_flag_b():
+    rows = [{"fromDate": "01-Oct-2024", "toDate": "31-Dec-2024", "consolidated": "Consolidated",
+             "bank": "B", "xbrl": "u-bank"}]
+    assert fu.pick_results_filings(rows, have=set()) == []
+
+
+def test_integrated_rows_shape_like_legacy_filings():
+    rows = [{"qe_Date": "31-MAR-2026", "consolidated": "Consolidated", "bank": "N",
+             "type": "Integrated Filing- Financials", "xbrl": "https://x/INDAS_1.xml"},
+            {"qe_Date": "31-DEC-2025", "consolidated": "Non-Consolidated",
+             "type": "Integrated Filing- Financials", "xbrl": "https://x/INDAS_2.xml"},
+            {"qe_Date": "31-MAR-2026", "type": "Integrated Filing- Governance", "xbrl": "https://x/g.xml"},
+            {"qe_Date": "30-SEP-2025", "type": "Integrated Filing- Financials", "xbrl": "-"},
+            {"qe_Date": "not a date", "type": "Integrated Filing- Financials", "xbrl": "https://x/z.xml"}]
+    out = fu.integrated_rows(rows)
+    assert out == [
+        {"fromDate": "01-Jan-2026", "toDate": "31-Mar-2026", "consolidated": "Consolidated",
+         "bank": "N", "xbrl": "https://x/INDAS_1.xml"},
+        {"fromDate": "01-Oct-2025", "toDate": "31-Dec-2025", "consolidated": "Non-Consolidated",
+         "bank": "N", "xbrl": "https://x/INDAS_2.xml"}]
+    # derived quarter start feeds the legacy picker and context matcher unchanged
+    picked = fu.pick_results_filings(out, have=set(), cap=5)
+    assert [fu.quarter_of_nse(f["toDate"]) for f in picked] == ["2026-03", "2025-12"]
+
+
 def test_basis_ok_accepts_matching_overlap_rejects_standalone():
     prior = {"FY2023": {"sales": 876396, "src": "kaggle"},
              "FY2022": {"sales": 698672, "src": "kaggle"}}

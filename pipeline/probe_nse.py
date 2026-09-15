@@ -132,13 +132,71 @@ def results_listing():
                             print(f"     {name} = ({ctx[:40]}, {val[:40]})")
                         print("   raw head:", xml[:600].replace(chr(10), " "))
                         break
-    # is the listing windowed? ask for 2025+ explicitly
-    j = get("corporates-financial-results", index="equities", symbol="RELIANCE", period="Quarterly",
-            from_date="01-01-2025", to_date="15-09-2026")
-    rows = rows_of(j)
-    print(f"\n-- RELIANCE Quarterly with from/to 2025+: {len(rows)} rows")
-    for r in rows[:3]:
-        print("  ", json.dumps(r)[:600])
+    # v2 (same day): the legacy listing ends at Dec-2024 for everyone — SEBI's
+    # integrated filing regime moved newer results to a separate feed. Print
+    # its shape for an industrial and a bank, a 2026 filing's elements, the
+    # bank taxonomy's elements, and the results-comparision summary feed.
+    for sym in ("RELIANCE", "HDFCBANK"):
+        for params in ({"period": "Quarterly"}, {"period_ended": "Quarterly"}, {}):
+            try:
+                j = get("integrated-filing-results", index="equities", symbol=sym,
+                        type="Integrated Filing- Financials", **params)
+            except Exception as e:
+                print(f"\n-- {sym} integrated {params}: FAILED {e}")
+                continue
+            rows = rows_of(j)
+            print(f"\n-- {sym} integrated {params}: {len(rows)} rows; top-level keys:",
+                  sorted(j) if isinstance(j, dict) else type(j).__name__)
+            if rows:
+                print("   row keys:", sorted(rows[0]))
+                for r in rows[:4]:
+                    print("  ", json.dumps(r)[:900])
+                break
+        # element dump of the newest real xml in that feed
+        for r in rows:
+            u = (r.get("xbrl") or "").strip()
+            if u.lower().endswith(".xml"):
+                print(f"   fetching integrated xbrl: {u}")
+                xml = s.get(u, timeout=25).text
+                seen = {}
+                for m in re.finditer(r"<(?:[\w.-]+:)?(\w+)[^>]*contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
+                    name, ctx, val = m.group(1), m.group(2), m.group(3).strip()
+                    if name not in seen and val and re.search(
+                            r"Revenue|Income|Profit|Tax|Expense|Interest|Deposit|Advance|Share|Earning|Provision|Deprec", name):
+                        seen[name] = (ctx, val)
+                print(f"   {len(seen)} matching elements:")
+                for name, (ctx, val) in list(seen.items())[:150]:
+                    print(f"     {name} = ({ctx[:40]}, {val[:40]})")
+                ctxs = re.findall(r"<xbrli:context id=\"([^\"]+)\">.*?<xbrli:startDate>([^<]+)</xbrli:startDate>\s*"
+                                  r"<xbrli:endDate>([^<]+)</xbrli:endDate>", xml, re.S)
+                print("   duration contexts:", ctxs[:12])
+                print("   raw head:", xml[:500].replace(chr(10), " "))
+                break
+    # the legacy BANKING taxonomy (HDFCBANK Dec-2024 filing): element names
+    rows = rows_of(get("corporates-financial-results", index="equities", symbol="HDFCBANK", period="Quarterly"))
+    con = next((r for r in rows if r.get("consolidated") == "Consolidated" and (r.get("xbrl") or "").endswith(".xml")), None)
+    if con:
+        print(f"\n-- HDFCBANK legacy bank xbrl: {con.get('toDate')} {con['xbrl']}")
+        xml = s.get(con["xbrl"], timeout=25).text
+        seen = {}
+        for m in re.finditer(r"<(?:[\w.-]+:)?(\w+)[^>]*contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
+            name, ctx, val = m.group(1), m.group(2), m.group(3).strip()
+            if name not in seen and val:
+                seen[name] = (ctx, val)
+        print(f"   {len(seen)} elements:")
+        for name, (ctx, val) in list(seen.items())[:200]:
+            print(f"     {name} = ({ctx[:40]}, {val[:40]})")
+        ctxs = re.findall(r"<xbrli:context id=\"([^\"]+)\">.*?<xbrli:startDate>([^<]+)</xbrli:startDate>\s*"
+                          r"<xbrli:endDate>([^<]+)</xbrli:endDate>", xml, re.S)
+        print("   duration contexts:", ctxs[:12])
+    # results-comparision: NSE's own last-quarters P&L summary
+    for sym in ("RELIANCE", "HDFCBANK"):
+        try:
+            j = get("results-comparision", symbol=sym)
+            print(f"\n-- {sym} results-comparision: type={type(j).__name__} keys={sorted(j) if isinstance(j, dict) else None}")
+            print("  ", json.dumps(j)[:2500])
+        except Exception as e:
+            print(f"\n-- {sym} results-comparision FAILED {e}")
 
 
 def ratings():
