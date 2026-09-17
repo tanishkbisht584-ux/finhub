@@ -192,23 +192,30 @@ def stale_codes(audit, now, lrd=None):
     that we lack (precise), else the flat Q_MAX_AGE_D rule."""
     out = []
     now = now.replace(tzinfo=None) if now.tzinfo else now
+    lrd_d = None
+    if lrd:
+        try:
+            lrd_d = datetime.fromisoformat(str(lrd)[:10])
+        except ValueError:
+            lrd_d = None
+    if lrd_d and lrd_d > now:
+        lrd_d = None
     q = audit.get("newest_q")
     if q:
         end = period_end(q)
-        lrd_d = None
-        if lrd:
-            try:
-                lrd_d = datetime.fromisoformat(str(lrd)[:10])
-            except ValueError:
-                lrd_d = None
-        if lrd_d and lrd_d <= now:
+        if lrd_d:
             if end < lrd_d - timedelta(days=Q_LAG_D):
                 out.append("q.stale")
         elif end < now - timedelta(days=Q_MAX_AGE_D):
             out.append("q.stale")
     s = audit.get("shp_newest")
-    if s and period_end(s) < now - timedelta(days=SHP_MAX_AGE_D):
-        out.append("shp.stale")
+    if s:  # shareholding lands with (before) the quarter's results: same rule
+        end = period_end(s)
+        if lrd_d:
+            if end < lrd_d - timedelta(days=Q_LAG_D):
+                out.append("shp.stale")
+        elif end < now - timedelta(days=SHP_MAX_AGE_D):
+            out.append("shp.stale")
     d = audit.get("docs_at")
     if d:
         try:

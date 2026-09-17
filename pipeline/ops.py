@@ -45,7 +45,7 @@ MAX_QUOTE_AGE_H = {"fx": 4, "commodity": 4, "crypto": 4, "equity": 4, "index": 4
 FUND_MAX_AGE_H = 36  # fundamentals/screener_metrics rebuild daily; 36 h absorbs cron lag
 FUND_MIN_COMPLETE_PCT = 80  # fund_audit rollup: below this the panel is visibly patchy
 FUND_DROP_PCT = 5           # or a day-over-day drop this big (a source went dark)
-WARM_HINT = "250 symbols"
+WARM_HINT = "~1,900 symbols (deep_drain, 5-min laps) plus 60 priority names at 17:30 IST"
 SA_MAX_AGE_H = 100   # stockanalysis sa_at is stamped only on a real pull: Fri close -> Tue close over a Monday holiday = 96 h
 # Blob content-age: the date the data INSIDE the blob claims, not when we wrote
 # the row. A frozen upstream keeps answering 200 with old data — row updated_at
@@ -417,14 +417,14 @@ def evaluate(f):
             prob("market group failing", f"Market refresh group(s) failing: {lst} — the rest of the "
                  "market layer keeps running; this data goes stale until fixed.", "market", "market")
         for t, age in (f.get("fund_age_h") or {}).items():
-            owners = {"fundamentals": {"deep_warm", "deep_new"},
+            owners = {"fundamentals": {"deep_warm", "deep_new", "deep_drain"},
                       "stockanalysis": {"stockanalysis"}}.get(t, {"screener"})
             lim = SA_MAX_AGE_H if t == "stockanalysis" else FUND_MAX_AGE_H
             if age > lim and not owners & off:
                 prob(f"{t} stale", f"Newest {t} row is {age:.0f}h old (refreshes daily) — the screener "
                      "and stock pages are serving stale numbers.", "market", "market")
         fa = f.get("fund_audit")
-        if fa and "deep_warm" not in off:
+        if fa and not {"deep_warm", "deep_drain"} <= off:
             pct, prev = fa.get("pct_complete"), fa.get("prev_pct")
             age = f.get("fund_audit_age_h")
             if age is not None and age > FUND_MAX_AGE_H:
@@ -437,8 +437,8 @@ def evaluate(f):
                 prob("fundamentals incomplete",
                      f"Only {pct}% of stocks have a complete fundamentals panel"
                      + (f" (was {prev}%)" if prev is not None else "")
-                     + f" — top gaps: {top or 'n/a'}. deep_warm drains {WARM_HINT} a day; "
-                     "see Markets → Coverage.", "market", "market")
+                     + f" — top gaps: {top or 'n/a'}. The drain revisits {WARM_HINT} a day, "
+                     "the universe every ~1.3 days; see Markets → Coverage.", "market", "market")
 
     # deep-only facts (Health page); absent in the hourly watchdog, so silent there
     stale_kinds = [(k, a) for k, a in (f.get("quote_age_h") or {}).items()

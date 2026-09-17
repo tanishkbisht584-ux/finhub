@@ -101,7 +101,7 @@ _status = {}    # group -> last attempt outcome; mirrored to app_config `market_
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "global": 15, "polymarket": 60, "nse": 60, "bonds": 60, "macro": 24 * 60,
-            "mf_new": 5, "analysis_new": 5, "deep_new": 5, "screener_px": 60,
+            "mf_new": 5, "analysis_new": 5, "deep_new": 5, "deep_drain": 5, "screener_px": 60,
             "sentiment": 60, "hazards": 60, "stockanalysis": 60}
 
 
@@ -2107,6 +2107,14 @@ def refresh_deep_warm(sb, now):
     return fundamentals.refresh_deep_warm(sb, now)
 
 
+def refresh_deep_drain(sb, now):
+    """Every 5 min: a few deficit-ordered symbols; fewer while the market is
+    open so the quotes/alerts laps are not held up."""
+    import fundamentals
+    cap = fundamentals.DRAIN_CAP_MKT if market_hours(now) else fundamentals.DRAIN_CAP
+    return fundamentals.refresh_deep_drain(sb, now, cap=cap)
+
+
 def refresh_screener(sb, now):
     import fundamentals
     return fundamentals.refresh_screener(sb, now)
@@ -2136,6 +2144,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("macro", refresh_macro), ("nse", refresh_nse_blobs),
           ("bonds", refresh_bonds), ("sentiment", refresh_sentiment),
           ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm),
+          ("deep_drain", refresh_deep_drain),
           ("screener", refresh_screener), ("screener_px", refresh_screener_px),
           ("stockanalysis", refresh_stockanalysis))
 

@@ -1372,10 +1372,13 @@ def test_ops_evaluate_fund_audit_rollup():
                for p in drop["problems"])
     stale = ops.evaluate({**ok, "fund_audit_age_h": 50.0})
     assert any(p["name"] == "fund audit stale" for p in stale["problems"])
-    # deep_warm switched off from admin: silent, like the other owners
-    quiet = ops.evaluate({**ok, "groups_off": ["deep_warm"],
-                          "fund_audit": {"pct_complete": 10.0, "prev_pct": None, "by_code": {}}})
+    # both fillers (daily deep_warm + 5-min deep_drain) switched off from
+    # admin: silent, like the other owners; one of them off still converges
+    low_fa = {"fund_audit": {"pct_complete": 10.0, "prev_pct": None, "by_code": {}}}
+    quiet = ops.evaluate({**ok, "groups_off": ["deep_warm", "deep_drain"], **low_fa})
     assert not [p for p in quiet["problems"] if "fund" in p["name"]]
+    half = ops.evaluate({**ok, "groups_off": ["deep_warm"], **low_fa})
+    assert [p for p in half["problems"] if p["name"] == "fundamentals incomplete"]
 
 
 def test_ops_evaluate_market_groups_and_fund_freshness():

@@ -154,6 +154,11 @@ def test_stale_codes_flat_rule_and_sa_last_report_date():
     assert fa.stale_codes({**a, "newest_q": "2026-03"}, NOW, lrd="2026-08-01") == ["q.stale"]
     assert fa.stale_codes({**a, "shp_newest": "2026-03", "docs_at": "2026-07-01T00:00:00+00:00"},
                           NOW) == ["shp.stale", "docs.stale"]
+    # shareholding follows the same lrd rule: SA says the Jun quarter was
+    # reported 2026-08-01, so a Mar shareholding is out even though 120 d have not passed
+    assert fa.stale_codes({**a, "shp_newest": "2026-06"}, NOW, lrd="2026-08-01") == []
+    assert fa.stale_codes({**a, "shp_newest": "2026-03"}, NOW, lrd="2026-08-01") == ["shp.stale"]
+    assert fa.stale_codes({**a, "shp_newest": "2026-06"}, NOW, lrd="2099-01-01") == []  # future lrd ignored
 
 
 def test_deficit_never_audited_is_infinite():
@@ -179,6 +184,81 @@ def test_warm_universe_orders_by_deficit_then_age():
     out = fu.warm_universe(ages, priority=[], now=NOW, cap=5,
                            deficit={"BIG": 3, "SMALL": 1, "NEW": fa.INF})
     assert out == ["NEW", "BIG", "SMALL"]  # FRESH skipped by the 7-day gate
+
+
+def test_write_rollup_keeps_day_over_day_prev(monkeypatch):
+    def run(stored):
+        posted = []
+
+        def sb(method, path, **kw):
+            if method == "POST":
+                posted.extend(kw["json"])
+                return None
+            return [{"value": stored}] if "fund_audit" in path else []
+
+        fu.write_rollup(sb, {"A": audit(*complete_stock())}, {}, NOW)
+        return posted[0]["value"]["prev_pct"]
+
+    # yesterday's rollup: its pct becomes today's "prev day"
+    assert run({"pct_complete": 40.0, "prev_pct": 30.0, "at": "2026-09-14T12:00:00+00:00"}) == 40.0
+    # an intra-day rewrite (deep_drain) keeps the day-over-day figure
+    assert run({"pct_complete": 45.0, "prev_pct": 40.0, "at": "2026-09-15T10:00:00+00:00"}) == 40.0
+    assert run({}) is None
+
+
+def test_deep_drain_pops_the_queue_and_skips_yahoo_for_nse_only_gaps(monkeypatch):
+    done = audit(*complete_stock())
+    audits = {"NEW": None, "NSEONLY": {**done, "missing": ["shp.missing"]},
+              "OLDFULL": {**done, "missing": ["shp.split", "docs.missing"], "at": "2026-08-01T00:00:00+00:00"},
+              "DONE": done}
+    gets, fetched = [], []
+
+    def sb(method, path, **kw):
+        if method == "GET":
+            gets.append(path)
+            if path.startswith("screener_metrics"):
+                return [{"symbol": s, "lrd": None} for s in audits]
+            if "kind=eq.summary" in path:
+                return [{"symbol": s, "audit": a} for s, a in audits.items()]
+            return []  # no docs rows: every symbol is eligible; no stored rollup
+        return None
+
+    monkeypatch.setattr(fu, "deep_fetch",
+                        lambda sb, syms, now, nse=True, q_cap=2, yahoo=True: fetched.append((syms, yahoo)) or len(syms))
+    monkeypatch.setattr(fu, "_drain", {"at": None, "todo": []})
+    assert fu.refresh_deep_drain(sb, NOW, cap=2) == 2
+    # deficit order: never-audited first, then the 2-gap symbol; both need Yahoo
+    # (never fetched / statements a month old) so they share one deep_fetch call
+    assert fetched == [(["NEW", "OLDFULL"], True)]
+    reads = len(gets)
+    assert fu.refresh_deep_drain(sb, NOW, cap=8) == 1
+    assert fetched[-1] == (["NSEONLY"], False)  # NSE-only gap: statements untouched
+    assert len(gets) == reads  # the queue served the lap; no rebuild inside 2 h
+    assert fu.refresh_deep_drain(sb, NOW, cap=8) == 0 and len(gets) == reads  # drained, and quiet
+    assert "DONE" not in [s for syms, _ in fetched for s in syms]
+
+
+def test_deep_fetch_without_yahoo_re_audits_from_stored_rows(monkeypatch):
+    annuals, quarters, shp = complete_stock()
+    monkeypatch.setattr(fu, "fetch_statements", lambda sym, now=None: (_ for _ in ()).throw(AssertionError("yahoo called")))
+    monkeypatch.setattr(fu, "fetch_chart_deep", lambda sym, now: ([], None))
+    monkeypatch.setattr(fu.time, "sleep", lambda s: None)
+    posted = []
+
+    def sb(method, path, **kw):
+        if method == "POST":
+            posted.extend(kw["json"])
+            return None
+        if method == "GET" and "kind=eq.annual" in path:
+            return [{"period": p, "data": d} for p, d in annuals.items()]
+        if method == "GET" and "kind=in.(shareholding,docs)" in path:
+            return [{"kind": "shareholding", "period": p, "data": d, "updated_at": "x"} for p, d in shp.items()]
+        return []
+
+    fu.deep_fetch(sb, ["TCS"], NOW, nse=False, yahoo=False)
+    (summary,) = [r for r in posted if r["kind"] == "summary"]
+    assert summary["data"]["audit"]["newest_fy"] == "FY2026"  # stored annuals were merged
+    assert not [r for r in posted if r["kind"] == "annual"]     # nothing rewritten
 
 
 def test_explain_lines_name_the_fixer():

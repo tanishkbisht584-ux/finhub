@@ -14,7 +14,7 @@ import ops  # noqa: E402
 # groups safe to run from this machine: NSE is Akamai-blocked locally, and the
 # deep fetch lanes take minutes-to-hours — those stay CI-only.
 RUN_NOW = [g for g, _ in mkt.GROUPS
-           if g not in ("nse", "deep_new", "deep_warm", "fundamentals", "polymarket")]
+           if g not in ("nse", "deep_new", "deep_warm", "deep_drain", "fundamentals", "polymarket")]
 
 status = cfg("market_status")
 groups_st = status.get("groups") or {}
@@ -78,8 +78,9 @@ with tab_g:
                 st.cache_data.clear()
             except Exception as e:  # noqa: BLE001
                 st.error(f"{type(e).__name__}: {e}")
-    st.caption("nse / deep_new / deep_warm / fundamentals are CI-only: NSE blocks this machine "
-               "and the deep lanes take minutes-to-hours. They converge on their own schedule.")
+    st.caption("nse / deep_new / deep_warm / deep_drain / fundamentals are CI-only: NSE blocks this "
+               "machine and the deep lanes take minutes-to-hours. deep_drain is the loop: a few "
+               "deficit-ordered symbols every 5 min, the whole quoted universe every ~1.3 days.")
 
 # ---------- coverage ----------
 with tab_c:
@@ -113,9 +114,10 @@ with tab_c:
              ("pb null", n_pb), ("roe null", n_roe)])
     roll = cfg("fund_audit") or {}
     section("Fundamentals panel completeness",
-            "fund_audit: every quoted stock's page sections checked on its last deep pass; deep_warm "
-            "refetches the largest fixable deficit first (rollup written at 17:30 IST). Unquoted "
-            "SME-board symbols are outside the universe — no source carries their statements")
+            "fund_audit: every quoted stock's page sections checked on its last deep pass; deep_drain "
+            "refetches the largest fixable deficit first, 5-min laps (rollup refreshed every ~2 h; "
+            "the daily 17:30 deep_warm pass sets the day-over-day figure). Unquoted SME-board "
+            "symbols are outside the universe — no source carries their statements")
     if roll:
         pct = roll.get("pct_complete") or 0
         kpis([("Complete", f"{pct}%", f"{roll.get('complete')} of {roll.get('n')} stocks · "

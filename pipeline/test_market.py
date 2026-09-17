@@ -288,7 +288,7 @@ def test_all_groups_registered():
                                              "analysis_new", "worldmacro", "hazards", "wikidata", "cpi", "polymarket", "cb_rates", "calendar", "participant_oi", "shipping", "monsoon",
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
-                                             "deep_new", "deep_warm",
+                                             "deep_new", "deep_warm", "deep_drain",
                                              "screener", "screener_px", "stockanalysis"]
 
 

@@ -882,26 +882,29 @@ def _junk(d):
     return (d.get("src") == "yahoo" and not d.get("sales") and not d.get("net_profit"))
 
 
-def deep_fetch(sb, symbols, now, nse=True, q_cap=2):
+def deep_fetch(sb, symbols, now, nse=True, q_cap=2, yahoo=True):
     """nse=False = Yahoo-only (statements + chart) — runnable from machines
     NSE blocks; the NSE pieces (shareholding/results/docs) drain via CI. A
-    Yahoo miss never skips the NSE pieces for that symbol. Every pass ends
-    with the symbol's audit (fund_audit.audit_symbol) written into its
-    summary row, computed on the very rows just merged. `q_cap` = NSE XBRL
-    docs per pass (refresh_deep_warm raises it for symbols with many holes)."""
+    Yahoo miss never skips the NSE pieces for that symbol. yahoo=False = NSE
+    pieces + re-audit only; the Yahoo statements stay as stored (the chart
+    call still runs: one request, and compute_summary needs closes). Every
+    pass ends with the symbol's audit (fund_audit.audit_symbol) written into
+    its summary row, computed on the very rows just merged. `q_cap` = NSE
+    XBRL docs per pass (the warm/drain raise it for symbols with holes)."""
     n = 0
     nse_s = nse_session() if symbols and nse else None
     for sym in symbols:
         try:
             qsym = quote(sym, safe="")  # M&M: '&' would split the query string
             annuals, quarters, stats = {}, {}, {}
-            try:
-                annuals, quarters, stats = fetch_statements(sym, now)
-            except Exception as e:
-                counters["ts_fail"] += 1
-                print(f"FUND statements {sym}: {e}")
-                if getattr(getattr(e, "response", None), "status_code", None) == 429:
-                    time.sleep(2)
+            if yahoo:
+                try:
+                    annuals, quarters, stats = fetch_statements(sym, now)
+                except Exception as e:
+                    counters["ts_fail"] += 1
+                    print(f"FUND statements {sym}: {e}")
+                    if getattr(getattr(e, "response", None), "status_code", None) == 429:
+                        time.sleep(2)
             # merge with what the table already holds (kaggle/nse/older yahoo
             # rows) for the CAGR math — the upsert itself never deletes periods.
             prior = {r["period"]: r["data"] for r in
@@ -1122,20 +1125,21 @@ def refresh_deep_new(sb, now):
     return deep_fetch(sb, todo, now) if todo else 0
 
 
-WARM_CAP = 250  # deep symbols per daily warm pass; the 3.2k universe in ~13 days
+WARM_CAP = 60  # daily 17:30 pass: the top-50 + followed names (~7 min); the
+               # universe itself drains through refresh_deep_drain every 5 min
 
 
-def warm_universe(ages, priority, now, cap, deficit=None):
+def warm_universe(ages, priority, now, cap, deficit=None, max_age_d=DEEP_MAX_AGE_D):
     """Symbols to deep-warm today: priority names first, then the largest
     fixable deficit (fund_audit; never-audited = INF), oldest first within a
-    tie; anything refreshed within DEEP_MAX_AGE_D is skipped. `ages` is
+    tie; anything refreshed within max_age_d is skipped. `ages` is
     {symbol: updated_at iso or ''} — iso strings compare fine."""
-    cutoff = (now - timedelta(days=DEEP_MAX_AGE_D)).isoformat()
+    cutoff = (now - timedelta(days=max_age_d)).isoformat()
     stale = {s for s, at in ages.items() if (at or "") < cutoff}
     out = [s for s in priority if s in stale]
     deficit = deficit or {}
     rest = sorted((s for s in stale if s not in set(priority)),
-                  key=lambda s: (-deficit.get(s, fund_audit.INF), ages.get(s) or ""))
+                  key=lambda s: (-deficit.get(s, fund_audit.INF), ages.get(s) or "", s))
     return (out + rest)[:cap]
 
 
@@ -1167,7 +1171,11 @@ def write_rollup(sb, audits, lrd, now):
     prev = None
     try:
         rows = sb("GET", "app_config?select=value&key=eq.fund_audit")
-        prev = ((rows[0]["value"] if rows else {}) or {}).get("pct_complete")
+        stored = (rows[0]["value"] if rows else {}) or {}
+        # day-over-day: an intra-day rewrite (deep_drain every ~2 h) keeps the
+        # earlier day's figure, so the ops drop alert and "Prev day" stay true
+        same_day = str(stored.get("at") or "")[:10] == now.strftime("%Y-%m-%d")
+        prev = stored.get("prev_pct") if same_day else stored.get("pct_complete")
     except Exception:
         pass
     roll = fund_audit.rollup(((s, a, lrd.get(s)) for s, a in audits.items()), now, prev_pct=prev)
@@ -1177,12 +1185,11 @@ def write_rollup(sb, audits, lrd, now):
 
 
 def refresh_deep_warm(sb, now):
-    """Daily 17:30 IST: the whole screener_metrics universe converges — the
-    50 biggest names and followed companies every pass, then the largest
-    fixable deficit first (fund_audit verdicts; never-audited symbols such as
-    the stockanalysis-only 1,375 sort first), oldest docs stamp within a
-    tie. Writes the rollup before fetching, so Health shows the state the
-    pass started from."""
+    """Daily 17:30 IST: the 50 biggest names and followed companies, then
+    whatever largest-deficit symbols fit in WARM_CAP (fund_audit verdicts;
+    never-audited first, oldest docs stamp within a tie). Writes the rollup
+    before fetching, so Health shows the state the pass started from. The
+    universe converges through refresh_deep_drain below."""
     audits, ages, lrd = load_audits(sb)
     write_rollup(sb, audits, lrd, now)
     deficits = {s: fund_audit.deficit(a, now, lrd.get(s))[0] for s, a in audits.items()}
@@ -1206,3 +1213,44 @@ def refresh_deep_warm(sb, now):
     deep = [s for s in todo if holes.get(s, 0) >= 1]
     n = deep_fetch(sb, [s for s in todo if s not in set(deep)], now)
     return n + deep_fetch(sb, deep, now, q_cap=4)
+
+
+# ---------- the loop: a few symbols every 5 min, forever ----------
+
+DRAIN_CAP = 8        # symbols per 5-min lap off-hours (~1 min of fetching)
+DRAIN_CAP_MKT = 3    # during NSE hours: quotes/alerts laps must not wait
+DRAIN_REFRESH_S = 7200  # rebuild the queue (one ~1 MB load_audits) every 2 h
+DRAIN_GAP_D = 1      # a symbol is eligible again a day after its last NSE pass
+_drain = {"at": None, "todo": []}  # run.py memo idiom: None = never built
+                                   # (monotonic() counts from boot, so 0.0 lies)
+
+
+def refresh_deep_drain(sb, now, cap=DRAIN_CAP):
+    """Every 5 min in CI (market.GROUPS "deep_drain"): the next `cap` symbols
+    of a deficit-ordered queue — never-audited first, then the most fixable
+    gaps, staleness recomputed from SA's lastReportDate at rebuild time, so a
+    fresh filing surfaces within a day. ~1,900 symbols/day revisits the
+    2.5k quoted universe every ~1.3 days, spread out instead of one 30-min
+    burst that paused the feed laps. Yahoo is re-hit only for a Yahoo-fixable
+    gap or statements older than DEEP_MAX_AGE_D; NSE-only gaps run the NSE
+    pieces and re-audit from stored rows. Egress: the 2-hourly rebuild is
+    ~1 MB (~0.5 GB/month with CI process boots), the rollup rides on it.
+    # ponytail: no backoff — a symbol whose gap no source can fill is retried
+    # daily (~8 calls); add exponential backoff on an unchanged audit if
+    # counters["results_fail"] climbs."""
+    if _drain["at"] is None or time.monotonic() - _drain["at"] > DRAIN_REFRESH_S:
+        audits, ages, lrd = load_audits(sb)
+        write_rollup(sb, audits, lrd, now)
+        verdict = {s: fund_audit.deficit(a, now, lrd.get(s)) for s, a in audits.items()}
+        order = warm_universe(ages, [], now, 10 ** 6, max_age_d=DRAIN_GAP_D,
+                              deficit={s: d for s, (d, _) in verdict.items()})
+        _drain.update(at=time.monotonic(),
+                      todo=[(s, verdict[s][1], (audits.get(s) or {}).get("at") or "")
+                            for s in order if verdict[s][0] > 0])
+    batch, _drain["todo"] = _drain["todo"][:cap], _drain["todo"][cap:]
+    old = (now - timedelta(days=DEEP_MAX_AGE_D)).isoformat()
+    full = [s for s, codes, at in batch
+            if at < old or any(fund_audit.FIXER.get(c, "yahoo") == "yahoo" for c in codes)]
+    nse_only = [s for s, _, _ in batch if s not in set(full)]
+    n = deep_fetch(sb, full, now, q_cap=4) if full else 0
+    return n + (deep_fetch(sb, nse_only, now, q_cap=4, yahoo=False) if nse_only else 0)
