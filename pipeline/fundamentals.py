@@ -198,6 +198,13 @@ def _ratios(pnl_s, bs_s):
          "roe": _pct(pnl_s.get("netIncome"), equity)}
     if pbt is not None and total is not None and cur_l is not None and total != cur_l:
         r["roce"] = round((pbt + abs(interest or 0)) / (total - cur_l) * 100, 1)
+    elif pbt is not None and cur_l is None and equity is not None:
+        # ponytail: Yahoo serves no CurrentLiabilities for ~360 non-lender symbols;
+        # capital employed = net worth + debt is p50 1.3 / p90 8 pts off the CL
+        # form (measured 17 Sep 2026); upgrade = NSE balance-sheet XBRL
+        debt = bs_s.get("totalDebt") or sum(bs_s.get(k) or 0 for k in ("shortLongTermDebt", "longTermDebt"))
+        if equity + debt > 0:
+            r["roce"] = round((pbt + abs(interest or 0)) / (equity + debt) * 100, 1)
     return r
 
 
@@ -1134,11 +1141,16 @@ def warm_universe(ages, priority, now, cap, deficit=None):
 
 def load_audits(sb):
     """(audits {symbol: audit|None}, ages {symbol: docs updated_at or ''},
-    lrd {symbol: SA lastReportDate}) for the whole screener universe — the
-    one read (~1 MB) both the warm ordering and the rollup need."""
-    audits = {r["symbol"]: None for r in sb("GET", "screener_metrics?select=symbol&order=symbol")}
+    lrd {symbol: SA lastReportDate}) for the quoted screener universe — the
+    one read (~1 MB) both the warm ordering and the rollup need. Unquoted
+    rows (price null = no NSE mainboard quote: the ~750 SME-board names
+    stockanalysis lists) are outside the panel: Yahoo 404s and the NSE
+    corporate APIs are empty for them, so they could never be complete."""
+    audits = {r["symbol"]: None for r in
+              sb("GET", "screener_metrics?select=symbol&price=not.is.null&order=symbol")}
     lrd = {r["symbol"]: r.get("lrd") for r in
-           sb("GET", "screener_metrics?select=symbol,lrd:sa->>lastReportDate&order=symbol")}
+           sb("GET", "screener_metrics?select=symbol,lrd:sa->>lastReportDate"
+                     "&price=not.is.null&order=symbol")}
     for r in sb("GET", "fundamentals?select=symbol,audit:data->audit&kind=eq.summary&order=symbol"):
         if r["symbol"] in audits:
             audits[r["symbol"]] = r.get("audit") or None
@@ -1187,8 +1199,10 @@ def refresh_deep_warm(sb, now):
                     sb("GET", f"companies?select=nse_symbol&id=in.({chunk})")
                     if c.get("nse_symbol")] + priority
     todo = warm_universe(ages, list(dict.fromkeys(priority)), now, WARM_CAP, deficit=deficits)
-    # symbols with quarter holes get a deeper NSE drain (4 filings a pass);
-    # 250 x 4 = 1,000 XBRL fetches/day at most — watch counters["results_fail"]
-    deep = [s for s in todo if holes.get(s, 0) >= 2]
+    # any quarter hole gets the deeper NSE drain (4 filings a pass): 5 Yahoo
+    # quarters + 2 filings still fall short of MIN_Q, so q_cap=2 meant a second
+    # pass a week later. 250 x 4 = 1,000 XBRL fetches/day at most — watch
+    # counters["results_fail"]
+    deep = [s for s in todo if holes.get(s, 0) >= 1]
     n = deep_fetch(sb, [s for s in todo if s not in set(deep)], now)
     return n + deep_fetch(sb, deep, now, q_cap=4)

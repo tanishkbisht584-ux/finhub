@@ -64,6 +64,10 @@ def test_missing_balance_sheet_is_a_yahoo_fixable_gap():
     assert {"bs.missing", "cf.missing", "ratios.missing"} <= set(a["missing"])
     assert a["unfixable"] == []
     assert fa.deficit(a, NOW)[0] == 3 and fa.FIXER["bs.missing"] == "yahoo"
+    # negative net worth: ROE/ROCE are undefined, not missing
+    annuals, quarters, shp = complete_stock()
+    annuals["FY2026"].update({"reserves": -200, "roe": None, "roce": None})
+    assert "ratios.missing" not in audit(annuals, quarters, shp)["missing"]
 
 
 def test_basis_dropped_symbol_with_nse_only_annuals_is_unfixable():
@@ -80,6 +84,14 @@ def test_young_listing_short_history_is_unfixable():
     annuals = {p: annuals[p] for p in ("FY2026", "FY2025", "FY2024")}
     a = audit(annuals, quarters, shp)
     assert a["missing"] == ["annual.short"] and a["unfixable"] == ["annual.short"]
+    # a 2025 IPO: 5 quarters is all that exists, so q.short is not a gap NSE can fill
+    young_q = {p: quarters[p] for p in sorted(quarters)[-5:]}
+    a = audit(annuals, young_q, shp)
+    assert a["missing"] == ["annual.short", "q.short"] and a["unfixable"] == ["annual.short", "q.short"]
+    assert fa.deficit(a, NOW)[0] == 0
+    # the same 5 quarters on a 10-FY stock: NSE filings hold the rest
+    a = audit(complete_stock()[0], young_q, shp)
+    assert a["missing"] == ["q.short"] and a["unfixable"] == []
 
 
 def test_lender_identity_passes_and_needs_no_roce():

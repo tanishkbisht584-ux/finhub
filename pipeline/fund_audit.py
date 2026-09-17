@@ -82,6 +82,12 @@ def bs_identity_ok(d):
     return _close(sum(p or 0 for p in parts), total, BS_TOL)
 
 
+def _no_net_worth(d):
+    """The sheet is present and equity + reserves is not positive."""
+    eq, res = _num(d.get("equity_cap")), _num(d.get("reserves"))
+    return (eq is not None or res is not None) and (eq or 0) + (res or 0) <= 0
+
+
 def fy_of_quarter(period):
     """'2026-06' -> 'FY2027' (Indian FY ends March)."""
     y, m = int(period[:4]), int(period[5:7])
@@ -109,6 +115,9 @@ def audit_symbol(annuals, quarters, shareholding, docs_at, basis_drop, now, comp
     newest = fys[:NEWEST_FY]
     yahoo_fys = [p for p in fys if (annuals[p].get("src") or "").startswith("yahoo_ts")]
     nse_only = basis_drop and not yahoo_fys
+    # a listing younger than 4 FYs, fully served by Yahoo: no source holds
+    # more annual or quarterly history than this
+    young = bool(yahoo_fys) and len(fys) < MIN_FY and len(yahoo_fys) == len(fys)
 
     def gap(code, periods=None, fixable=True):
         missing.append(code)
@@ -116,9 +125,7 @@ def audit_symbol(annuals, quarters, shareholding, docs_at, basis_drop, now, comp
             unfixable.append(code)
 
     if len(fys) < MIN_FY:
-        # a listing younger than 4 FYs has no more history anywhere
-        young = bool(yahoo_fys) and len(fys) >= 1 and fys[0] == max(fys)
-        gap("annual.short", fixable=not (young and len(yahoo_fys) == len(fys)))
+        gap("annual.short", fixable=not young)
     if newest and any(annuals[p].get("total_assets") is None for p in newest):
         gap("bs.missing", fixable=not nse_only)
     if newest and any(annuals[p].get("cfo") is None for p in newest):
@@ -126,11 +133,14 @@ def audit_symbol(annuals, quarters, shareholding, docs_at, basis_drop, now, comp
     if newest:
         lender = any(is_lender_row(annuals[p]) for p in newest)
         need = ("roe",) if lender else ("roe", "roce")
-        if any(annuals[p].get(k) is None for p in newest for k in need):
+        # a period whose sheet shows no positive net worth has no ROE/ROCE
+        # anywhere (Screener shows a blank too), so it is not a gap
+        if any(annuals[p].get(k) is None for p in newest for k in need
+               if not _no_net_worth(annuals[p])):
             gap("ratios.missing", fixable=not nse_only)
     qs = sorted(quarters, reverse=True)
     if len(qs) < MIN_Q:
-        gap("q.short")
+        gap("q.short", fixable=not young)
     for p in qs[:NEWEST_Q]:
         d = quarters[p]
         if p not in complete_q or any(d.get(k) is None for k in QUARTER_FIELDS):

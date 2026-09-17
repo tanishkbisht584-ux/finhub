@@ -23,6 +23,10 @@ SQL_MARKERS = {
     "018": "select 1 from pg_constraint where conname='fundamentals_symbol_check'"
            " and pg_get_constraintdef(oid) like '%[A-Z0-9][A-Z0-9&-]%'",
     "021": "select 1 from pg_indexes where indexname='stories_alerted_at_idx'",
+    # data-only: applied once no fillable kaggle FY row still lacks roe
+    "023": "select 1 where not exists (select 1 from fundamentals where kind='annual'"
+           " and data->>'src'='kaggle' and data->'roe' is null and data->'net_profit' is not null"
+           " and coalesce((data->>'equity_cap')::numeric,0)+coalesce((data->>'reserves')::numeric,0) > 0)",
 }
 MIG_DIR = REPO / "pipeline" / "migrations"
 

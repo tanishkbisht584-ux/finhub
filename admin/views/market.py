@@ -113,8 +113,9 @@ with tab_c:
              ("pb null", n_pb), ("roe null", n_roe)])
     roll = cfg("fund_audit") or {}
     section("Fundamentals panel completeness",
-            "fund_audit: every stock's page sections checked on its last deep pass; deep_warm "
-            "refetches the largest fixable deficit first (rollup written at 17:30 IST)")
+            "fund_audit: every quoted stock's page sections checked on its last deep pass; deep_warm "
+            "refetches the largest fixable deficit first (rollup written at 17:30 IST). Unquoted "
+            "SME-board symbols are outside the universe — no source carries their statements")
     if roll:
         pct = roll.get("pct_complete") or 0
         kpis([("Complete", f"{pct}%", f"{roll.get('complete')} of {roll.get('n')} stocks · "

@@ -156,6 +156,15 @@ def test_shape_statements_ratio_inputs():
     assert a["roe"] == round(143 / 900 * 100, 1)  # owners' share over owners' equity
 
 
+def test_ratios_roce_falls_back_to_net_worth_plus_debt_without_current_liabilities():
+    pnl = {"incomeBeforeTax": 190 * CR, "interestExpense": -30 * CR}
+    bs = {"totalAssets": 2000 * CR, "totalStockholderEquity": 900 * CR, "totalDebt": 300 * CR}
+    assert fu._ratios(pnl, bs)["roce"] == round((190 + 30) / (900 + 300) * 100, 1)
+    bs_cl = {**bs, "totalCurrentLiabilities": 400 * CR}  # CL present: the CL form wins
+    assert fu._ratios(pnl, bs_cl)["roce"] == round((190 + 30) / (2000 - 400) * 100, 1)
+    assert "roce" not in fu._ratios(pnl, {"totalAssets": 2000 * CR})  # no equity either: nothing
+
+
 def test_shape_statements_quarters_eps_fallback_and_no_fake_opm():
     _, quarters = shaped()
     assert list(quarters) == ["2026-06", "2026-03"]  # the BS-only Dec end is not a quarter

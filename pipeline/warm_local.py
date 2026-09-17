@@ -10,7 +10,9 @@
 
 Warms are Yahoo-only: NSE blocks this machine, so shareholding/results/docs
 gaps drain via CI's deep_warm (17:30 IST) and deep_new (5-min). Every pass
-writes the symbol's fund_audit verdict into its summary row.
+writes the symbol's fund_audit verdict into its summary row. The universe is
+the QUOTED screener (price not null): the ~750 SME-board names have no data
+in any source and are skipped, same as fundamentals.load_audits.
 """
 import sys
 from datetime import datetime, timezone
@@ -37,7 +39,8 @@ def warm(syms, now):
 
 
 def universe():
-    return sorted({r["symbol"] for r in sb("GET", "screener_metrics?select=symbol&order=symbol")})
+    return sorted({r["symbol"] for r in
+                   sb("GET", "screener_metrics?select=symbol&price=not.is.null&order=symbol")})
 
 
 def audit_report(now):
