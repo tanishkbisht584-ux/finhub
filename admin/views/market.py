@@ -80,7 +80,7 @@ with tab_g:
                 st.error(f"{type(e).__name__}: {e}")
     st.caption("nse / deep_new / deep_warm / deep_drain / fundamentals are CI-only: NSE blocks this "
                "machine and the deep lanes take minutes-to-hours. deep_drain is the loop: a few "
-               "deficit-ordered symbols every 5 min, the whole quoted universe every ~1.3 days.")
+               "deficit-ordered symbols every 5 min, the whole quoted universe about daily.")
 
 # ---------- coverage ----------
 with tab_c:

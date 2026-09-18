@@ -45,7 +45,7 @@ MAX_QUOTE_AGE_H = {"fx": 4, "commodity": 4, "crypto": 4, "equity": 4, "index": 4
 FUND_MAX_AGE_H = 36  # fundamentals/screener_metrics rebuild daily; 36 h absorbs cron lag
 FUND_MIN_COMPLETE_PCT = 80  # fund_audit rollup: below this the panel is visibly patchy
 FUND_DROP_PCT = 5           # or a day-over-day drop this big (a source went dark)
-WARM_HINT = "~1,900 symbols (deep_drain, 5-min laps) plus 60 priority names at 17:30 IST"
+WARM_HINT = "~3,600 symbols (deep_drain, 5-min laps) plus 60 priority names at 17:30 IST"
 SA_MAX_AGE_H = 100   # stockanalysis sa_at is stamped only on a real pull: Fri close -> Tue close over a Monday holiday = 96 h
 # Blob content-age: the date the data INSIDE the blob claims, not when we wrote
 # the row. A frozen upstream keeps answering 200 with old data — row updated_at
@@ -438,7 +438,7 @@ def evaluate(f):
                      f"Only {pct}% of stocks have a complete fundamentals panel"
                      + (f" (was {prev}%)" if prev is not None else "")
                      + f" — top gaps: {top or 'n/a'}. The drain revisits {WARM_HINT} a day, "
-                     "the universe every ~1.3 days; see Markets → Coverage.", "market", "market")
+                     "the universe about daily; see Markets → Coverage.", "market", "market")
 
     # deep-only facts (Health page); absent in the hourly watchdog, so silent there
     stale_kinds = [(k, a) for k, a in (f.get("quote_age_h") or {}).items()

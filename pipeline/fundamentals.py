@@ -1217,7 +1217,8 @@ def refresh_deep_warm(sb, now):
 
 # ---------- the loop: a few symbols every 5 min, forever ----------
 
-DRAIN_CAP = 8        # symbols per 5-min lap off-hours (~1 min of fetching)
+DRAIN_CAP = 16       # symbols per 5-min lap off-hours (~2 min of fetching; 8 ran
+                     # 14 h with zero Yahoo/NSE refusals, raised 18 Sep 2026)
 DRAIN_CAP_MKT = 3    # during NSE hours: quotes/alerts laps must not wait
 DRAIN_REFRESH_S = 7200  # rebuild the queue (one ~1 MB load_audits) every 2 h
 DRAIN_GAP_D = 1      # a symbol is eligible again a day after its last NSE pass
@@ -1229,8 +1230,8 @@ def refresh_deep_drain(sb, now, cap=DRAIN_CAP):
     """Every 5 min in CI (market.GROUPS "deep_drain"): the next `cap` symbols
     of a deficit-ordered queue — never-audited first, then the most fixable
     gaps, staleness recomputed from SA's lastReportDate at rebuild time, so a
-    fresh filing surfaces within a day. ~1,900 symbols/day revisits the
-    2.5k quoted universe every ~1.3 days, spread out instead of one 30-min
+    fresh filing surfaces within a day. ~3,600 symbols/day revisits the
+    2.5k quoted universe daily, spread out instead of one 30-min
     burst that paused the feed laps. Yahoo is re-hit only for a Yahoo-fixable
     gap or statements older than DEEP_MAX_AGE_D; NSE-only gaps run the NSE
     pieces and re-audit from stored rows. Egress: the 2-hourly rebuild is
