@@ -84,6 +84,37 @@ final _blobs = <String, dynamic>{
       'NIFTY 500': {'adv': 217, 'dec': 276}
     },
   },
+  'trends': {
+    'asof': '2026-09-18',
+    'bullish': [
+      {
+        'symbol': 'RELIANCE',
+        'name': 'Reliance',
+        'price': 1226.4,
+        'chg': 1.41,
+        'trend': 'bullish',
+        'prev': null,
+        'since': '2026-09-01',
+        'since_price': 1100.0,
+        'perf': 11.49
+      }
+    ],
+    'turning_bullish': [],
+    'bearish': [],
+    'turning_bearish': [
+      {
+        'symbol': 'INFY',
+        'name': 'Infosys',
+        'price': 1890.0,
+        'chg': -0.8,
+        'trend': 'bearish',
+        'prev': 'bullish',
+        'since': '2026-09-17',
+        'since_price': 1950.0,
+        'perf': -3.08
+      }
+    ],
+  },
   'fno': {
     'oi_gainers': [
       {'symbol': 'RELIANCE', 'ltp': 3010.5, 'pct': 1.2, 'oi_pct': 38.2}
@@ -394,21 +425,26 @@ Future<void> _toEnd(WidgetTester tester) async {
   await tester.pump();
 }
 
+/// Tap a region pill (INDIA · MF · … · US) below the pinned heatmap.
+Future<void> _region(WidgetTester tester, String r) async {
+  await tester.ensureVisible(find.byKey(const Key('marketsRegions')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(r).first);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   mergeMarketsTests();
   testWidgets('Markets body renders every section with formatted numbers',
       (tester) async {
     await tester.pumpWidget(_app(_data));
     // Each heading appears twice: ribbon chip + section header.
-    for (final h in [
-      'SESSIONS',
-      'INDICES',
-      'WATCHLIST',
-      'FX',
-      'CRYPTO',
-      'COMMODITIES'
-    ]) {
+    for (final h in ['SESSIONS', 'INDICES', 'WATCHLIST', 'FX', 'COMMODITIES']) {
       expect(find.text(h), findsNWidgets(2), reason: h);
+    }
+    // Region pills: INDIA opens; CRYPTO is only its pill until picked.
+    for (final r in ['INDIA', 'MF', 'BONDS', 'IPO', 'UNLISTED', 'CRYPTO', 'US']) {
+      expect(find.text(r), findsOneWidget, reason: r);
     }
     expect(find.text('GLOBAL'), findsNothing); // no meta.global ticks here
     expect(find.text('ODDS'), findsNothing);
@@ -418,7 +454,6 @@ void main() {
       'MOOD',
       'MOVES',
       'QUAKES',
-      'BONDS',
       'CALENDAR',
       'POSITIONING',
       'SHIPPING',
@@ -429,7 +464,7 @@ void main() {
     expect(find.text('NIFTY 50'), findsOneWidget);
     expect(find.text('₹24,252'), findsOneWidget);
     expect(find.text('▲0.08%'), findsOneWidget);
-    expect(find.text('₹73,95,017'), findsOneWidget);
+    expect(find.text('₹73,95,017'), findsNothing); // crypto: its own tab
     expect(find.text('\$4,624.10'), findsOneWidget);
     expect(find.text('intl spot × USD/INR, ex-duty'), findsOneWidget);
     expect(find.textContaining('Nothing followed yet'), findsOneWidget);
@@ -437,6 +472,46 @@ void main() {
     await _toEnd(tester); // the footer sits below the test viewport
     expect(find.textContaining('as of'), findsOneWidget);
     expect(find.textContaining('stale'), findsNothing);
+    // Pick CRYPTO: pill + chip + header; India-only sections leave the page.
+    await _region(tester, 'CRYPTO');
+    expect(find.text('CRYPTO'), findsNWidgets(3));
+    expect(find.text('₹73,95,017'), findsOneWidget);
+    expect(find.text('INDICES'), findsNothing);
+    expect(find.text('SECTIONS'), findsNothing);
+    expect(find.text('SESSIONS'), findsNWidgets(2)); // pinned above the pills
+    await _region(tester, 'UNLISTED');
+    expect(find.textContaining('source not wired yet'), findsOneWidget);
+    await _region(tester, 'INDIA');
+    expect(find.text('INDICES'), findsNWidgets(2));
+  });
+
+  testWidgets('TRENDS: bucket pills switch the table, turning rows show Was',
+      (tester) async {
+    await tester.pumpWidget(_app(_phase3));
+    expect(find.text('TRENDS'), findsNWidgets(2));
+    // MC order: TRENDS right after INDICES, before OI TRENDS and TOP.
+    expect(
+        tester.getTopLeft(find.text('INDICES').last).dy <
+            tester.getTopLeft(find.text('TRENDS').last).dy,
+        isTrue);
+    expect(
+        tester.getTopLeft(find.text('TRENDS').last).dy <
+            tester.getTopLeft(find.text('OI TRENDS').last).dy,
+        isTrue);
+    expect(find.text('RELIANCE'), findsWidgets); // bullish bucket opens
+    expect(find.text('▲11.49%'), findsOneWidget);
+    expect(find.text('▼3.08%'), findsNothing); // INFY is an OI row elsewhere
+    await tester.ensureVisible(find.text('TURNING BEARISH'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('TURNING BEARISH'));
+    await tester.pump();
+    expect(find.text('INFY'), findsWidgets);
+    expect(find.text('bullish'), findsOneWidget); // Was column
+    expect(find.text('▼3.08%'), findsOneWidget);
+    expect(find.text('▲11.49%'), findsNothing);
+    await tester.tap(find.text('BEARISH').first);
+    await tester.pump();
+    expect(find.text('none in this bucket'), findsOneWidget);
   });
 
   testWidgets('watchlist rows show the live % from ticks and tolerate a gap',
@@ -517,6 +592,7 @@ void main() {
     expect(find.text('1.08'), findsOneWidget); // NIFTY PCR tile
     expect(find.text('25↑ 24↓'), findsOneWidget);
     // Followed scheme (Axis) sorts above the default (Parag) despite the alphabet.
+    await _region(tester, 'MF');
     final axis = tester.getTopLeft(find.text('Axis ELSS Tax Saver Fund'));
     final ppfas = tester.getTopLeft(find.text('Parag Parikh Flexi Cap Fund'));
     expect(axis.dy < ppfas.dy, isTrue);
@@ -527,14 +603,16 @@ void main() {
     await tester.tap(find.byIcon(Icons.star_outline_rounded).first);
     expect(toggles, [(122639, true)]);
     expect(find.text('+ Add fund'), findsOneWidget);
-    expect(find.text('4.33%'), findsOneWidget);
-    expect(find.text('-0.25'), findsOneWidget);
-    // Global layer: world rows leave INDICES, form GLOBAL; odds render.
+    // Global layer: world rows leave INDICES, form GLOBAL under US; odds too.
+    await _region(tester, 'US');
     expect(find.text('GLOBAL'), findsNWidgets(2));
     expect(find.text('S&P 500'), findsOneWidget);
     expect(find.text('INDIA ADRS (NYSE)'), findsOneWidget);
     expect(find.text('ODDS'), findsNWidgets(2));
     expect(find.textContaining('Fed cut 25 bps'), findsOneWidget);
+    await _region(tester, 'INDIA');
+    expect(find.text('4.33%'), findsOneWidget);
+    expect(find.text('-0.25'), findsOneWidget);
     expect(find.text('RESULTS'), findsNWidgets(2));
     expect(find.text('28 Aug'), findsWidgets); // results date, G-Sec as-of
     expect(find.text('DEALS'), findsNWidgets(2));
@@ -581,16 +659,20 @@ void main() {
     expect(find.text('THEME 7'), findsOneWidget);
   });
 
-  testWidgets('trader coverage: F&O, bonds and IPO sections render',
+  testWidgets('trader coverage: TOP, OI TRENDS, bonds and IPO sections render',
       (tester) async {
     await tester.pumpWidget(_app(_phase3));
-    for (final h in ['F&O', 'BONDS', 'IPO']) {
+    for (final h in ['TOP', 'OI TRENDS']) {
       expect(find.text(h), findsNWidgets(2), reason: h); // chip + header
     }
-    // PCR moved out of FLOWS into F&O, above the OI movers.
+    // PCR lives in OI TRENDS, above the OI movers; TOP holds gainers/losers.
     expect(
-        tester.getTopLeft(find.text('F&O').last).dy <
+        tester.getTopLeft(find.text('OI TRENDS').last).dy <
             tester.getTopLeft(find.text('NIFTY PCR')).dy,
+        isTrue);
+    expect(
+        tester.getTopLeft(find.text('TOP').last).dy <
+            tester.getTopLeft(find.text('TOP GAINERS')).dy,
         isTrue);
     expect(find.text('+38.2%'), findsOneWidget); // OI chg column
     expect(find.text('−12.0%'), findsOneWidget);
@@ -598,17 +680,19 @@ void main() {
     expect(find.text('34↑ 12↓'), findsOneWidget);
     expect(find.text('ADANIENT'), findsOneWidget); // heat grid tile
     expect(find.text('▲4.50%'), findsOneWidget); // top gainers table
+    await _region(tester, 'BONDS');
     expect(find.text('6.82%'), findsOneWidget);
     expect(find.text('−3.0'), findsOneWidget); // Δ bp column
     expect(find.text('6.85%'), findsOneWidget); // prev yield column
     expect(find.text('28 Aug'), findsWidgets);
     // 0.31.0: named benchmark G-Secs, the curve (2+ points), RBI policy box
     expect(find.text('6.20% GS 2029'), findsOneWidget);
-    expect(find.byType(Sparkline), findsWidgets);
     expect(find.text('Repo rate'), findsOneWidget);
     expect(find.text('5.25%'), findsOneWidget);
     expect(find.text('91-day T-bill cut-off'), findsOneWidget);
     // World Bank rows ride the MACRO section; quakes get their own
+    await _region(tester, 'INDIA');
+    expect(find.byType(Sparkline), findsWidgets); // index rows
     expect(find.text('GDP growth'), findsOneWidget);
     expect(find.text('7.10%'), findsOneWidget); // PRIOR column, units %
     expect(find.text('2024'), findsWidgets); // PRIOR YR column
@@ -619,6 +703,7 @@ void main() {
     expect(find.text('M5.1'), findsOneWidget);
     expect(find.text('3 Sep'), findsWidgets); // quake date (and a G-Sec as-of)
     expect(find.text('115 km NE of Joshimath, India'), findsOneWidget);
+    await _region(tester, 'IPO');
     expect(find.text('ABC Ltd'), findsOneWidget); // IPO: its own column
     expect(find.text('1 Sep'), findsOneWidget);
     expect(find.text('Open'), findsOneWidget);
@@ -629,15 +714,15 @@ void main() {
     await tester.pumpWidget(_app(_phase3));
     await tester.tap(find.byIcon(Icons.search));
     await tester.pump();
-    await tester.enterText(find.byType(TextField), 'cry');
+    await tester.enterText(find.byType(TextField), 'flo');
     await tester.pump();
-    // Chips filtered to CRYPTO; section headers are untouched.
-    expect(find.text('FLOWS'), findsOneWidget); // header only, chip gone
-    expect(find.text('CRYPTO'), findsNWidgets(2));
-    await tester.tap(find.text('CRYPTO').first);
+    // Chips filtered to FLOWS; section headers (and region pills) untouched.
+    expect(find.text('MOOD'), findsOneWidget); // header only, chip gone
+    expect(find.text('FLOWS'), findsNWidgets(2));
+    await tester.tap(find.text('FLOWS').first);
     await tester.pumpAndSettle();
     expect(find.byType(TextField), findsNothing); // search closes on jump
-    final header = tester.getTopLeft(find.text('CRYPTO').last);
+    final header = tester.getTopLeft(find.text('FLOWS').last);
     expect(header.dy, greaterThanOrEqualTo(0));
     expect(header.dy, lessThan(600));
   });
@@ -762,6 +847,7 @@ void mergeMarketsTests() {
     expect(find.text('JNPT port calls'), findsOneWidget);
     expect(find.text('−13%'), findsOneWidget);
     expect(find.text('Rayalaseema'), findsOneWidget);
+    await _region(tester, 'BONDS'); // CB rates ride the BONDS tab
     expect(find.text('ECB deposit'), findsOneWidget);
     expect(find.text('2.25%'), findsOneWidget);
     // Sessions is always there, first, and every venue has a row.

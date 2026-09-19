@@ -317,6 +317,84 @@ class MarketsBody extends StatefulWidget {
 class _MarketsBodyState extends State<MarketsBody> {
   final _tracker = SectionTracker();
 
+  /// Region tabs (Moneycontrol's Markets top row, Tanis's order). SESSIONS and
+  /// SECTORS stay above the tabs whatever is picked; every other section
+  /// belongs to one region — INDIA unless listed in [_regionOf].
+  static const regions = [
+    'INDIA',
+    'MF',
+    'BONDS',
+    'IPO',
+    'UNLISTED',
+    'CRYPTO',
+    'US'
+  ];
+  static const _pinned = {'sessions', 'sectors'};
+  static const _regionOf = {
+    'mf': 'MF',
+    'bonds': 'BONDS',
+    'ipos': 'IPO',
+    'unlisted': 'UNLISTED',
+    'crypto': 'CRYPTO',
+    'global': 'US',
+    'odds': 'US',
+  };
+
+  /// INDIA reads like MC's page: indices, trends, OI, top movers, then the
+  /// rest in the old order; ids missing here keep their build order after.
+  static const _order = [
+    'sessions',
+    'sectors',
+    'indices',
+    'trends',
+    'oi',
+    'top',
+    'records',
+    'moves',
+    'watch',
+    'screens',
+    'flows',
+    'today',
+    'mood',
+    'calendar',
+    'results',
+    'earnings',
+    'positioning',
+    'fx',
+    'commodities',
+    'macro',
+    'shipping',
+    'monsoon',
+    'quakes',
+    'deals',
+    'insider',
+  ];
+  String _region = 'INDIA';
+
+  /// TRENDS bucket (blob key -> chip label).
+  static const _buckets = [
+    ('bullish', 'BULLISH'),
+    ('turning_bullish', 'TURNING BULLISH'),
+    ('bearish', 'BEARISH'),
+    ('turning_bearish', 'TURNING BEARISH'),
+  ];
+  String _bucket = 'bullish';
+
+  /// A symbol from a blob row -> its stock page (same lookup as SCREENS).
+  Future<void> _openSymbol(String symbol) async {
+    try {
+      final row = await Supabase.instance.client
+          .from('companies')
+          .select('id,name,nse_symbol')
+          .eq('nse_symbol', symbol)
+          .maybeSingle();
+      if (row == null || !mounted) return;
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => StockScreen(
+              company: Company.fromJson(Map<String, dynamic>.from(row)))));
+    } catch (_) {}
+  }
+
   /// SECTORS horizon: which nse_indices field tints the tiles.
   String _horizon = 'pct';
   static const _horizons = [
@@ -405,6 +483,10 @@ class _MarketsBodyState extends State<MarketsBody> {
         (data.blobs['flows'] as Map?)?.cast<String, dynamic>() ?? const {};
     final fno =
         (data.blobs['fno'] as Map?)?.cast<String, dynamic>() ?? const {};
+    // 024: universe trend state from stockanalysis.py (bullish / turning …).
+    final trends =
+        (data.blobs['trends'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final trendRows = _l(trends[_bucket]);
     final bonds = _l((data.blobs['bonds'] as Map?)?['yields']);
     final ipoBlob =
         (data.blobs['ipos'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -685,11 +767,99 @@ class _MarketsBodyState extends State<MarketsBody> {
                 ], wrap: 260, initial: 10),
               ]),
         ),
+      if (trends.isNotEmpty)
+        (
+          id: 'trends',
+          label: 'TRENDS',
+          child: LedgerSection('Trends',
+              stamp: data.blobUpdated['trends'],
+              footnote:
+                  'price vs 50 & 200-day averages · turning = flipped within 7 days · tap a row for the stock · Stock Analysis · as of ${dmy(trends['asof'])}',
+              children: [
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, children: [
+                  for (final (key, label) in _buckets)
+                    filterPill(
+                        label,
+                        _bucket == key,
+                        key.endsWith('bullish') ? green : red,
+                        () => setState(() => _bucket = key),
+                        fontSize: 9),
+                ]),
+                const SizedBox(height: 10),
+                if (trendRows.isEmpty)
+                  Text('none in this bucket',
+                      style: mono.copyWith(fontSize: 12))
+                else
+                  LedgerTable(const [
+                    LtCol('Symbol', right: false),
+                    LtCol('LTP ₹'),
+                    LtCol('Day'),
+                    LtCol('Since', right: false),
+                    LtCol('@ ₹'),
+                    LtCol('Was', right: false),
+                    LtCol('Move'),
+                  ], [
+                    for (final e in trendRows)
+                      (
+                        cells: [
+                          '${e['symbol']}',
+                          _rs(e['price']),
+                          fmtPct((e['chg'] as num?)?.toDouble()),
+                          dmy(e['since']),
+                          _rs(e['since_price']),
+                          '${e['prev'] ?? '—'}',
+                          fmtPct((e['perf'] as num?)?.toDouble()),
+                        ],
+                        tone: ((e['perf'] as num?) ?? 0) >= 0 ? 1 : -1,
+                        onTap: () => _openSymbol('${e['symbol']}'),
+                      ),
+                  ], initial: 12),
+              ]),
+        ),
+      if (fno.isNotEmpty)
+        (
+          id: 'top',
+          label: 'TOP',
+          child: LedgerSection('Top',
+              stamp: data.blobUpdated['fno'],
+              footnote:
+                  'NSE F&O universe · biggest moves and new 52-week highs / lows',
+              children: [
+                if (fno['hi52'] != null || fno['lo52'] != null)
+                  _breadthRow('52W', (fno['hi52'] as num?) ?? 0,
+                      (fno['lo52'] as num?) ?? 0,
+                      main: 'new highs / lows'),
+                for (final (key, label) in const [
+                  ('gainers', 'TOP GAINERS'),
+                  ('losers', 'TOP LOSERS')
+                ])
+                  if (_l(fno[key]).isNotEmpty) ...[
+                    _groupLabel(label),
+                    LedgerTable(const [
+                      LtCol('Symbol', right: false),
+                      LtCol('LTP ₹'),
+                      LtCol('Change'),
+                    ], [
+                      for (final r in _l(fno[key]))
+                        (
+                          cells: [
+                            '${r['symbol']}',
+                            _rs(r['ltp']),
+                            fmtPct((r['pct'] as num?)?.toDouble()),
+                          ],
+                          tone: 0,
+                          onTap: () => _openSymbol('${r['symbol']}'),
+                        ),
+                    ]),
+                  ],
+              ]),
+        ),
       if (fno.isNotEmpty || flows['pcr'] != null)
         (
-          id: 'fno',
-          label: 'F&O',
-          child: LedgerSection('F&O',
+          id: 'oi',
+          label: 'OI TRENDS',
+          child: LedgerSection('OI trends',
               stamp: data.blobUpdated['fno'],
               footnote:
                   'NIFTY options at the nearest expiry · OI = open interest, contracts · read = price × OI direction',
@@ -715,33 +885,6 @@ class _MarketsBodyState extends State<MarketsBody> {
                       min: 0.5, max: 1.5, marks: const [(1.0, '1.0')]),
                   const SizedBox(height: 6),
                 ],
-                if (fno['hi52'] != null || fno['lo52'] != null)
-                  _breadthRow('52W', (fno['hi52'] as num?) ?? 0,
-                      (fno['lo52'] as num?) ?? 0,
-                      main: 'new highs / lows'),
-                for (final (key, label) in const [
-                  ('gainers', 'TOP GAINERS'),
-                  ('losers', 'TOP LOSERS')
-                ])
-                  if (_l(fno[key]).isNotEmpty) ...[
-                    _groupLabel(label),
-                    LedgerTable(const [
-                      LtCol('Symbol', right: false),
-                      LtCol('LTP ₹'),
-                      LtCol('Change'),
-                    ], [
-                      for (final r in _l(fno[key]))
-                        (
-                          cells: [
-                            '${r['symbol']}',
-                            _rs(r['ltp']),
-                            fmtPct((r['pct'] as num?)?.toDouble()),
-                          ],
-                          tone: 0,
-                          onTap: null,
-                        ),
-                    ]),
-                  ],
                 for (final (key, label) in const [
                   ('oi_gainers', 'OI BUILD-UP'),
                   ('oi_losers', 'OI UNWINDING')
@@ -799,6 +942,22 @@ class _MarketsBodyState extends State<MarketsBody> {
             for (final t in data.kind('fx')) _TickRow(t, spark: true),
           ]),
         ),
+      // "coming" rule: MC section title, one honest line, no fake numbers.
+      (
+        id: 'unlisted',
+        label: 'UNLISTED',
+        child: LedgerSection('Unlisted shares',
+            footnote: 'pre-IPO names · source not wired yet',
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Text(
+                    'Coming. No keyless price feed for unlisted shares has passed a terms check yet; this tab fills the day one does.',
+                    style: mono.copyWith(
+                        fontSize: 12, height: 1.5, color: inkDim)),
+              ),
+            ]),
+      ),
       if (data.kind('crypto').isNotEmpty)
         (
           id: 'crypto',
@@ -1291,8 +1450,40 @@ class _MarketsBodyState extends State<MarketsBody> {
   @override
   Widget build(BuildContext context) {
     final data = widget.data;
-    final secs = _sections();
+    final all = _sections();
+    int rank(_Sec s) {
+      final i = _order.indexOf(s.id);
+      return i < 0 ? _order.length : i;
+    }
+
+    final pinned = [
+      for (final s in all)
+        if (_pinned.contains(s.id)) s
+    ];
+    final regional = [
+      for (final s in all)
+        if (!_pinned.contains(s.id) &&
+            (_regionOf[s.id] ?? 'INDIA') == _region)
+          s
+    ]..sort((a, b) => rank(a) - rank(b));
+    final secs = [...pinned, ...regional];
     _tracker.ids = [for (final s in secs) s.id];
+    final regionRow = Padding(
+      key: const Key('marketsRegions'),
+      padding: const EdgeInsets.only(top: 6, bottom: 10),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          for (final r in regions)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: filterPill(
+                  r, _region == r, green, () => setState(() => _region = r),
+                  fontSize: 10),
+            ),
+        ]),
+      ),
+    );
     final stale = _stale(data.updatedAt);
     final scroll = SingleChildScrollView(
       key: const Key('marketsScroll'),
@@ -1309,7 +1500,10 @@ class _MarketsBodyState extends State<MarketsBody> {
                   textAlign: TextAlign.center,
                   style: mono.copyWith(fontSize: 13, height: 1.6)),
             ),
-          for (final s in secs)
+          for (final s in pinned)
+            KeyedSubtree(key: _tracker.key(s.id), child: s.child),
+          regionRow,
+          for (final s in regional)
             KeyedSubtree(key: _tracker.key(s.id), child: s.child),
           const SizedBox(height: 20),
           Text(
