@@ -28,16 +28,56 @@ Map<String, KvRow> _byMetric(List<KvRow> rows) => {for (final r in rows) r.metri
 void main() {
   final meta = Map<String, dynamic>.from(_meta);
 
-  test('snapshotStats: six tiles, P/E carries forward P/E as sub', () {
+  test('snapshotStats: headline tiles, P/E carries forward P/E as sub', () {
     final tiles = snapshotStats(meta);
-    expect([for (final t in tiles) t.label],
-        ['Mkt cap', 'P/E', 'P/B', 'ROE', 'Div yield', 'Debt/Equity']);
     expect(tiles[0].value, '₹8.33L Cr');
     expect(tiles[1].value, '16.72');
     expect(tiles[1].sub, 'fwd 14.17');
-    expect(tiles[3].value, '47.7%');
+    expect(tiles[4].value, '47.7%');
     expect(snapshotStats(const {}), isEmpty);
     expect(snapshotStats(const {'f': {'pe': 20.0}}).single.label, 'P/E');
+  });
+
+  test('snapshotStats verdicts: P/E vs sector, ROE, beta, all-time high', () {
+    expect([for (final t in snapshotStats(meta)) t.label],
+        ['Mkt cap', 'P/E', 'EPS', 'P/B', 'ROE', 'Div yield', 'Debt/Equity', 'Beta']);
+    expect(snapshotStats(meta).firstWhere((t) => t.label == 'EPS').value, '₹137.66');
+    expect(snapshotStats(meta).firstWhere((t) => t.label == 'Beta').sub, 'calmer than market');
+    final tiles = snapshotStats(meta, sectorPe: 22.76, ath: 4592.25, athPct: -54.2);
+    final by = {for (final t in tiles) t.label: t};
+    expect(by['P/E']!.sub, 'fwd 14.17 · below sector 22.76');
+    expect(by['P/E']!.tone, 1);
+    expect(by['ROE']!.sub, 'strong'); // 47.7%
+    expect(by['ROE']!.tone, 1);
+    expect(by['All-time high']!.value, '₹4,592.25');
+    expect(by['All-time high']!.sub, '−54.2% from high');
+    expect(by['All-time high']!.tone, -1);
+    // above-sector P/E reads red; no sector P/E = no verdict, no tone
+    expect(snapshotStats(meta, sectorPe: 10).firstWhere((t) => t.label == 'P/E').tone, -1);
+    expect(snapshotStats(meta).firstWhere((t) => t.label == 'P/E').sub, 'fwd 14.17');
+  });
+
+  test('returnsGrid: nine cells in MC order, missing columns stay as null cells', () {
+    final g = returnsGrid(const {'ret_1w': -4.35, 'ret_1y': -33.74, 'ath_pct': -54.2});
+    expect([for (final c in g) c.$1],
+        ['1W', '1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'vs ATH']);
+    expect(g[0].$2, -4.35);
+    expect(g[1].$2, isNull);
+    expect(g[8].$2, -54.2);
+  });
+
+  test('streetStats: consensus word + count, target + upside; empty without street', () {
+    final s = streetStats(const {
+      'sa': {'analystRatings': 'Strong Buy', 'analystCount': 26, 'priceTarget': 1676, 'priceTargetChange': 33.28}
+    });
+    expect([for (final t in s) t.label], ['Consensus', 'Target']);
+    expect(s[0].value, 'STRONG BUY');
+    expect(s[0].sub, '26 analysts');
+    expect(s[0].tone, 1);
+    expect(s[1].value, '₹1,676');
+    expect(s[1].sub, '+33.3% to target');
+    expect(streetStats(const {}), isEmpty);
+    expect(streetStats(const {'sa': {'analystRatings': 'Sell'}}).single.tone, -1);
   });
 
   test('techStats: trend / RSI / MACD tiles with tone', () {
@@ -180,17 +220,15 @@ void main() {
       'sa_price_date': '2026-09-11',
     });
     final metrics = [for (final r in rows) r.metric];
+    // Phase 2: returns, the all-time high and the street moved to OVERVIEW
+    // (returnsGrid / snapshotStats / streetStats); the table keeps the rest.
     expect(metrics, [
-      '1 week', '1 year', 'All-time high', '52-wk high / low', 'Sharpe / Sortino', 'ATR',
-      'Rel. volume', 'Street', 'Graham number', 'Piotroski F', 'P/S', 'EV/EBITDA', 'ROIC',
+      'All-time high date', '52-wk high / low', 'Sharpe / Sortino', 'ATR',
+      'Rel. volume', 'Graham number', 'Piotroski F', 'P/S', 'EV/EBITDA', 'ROIC',
       'Shares YoY', 'Next results', 'Company',
     ]);
     final by = {for (final r in rows) r.metric: r};
-    expect(by['1 year']!.value, '−8.7%');
-    expect(by['1 year']!.tone, -1);
-    expect(by['All-time high']!.read, '−22.0% from high');
-    expect(by['Street']!.tone, 1);
-    expect(by['Street']!.read, '26 analysts · +33.3% to target');
+    expect(by['All-time high date']!.value, '5 Jan');
     expect(by['Piotroski F']!.value, '3/9');
     expect(by['Piotroski F']!.tone, -1);
     expect(by['P/S']!.read, 'sector PE 13.32');

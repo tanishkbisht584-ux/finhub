@@ -8,7 +8,12 @@ import 'theme.dart';
 /// One polyline, no chart package: the spec asks for a "light line chart" and
 /// a painter is 20 lines against a dependency.
 class Sparkline extends StatelessWidget {
-  const Sparkline(this.values, this.color, {super.key, this.secondary});
+  const Sparkline(this.values, this.color,
+      {super.key,
+      this.secondary,
+      this.fill = false,
+      this.baseline,
+      this.axis = false});
   final List<double> values;
   final Color color;
 
@@ -16,28 +21,72 @@ class Sparkline extends StatelessWidget {
   /// line, normalized on its own scale, drawn thin in amber.
   final List<double?>? secondary;
 
+  /// Phase 2 (stock chart): tinted area under the line, a dotted reference
+  /// line at [baseline] (previous close) and hi / lo / last labels down the
+  /// right edge like MC's price axis. [baseline] widens the scale to include it.
+  final bool fill, axis;
+  final double? baseline;
+
   @override
   Widget build(BuildContext context) => CustomPaint(
-      size: Size.infinite, painter: _SparkPainter(values, color, secondary));
+      size: Size.infinite,
+      painter: _SparkPainter(values, color, secondary,
+          fill: fill, baseline: baseline, axis: axis));
 }
 
+/// Width reserved for the axis labels when [Sparkline.axis] is on.
+const sparkAxisWidth = 48.0;
+
 class _SparkPainter extends CustomPainter {
-  _SparkPainter(this.values, this.color, [this.secondary]);
+  _SparkPainter(this.values, this.color, this.secondary,
+      {this.fill = false, this.baseline, this.axis = false});
   final List<double> values;
   final Color color;
   final List<double?>? secondary;
+  final bool fill, axis;
+  final double? baseline;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (values.length < 2) return;
-    final lo = values.reduce((a, b) => a < b ? a : b);
-    final hi = values.reduce((a, b) => a > b ? a : b);
+    final w = axis ? size.width - sparkAxisWidth : size.width;
+    var lo = values.reduce((a, b) => a < b ? a : b);
+    var hi = values.reduce((a, b) => a > b ? a : b);
+    final b = baseline;
+    if (b != null) {
+      lo = lo < b ? lo : b;
+      hi = hi > b ? hi : b;
+    }
     final span = (hi - lo) == 0 ? 1.0 : hi - lo;
+    double yOf(double v) => size.height - (v - lo) / span * size.height;
     final path = Path();
     for (var i = 0; i < values.length; i++) {
-      final x = i / (values.length - 1) * size.width;
-      final y = size.height - (values[i] - lo) / span * size.height;
+      final x = i / (values.length - 1) * w;
+      final y = yOf(values[i]);
       i == 0 ? path.moveTo(x, y) : path.lineTo(x, y);
+    }
+    if (fill) {
+      final area = Path.from(path)
+        ..lineTo(w, size.height)
+        ..lineTo(0, size.height)
+        ..close();
+      canvas.drawPath(
+          area,
+          Paint()
+            ..shader = LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [color.withValues(alpha: 0.28), color.withValues(alpha: 0.02)],
+            ).createShader(Rect.fromLTWH(0, 0, w, size.height)));
+    }
+    if (b != null) {
+      final y = yOf(b);
+      final dash = Paint()
+        ..color = inkDim
+        ..strokeWidth = 1;
+      for (var x = 0.0; x < w; x += 6) {
+        canvas.drawLine(Offset(x, y), Offset(x + 3, y), dash);
+      }
     }
     canvas.drawPath(
         path,
@@ -45,6 +94,22 @@ class _SparkPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.5
           ..color = color);
+    if (axis) {
+      void label(double v, double y, Color c) {
+        final tp = TextPainter(
+            text: TextSpan(
+                text: v >= 1000 ? v.toStringAsFixed(0) : v.toStringAsFixed(2),
+                style: mono.copyWith(fontSize: 9, color: c)),
+            textDirection: TextDirection.ltr)
+          ..layout();
+        tp.paint(canvas,
+            Offset(w + 6, (y - tp.height / 2).clamp(0, size.height - tp.height)));
+      }
+
+      label(hi, yOf(hi), inkDim);
+      label(lo, yOf(lo), inkDim);
+      label(values.last, yOf(values.last), color);
+    }
     final sec = secondary;
     if (sec == null) return;
     final vals = [for (final v in sec) if (v != null) v];
@@ -61,7 +126,7 @@ class _SparkPainter extends CustomPainter {
         pen = false;
         continue;
       }
-      final x = i / (values.length - 1) * size.width;
+      final x = i / (values.length - 1) * w;
       final y = size.height - (v - slo) / sspan * size.height;
       pen ? spath.lineTo(x, y) : spath.moveTo(x, y);
       pen = true;
@@ -76,7 +141,98 @@ class _SparkPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_SparkPainter old) =>
-      old.values != values || old.color != color || old.secondary != secondary;
+      old.values != values ||
+      old.color != color ||
+      old.secondary != secondary ||
+      old.fill != fill ||
+      old.baseline != baseline ||
+      old.axis != axis;
+}
+
+/// OHLC candles (MC's line ⇄ candle toggle). Green when close ≥ open, red
+/// below; wick = high–low. Same right-edge axis as [Sparkline] when [axis].
+class Candles extends StatelessWidget {
+  const Candles(this.opens, this.highs, this.lows, this.closes,
+      {super.key, this.baseline, this.axis = false});
+  final List<double> opens, highs, lows, closes;
+  final double? baseline;
+  final bool axis;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+      size: Size.infinite,
+      painter: _CandlePainter(opens, highs, lows, closes, baseline, axis));
+}
+
+class _CandlePainter extends CustomPainter {
+  _CandlePainter(
+      this.opens, this.highs, this.lows, this.closes, this.baseline, this.axis);
+  final List<double> opens, highs, lows, closes;
+  final double? baseline;
+  final bool axis;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final n = [opens.length, highs.length, lows.length, closes.length]
+        .reduce((a, b) => a < b ? a : b);
+    if (n < 2) return;
+    final w = axis ? size.width - sparkAxisWidth : size.width;
+    var lo = lows.take(n).reduce((a, b) => a < b ? a : b);
+    var hi = highs.take(n).reduce((a, b) => a > b ? a : b);
+    final b = baseline;
+    if (b != null) {
+      lo = lo < b ? lo : b;
+      hi = hi > b ? hi : b;
+    }
+    final span = (hi - lo) == 0 ? 1.0 : hi - lo;
+    double yOf(double v) => size.height - (v - lo) / span * size.height;
+    final slot = w / n;
+    final body = (slot * 0.6).clamp(1.0, 8.0);
+    for (var i = 0; i < n; i++) {
+      final x = slot * (i + 0.5);
+      final up = closes[i] >= opens[i];
+      final paint = Paint()
+        ..color = up ? green : red
+        ..strokeWidth = 1;
+      canvas.drawLine(Offset(x, yOf(highs[i])), Offset(x, yOf(lows[i])), paint);
+      final top = yOf(up ? closes[i] : opens[i]);
+      final bottom = yOf(up ? opens[i] : closes[i]);
+      canvas.drawRect(
+          Rect.fromLTRB(x - body / 2, top, x + body / 2,
+              bottom - top < 1 ? top + 1 : bottom),
+          paint..style = PaintingStyle.fill);
+    }
+    if (b != null) {
+      final y = yOf(b);
+      final dash = Paint()
+        ..color = inkDim
+        ..strokeWidth = 1;
+      for (var x = 0.0; x < w; x += 6) {
+        canvas.drawLine(Offset(x, y), Offset(x + 3, y), dash);
+      }
+    }
+    if (axis) {
+      void label(double v, double y, Color c) {
+        final tp = TextPainter(
+            text: TextSpan(
+                text: v >= 1000 ? v.toStringAsFixed(0) : v.toStringAsFixed(2),
+                style: mono.copyWith(fontSize: 9, color: c)),
+            textDirection: TextDirection.ltr)
+          ..layout();
+        tp.paint(canvas,
+            Offset(w + 6, (y - tp.height / 2).clamp(0, size.height - tp.height)));
+      }
+
+      label(hi, yOf(hi), inkDim);
+      label(lo, yOf(lo), inkDim);
+      label(closes[n - 1], yOf(closes[n - 1]),
+          closes[n - 1] >= opens[n - 1] ? green : red);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CandlePainter old) =>
+      old.closes != closes || old.baseline != baseline || old.axis != axis;
 }
 
 /// Vertical bars with the baseline at zero (negatives hang below). An optional

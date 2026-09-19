@@ -22,6 +22,30 @@ void main() {
     });
   }
 
+  testWidgets('Sparkline with fill, baseline and axis paints; Candles paint',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+        home: SizedBox(
+            width: 300,
+            height: 140,
+            child: Sparkline([2124.9, 2130.0, 2105.0], Color(0xFFE5484D),
+                fill: true, baseline: 2190.0, axis: true))));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const MaterialApp(
+        home: SizedBox(
+            width: 300,
+            height: 140,
+            child: Candles([2175.0, 2110.0], [2175.0, 2112.0], [2116.7, 2104.0],
+                [2124.9, 2105.0],
+                baseline: 2190.0, axis: true))));
+    expect(tester.takeException(), isNull);
+    // fewer than two bars: nothing drawn, nothing thrown
+    await tester.pumpWidget(const MaterialApp(
+        home: SizedBox(
+            width: 300, height: 140, child: Candles([1], [1], [1], [1]))));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('StackedBar skips zero segments and lists the rest',
       (tester) async {
     await tester.pumpWidget(_box(const StackedBar([

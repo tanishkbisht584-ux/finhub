@@ -32,22 +32,90 @@ String _signed(double v, {int decimals = 1}) =>
     '${v > 0 ? '+' : v < 0 ? '−' : ''}${v.abs().toStringAsFixed(decimals)}%';
 
 /// SNAPSHOT tiles: the six headline ratios.
-List<Stat> snapshotStats(Map<String, dynamic> meta) {
+/// KEY STATS tiles. With [sectorPe] (screener_metrics.sector_pe) the P/E
+/// tile carries MC's verdict ("below sector 22.8") and a tone; [ath] /
+/// [athPct] (Stock Analysis) add the all-time-high tile.
+List<Stat> snapshotStats(Map<String, dynamic> meta,
+    {double? sectorPe, double? ath, double? athPct}) {
   final f = _sub(meta, 'f');
   if (f == null || f.isEmpty) return const [];
   double? n(String k) => (f[k] as num?)?.toDouble();
   final out = <Stat>[];
-  void add(String label, double? v, String Function(double) fmt, {String? sub}) {
-    if (v != null) out.add((label: label, value: fmt(v), sub: sub, tone: 0));
+  void add(String label, double? v, String Function(double) fmt,
+      {String? sub, int tone = 0}) {
+    if (v != null) out.add((label: label, value: fmt(v), sub: sub, tone: tone));
   }
 
   add('Mkt cap', n('mcap'), fmtCrore);
-  add('P/E', n('pe'), _n2,
-      sub: n('fwd_pe') == null ? null : 'fwd ${_n2(n('fwd_pe')!)}');
+  final pe = n('pe');
+  final peSubs = [
+    if (n('fwd_pe') != null) 'fwd ${_n2(n('fwd_pe')!)}',
+    if (pe != null && sectorPe != null && sectorPe > 0)
+      '${pe < sectorPe ? 'below' : 'above'} sector ${_n2(sectorPe)}',
+  ];
+  add('P/E', pe, _n2,
+      sub: peSubs.isEmpty ? null : peSubs.join(' · '),
+      tone: pe == null || sectorPe == null || sectorPe <= 0
+          ? 0
+          : pe < sectorPe
+              ? 1
+              : -1);
+  add('EPS', n('eps'), (v) => '₹${_n2(v)}', sub: 'TTM');
   add('P/B', n('pb'), _n2);
-  add('ROE', n('roe'), _pct1);
+  final roe = n('roe');
+  add('ROE', roe, _pct1,
+      sub: roe == null ? null : roe >= 15 ? 'strong' : roe < 8 ? 'weak' : null,
+      tone: roe == null ? 0 : roe >= 15 ? 1 : roe < 8 ? -1 : 0);
   add('Div yield', n('div_yield'), _pct1);
-  add('Debt/Equity', n('de'), _n2);
+  add('Debt/Equity', n('de'), _n2,
+      tone: n('de') == null ? 0 : n('de')! > 2 ? -1 : 0);
+  add('Beta', n('beta'), _n2,
+      sub: n('beta') == null ? null : n('beta')! > 1 ? 'swings more than market' : 'calmer than market');
+  if (ath != null) {
+    add('All-time high', ath, (v) => '₹${fmtNum(v)}',
+        sub: athPct == null ? null : '${_signed(athPct)} from high',
+        tone: athPct == null ? 0 : athPct >= -5 ? 1 : athPct <= -30 ? -1 : 0);
+  }
+  return out;
+}
+
+/// RETURNS 3×3 (MC's absolute-returns block) from the Stock Analysis
+/// columns; a missing column is a null cell, not a dropped one.
+List<(String, double?)> returnsGrid(Map<String, dynamic> r) => [
+      for (final (k, l) in const [
+        ('ret_1w', '1W'), ('ret_1m', '1M'), ('ret_3m', '3M'),
+        ('ret_6m', '6M'), ('ret_ytd', 'YTD'), ('ret_1y', '1Y'),
+        ('ret_3y', '3Y'), ('ret_5y', '5Y'), ('ath_pct', 'vs ATH'),
+      ])
+        (l, (r[k] as num?)?.toDouble()),
+    ];
+
+/// ANALYSTS tiles (MC's rating circle): consensus word + count, target +
+/// upside. Empty when Stock Analysis carries no street view for the symbol.
+List<Stat> streetStats(Map<String, dynamic> r) {
+  final sa = (r['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
+  final rating = sa['analystRatings'] as String?;
+  final count = (sa['analystCount'] as num?)?.toInt();
+  final target = (sa['priceTarget'] as num?)?.toDouble();
+  final up = (sa['priceTargetChange'] as num?)?.toDouble();
+  final out = <Stat>[];
+  if (rating != null && rating.isNotEmpty) {
+    final w = rating.toLowerCase();
+    out.add((
+      label: 'Consensus',
+      value: rating.toUpperCase(),
+      sub: count == null ? null : '$count analysts',
+      tone: w.contains('buy') ? 1 : w.contains('sell') ? -1 : 0,
+    ));
+  }
+  if (target != null) {
+    out.add((
+      label: 'Target',
+      value: '₹${fmtNum(target, decimals: 0)}',
+      sub: up == null ? null : '${_signed(up)} to target',
+      tone: up == null ? 0 : up > 0 ? 1 : -1,
+    ));
+  }
   return out;
 }
 
@@ -289,19 +357,11 @@ List<KvRow> saRows(Map<String, dynamic> r) {
   int sign(double v) => v > 0 ? 1 : v < 0 ? -1 : 0;
   String rs(double v, {int decimals = 0}) => '₹${fmtNum(v, decimals: decimals)}';
 
-  for (final (k, label) in const [
-    ('ret_1w', '1 week'), ('ret_1m', '1 month'), ('ret_3m', '3 months'),
-    ('ret_6m', '6 months'), ('ret_ytd', 'This year'), ('ret_1y', '1 year'),
-    ('ret_3y', '3 years'), ('ret_5y', '5 years'),
-  ]) {
-    final v = n(k);
-    if (v != null) row(label, _signed(v), '', k == 'ret_1w' ? 'price return' : '', sign(v));
-  }
-  final ath = s('allTimeHigh'), athPct = n('ath_pct');
-  if (ath != null) {
-    row('All-time high', rs(ath), sd('allTimeHighDate') ?? '',
-        athPct == null ? '' : '${_signed(athPct)} from high',
-        athPct == null ? 0 : athPct >= -5 ? 1 : athPct <= -30 ? -1 : 0);
+  // Returns and the all-time high moved to OVERVIEW (returnsGrid /
+  // snapshotStats) in Phase 2; this table keeps the rest.
+  final ath = s('allTimeHigh');
+  if (ath != null && sd('allTimeHighDate') != null) {
+    row('All-time high date', sd('allTimeHighDate')!, '', '', 0);
   }
   if (sd('high52Date') != null || sd('low52Date') != null) {
     row('52-wk high / low', sd('high52Date') ?? '—', sd('low52Date') ?? '—', 'dates', 0);
@@ -319,13 +379,7 @@ List<KvRow> saRows(Map<String, dynamic> r) {
     row('Rel. volume', rv == null ? '—' : '${_n2(rv)}×', '',
         to == null ? '' : 'turnover ${rs(to)} Cr/day', 0);
   }
-  final rating = sa['analystRatings'] as String?, target = s('priceTarget');
-  if (rating != null || target != null) {
-    final cnt = sa['analystCount'], up = s('priceTargetChange');
-    row('Street', rating ?? '—', target == null ? '' : rs(target),
-        [if (cnt != null) '$cnt analysts', if (up != null) '${_signed(up)} to target'].join(' · '),
-        rating == null ? 0 : rating.contains('Buy') ? 1 : rating.contains('Sell') ? -1 : 0);
-  }
+  // Street view -> ANALYSTS tiles (streetStats) in Phase 2.
   final graham = s('grahamNumber'), gu = n('graham_upside');
   if (graham != null) {
     row('Graham number', rs(graham), '', gu == null ? '' : '${_signed(gu)} upside',

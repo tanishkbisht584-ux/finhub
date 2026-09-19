@@ -36,6 +36,58 @@ void main() {
   test('Quote drops the nulls Yahoo pads holidays with', () {
     final q = Quote.fromChartJson(yahoo(closes: [100.0, null, 101.5]));
     expect(q.closes, [100.0, 101.5]);
+    // no OHLC in the envelope: every bar is a doji on its close, day fields empty
+    expect(q.opens, [100.0, 101.5]);
+    expect(q.highs, q.closes);
+    expect(q.open, 100.0); // first bar's open stands in for regularMarketOpen
+    expect(q.dayHigh, isNull);
+    expect(q.volume, isNull);
+    expect(q.asOf, isNull);
+  });
+
+  test('Quote reads the day and OHLC (Phase 2 intraday envelope)', () {
+    final j = <String, dynamic>{
+      'chart': {
+        'result': [
+          {
+            'meta': <String, dynamic>{
+              'regularMarketPrice': 2105.0,
+              'chartPreviousClose': 2200.8, // 5-day-ago close on a 5d range
+              'previousClose': 2190.0, // yesterday: the header's reference
+              'fiftyTwoWeekHigh': 3350.0,
+              'fiftyTwoWeekLow': 1976.8,
+              'regularMarketDayHigh': 2177.3,
+              'regularMarketDayLow': 2101.2,
+              'regularMarketVolume': 6875428,
+              'regularMarketTime': 1789724699,
+            },
+            'timestamp': [1789703100, 1789703400, 1789703700],
+            'indicators': {
+              'quote': [
+                <String, dynamic>{
+                  'close': [2124.9, null, 2105.0],
+                  'open': [2175.0, null, 2110.0],
+                  'high': [2175.0, null, 2112.0],
+                  'low': [2116.7, null, 2104.0],
+                }
+              ]
+            },
+          }
+        ]
+      }
+    };
+    final q = Quote.fromChartJson(j);
+    expect(q.prevClose, 2190.0);
+    expect(q.dayHigh, 2177.3);
+    expect(q.dayLow, 2101.2);
+    expect(q.volume, 6875428);
+    expect(q.open, 2175.0);
+    expect(q.asOf!.isUtc, isTrue);
+    expect(q.asOf!.millisecondsSinceEpoch, 1789724699000);
+    expect(q.opens, [2175.0, 2110.0]); // null bar dropped from every series
+    expect(q.highs, [2175.0, 2112.0]);
+    expect(q.lows, [2116.7, 2104.0]);
+    expect(q.closes, [2124.9, 2105.0]);
   });
 
   test('Company parses a companies row', () {

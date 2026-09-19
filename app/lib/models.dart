@@ -332,6 +332,13 @@ class Quote {
   final List<double> closes;
   final List<DateTime> times; // aligned with closes (nulls dropped from both)
 
+  // Phase 2 (20 Sep): the day (open / high / low / volume / as-of) from the
+  // same meta, and OHLC aligned with [closes] for candles. All optional —
+  // Quote.seed and old fixtures leave them empty.
+  final double? open, dayHigh, dayLow, volume;
+  final DateTime? asOf;
+  final List<double> opens, highs, lows;
+
   factory Quote.fromChartJson(Map<String, dynamic> j) =>
       Quote._(Map<String, dynamic>.from(j['chart']['result'][0]));
 
@@ -341,33 +348,75 @@ class Quote {
       : high52 = 0,
         low52 = 0,
         closes = const [],
-        times = const [];
+        times = const [],
+        open = null,
+        dayHigh = null,
+        dayLow = null,
+        volume = null,
+        asOf = null,
+        opens = const [],
+        highs = const [],
+        lows = const [];
 
   factory Quote._(Map<String, dynamic> r) {
-    final rawCloses = r['indicators']['quote'][0]['close'] as List? ?? const [];
+    final q = Map<String, dynamic>.from(r['indicators']['quote'][0] as Map);
+    final rawCloses = q['close'] as List? ?? const [];
     final rawTimes = r['timestamp'] as List? ?? const [];
-    final closes = <double>[];
+    List rawOf(String k) => q[k] as List? ?? const [];
+    final rawO = rawOf('open'), rawH = rawOf('high'), rawL = rawOf('low');
+    final closes = <double>[], opens = <double>[], highs = <double>[];
+    final lows = <double>[];
     final times = <DateTime>[];
     for (var i = 0; i < rawCloses.length; i++) {
       final c = rawCloses[i];
       if (c == null) continue;
-      closes.add((c as num).toDouble());
+      final close = (c as num).toDouble();
+      closes.add(close);
+      // A bar with a close but no OHLC (older fixtures) degrades to a doji.
+      double bar(List l) =>
+          i < l.length && l[i] != null ? (l[i] as num).toDouble() : close;
+      opens.add(bar(rawO));
+      highs.add(bar(rawH));
+      lows.add(bar(rawL));
       times.add(i < rawTimes.length
           ? DateTime.fromMillisecondsSinceEpoch(
               (rawTimes[i] as num).toInt() * 1000)
           : DateTime.fromMillisecondsSinceEpoch(0));
     }
+    final m = Map<String, dynamic>.from(r['meta'] as Map);
+    double? d(String k) => (m[k] as num?)?.toDouble();
+    final t = (m['regularMarketTime'] as num?)?.toInt();
     return Quote._fields(
-        (r['meta']['regularMarketPrice'] as num).toDouble(),
-        (r['meta']['chartPreviousClose'] as num).toDouble(),
-        (r['meta']['fiftyTwoWeekHigh'] as num?)?.toDouble() ?? 0,
-        (r['meta']['fiftyTwoWeekLow'] as num?)?.toDouble() ?? 0,
+        d('regularMarketPrice')!,
+        // previousClose is yesterday's close on every range; chartPreviousClose
+        // is the close before the range (5 days ago on 5d).
+        d('previousClose') ?? d('chartPreviousClose')!,
+        d('fiftyTwoWeekHigh') ?? 0,
+        d('fiftyTwoWeekLow') ?? 0,
         closes,
-        times);
+        times,
+        open: d('regularMarketOpen') ?? (opens.isEmpty ? null : opens.first),
+        dayHigh: d('regularMarketDayHigh'),
+        dayLow: d('regularMarketDayLow'),
+        volume: d('regularMarketVolume'),
+        asOf: t == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(t * 1000, isUtc: true),
+        opens: opens,
+        highs: highs,
+        lows: lows);
   }
 
   Quote._fields(this.price, this.prevClose, this.high52, this.low52,
-      this.closes, this.times);
+      this.closes, this.times,
+      {this.open,
+      this.dayHigh,
+      this.dayLow,
+      this.volume,
+      this.asOf,
+      this.opens = const [],
+      this.highs = const [],
+      this.lows = const []});
 }
 
 /// One newspaper page of a deep read (spec 2026-08-16).

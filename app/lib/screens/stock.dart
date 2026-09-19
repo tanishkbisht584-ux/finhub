@@ -57,6 +57,8 @@ class _StockScreenState extends State<StockScreen> {
   String _range = '1M';
   List<double> _chartCloses = const [];
   List<DateTime> _chartTimes = const [];
+  Quote? _chartQ; // the range's own OHLC (candles); header numbers stay on 1M
+  bool _candles = false;
   bool _showPe = false;
   bool _heat = false; // statement tables: tint cells by change vs prior period
   final _tracker = SectionTracker();
@@ -64,6 +66,8 @@ class _StockScreenState extends State<StockScreen> {
   // Yahoo chart range/interval per pill; the 1M fetch doubles as the quote.
   // 3Y has no Yahoo range value — it fetches 5y and trims client-side.
   static const _ranges = {
+    '1D': ('1d', '5m'),
+    '5D': ('5d', '15m'),
     '1M': ('1mo', '1d'),
     '6M': ('6mo', '1d'),
     '1Y': ('1y', '1d'),
@@ -185,6 +189,7 @@ class _StockScreenState extends State<StockScreen> {
         setState(() {
           _chartCloses = closes;
           _chartTimes = times;
+          _chartQ = q;
         });
       }
     } catch (_) {} // pill just keeps the old line; retap retries
@@ -259,6 +264,7 @@ class _StockScreenState extends State<StockScreen> {
             if (_range == '1M') {
               _chartCloses = q.closes;
               _chartTimes = q.times;
+              _chartQ = q;
             }
           });
         })
@@ -374,11 +380,17 @@ class _StockScreenState extends State<StockScreen> {
         pe?.reversed.firstWhere((v) => v != null, orElse: () => null);
     final meta = _meta;
     final f = (meta['f'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final t = (meta['t'] as Map?)?.cast<String, dynamic>() ?? const {};
     final sectorLine =
         [f['sector'], f['industry']].whereType<String>().join(' · ');
-    final sma50 = (t['sma50'] as num?)?.toDouble();
-    final sma200 = (t['sma200'] as num?)?.toDouble();
+    final intraday = _range == '1D' || _range == '5D';
+    final cq = _chartQ;
+    final volLine = q == null
+        ? null
+        : [
+            if (q.volume != null) 'Vol ${fmtNum(q.volume!, decimals: 0)}',
+            if (q.asOf != null)
+              '${fmtDay(q.asOf!.toIso8601String())} ${hhmmIst(q.asOf!)}',
+          ].join(' · ');
     return [
       Row(children: [
         Text(widget.company.nseSymbol, style: mono.copyWith(fontSize: 12)),
@@ -403,10 +415,19 @@ class _StockScreenState extends State<StockScreen> {
                 style: mono.copyWith(fontSize: 13, color: up ? green : red)),
           ),
         ]),
-        const SizedBox(height: 16),
+        if (volLine != null && volLine.isNotEmpty)
+          Text(volLine, style: mono.copyWith(fontSize: 10, color: inkDim)),
+        const SizedBox(height: 12),
         SizedBox(
-            height: 96,
-            child: Sparkline(closes, up ? green : red, secondary: pe)),
+            height: 140,
+            child: _candles && cq != null && cq.opens.length == closes.length
+                ? Candles(cq.opens, cq.highs, cq.lows, closes,
+                    baseline: intraday ? q.prevClose : null, axis: true)
+                : Sparkline(closes, up ? green : red,
+                    secondary: pe,
+                    fill: true,
+                    baseline: intraday ? q.prevClose : null,
+                    axis: true)),
         const SizedBox(height: 10),
         if (peLatest != null)
           Padding(
@@ -418,7 +439,9 @@ class _StockScreenState extends State<StockScreen> {
         if (screener)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Row(children: [
+            child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
               for (final label in _ranges.keys)
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
@@ -426,30 +449,21 @@ class _StockScreenState extends State<StockScreen> {
                       label, _range == label, green, () => _fetchRange(label),
                       fontSize: 10),
                 ),
-              if (_fund.quarter.length >= 4)
+              filterPill('CANDLE', _candles, amber,
+                  () => setState(() => _candles = !_candles),
+                  fontSize: 10),
+              if (_fund.quarter.length >= 4) ...[
+                const SizedBox(width: 6),
                 filterPill('P/E', _showPe, amber,
                     () => setState(() => _showPe = !_showPe),
                     fontSize: 10),
-            ]),
+              ],
+            ])),
           ),
-        if (q.high52 > q.low52) ...[
-          const SizedBox(height: 12),
-          ScaleBar(q.price, min: q.low52, max: q.high52, marks: [
-            if (sma50 != null) (sma50, '50D'),
-            if (sma200 != null) (sma200, '200D'),
-          ]),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Text('52-wk  ₹${q.low52.toStringAsFixed(0)}',
-                style: mono.copyWith(fontSize: 10)),
-            Text(
-                'at ${((q.price - q.low52) / (q.high52 - q.low52) * 100).round()}%',
-                style: mono.copyWith(fontSize: 10)),
-            Text('₹${q.high52.toStringAsFixed(0)}',
-                style: mono.copyWith(fontSize: 10)),
-          ]),
-          const SizedBox(height: 6),
-        ],
-        Text('Delayed price · Yahoo Finance',
+        Text(
+            intraday
+                ? 'dotted = previous close · Delayed price · Yahoo Finance'
+                : 'Delayed price · Yahoo Finance',
             style: mono.copyWith(fontSize: 10)),
       ] else if (_quoteFailed)
         GestureDetector(
@@ -474,15 +488,121 @@ class _StockScreenState extends State<StockScreen> {
 
   Widget _stamp(String s) => Text(s, style: mono.copyWith(fontSize: 10));
 
-  /// SNAPSHOT: six headline ratios as tiles.
-  Widget _snapshot() => _onTicks((meta) {
-        final tiles = snapshotStats(meta);
-        if (tiles.isEmpty) return const SizedBox.shrink();
-        return LedgerSection('Snapshot', children: [
-          const SizedBox(height: 10),
-          StatGrid(
-              [for (final t in tiles) StatTile(t.label, t.value, sub: t.sub)]),
-        ]);
+  /// A Moneycontrol L→H range: the bar, then low · position · high under it.
+  List<Widget> _range3(String label, double lo, double hi, double v,
+      {List<(double, String)> marks = const []}) {
+    if (hi <= lo) return const [];
+    return [
+      const SizedBox(height: 10),
+      Text(label, style: monoLabel),
+      const SizedBox(height: 6),
+      ScaleBar(v, min: lo, max: hi, marks: marks),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text('L  ₹${fmtNum(lo)}', style: mono.copyWith(fontSize: 10, color: red)),
+        Text('at ${((v - lo) / (hi - lo) * 100).clamp(0, 100).round()}%',
+            style: mono.copyWith(fontSize: 10)),
+        Text('₹${fmtNum(hi)}  H',
+            style: mono.copyWith(fontSize: 10, color: green)),
+      ]),
+    ];
+  }
+
+  /// OVERVIEW (Phase 2, MC's Overview tab): the day, the ranges, key stats
+  /// with verdicts, the returns block, the street.
+  Widget _overview() => _onTicks((meta) {
+        final q = _quote;
+        final t = (meta['t'] as Map?)?.cast<String, dynamic>() ?? const {};
+        final sma50 = (t['sma50'] as num?)?.toDouble();
+        final sma200 = (t['sma200'] as num?)?.toDouble();
+        final sa = (_sa['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
+        final avgVol = (_sa['avg_vol'] as num?)?.toDouble();
+        final day = q == null
+            ? const <Widget>[]
+            : [
+                if (q.open != null) StatTile('Open', '₹${fmtNum(q.open!)}'),
+                StatTile('Prev close', '₹${fmtNum(q.prevClose)}'),
+                if (q.dayHigh != null)
+                  StatTile('Day high', '₹${fmtNum(q.dayHigh!)}'),
+                if (q.dayLow != null) StatTile('Day low', '₹${fmtNum(q.dayLow!)}'),
+                if (q.volume != null)
+                  StatTile('Volume', fmtNum(q.volume!, decimals: 0),
+                      sub: avgVol == null
+                          ? null
+                          : '${(q.volume! / avgVol).toStringAsFixed(1)}× avg'),
+                if (avgVol != null)
+                  StatTile('Avg volume', fmtNum(avgVol, decimals: 0),
+                      sub: '20-day'),
+              ];
+        final stats = snapshotStats(meta,
+            sectorPe: (_sa['sector_pe'] as num?)?.toDouble(),
+            ath: (sa['allTimeHigh'] as num?)?.toDouble(),
+            athPct: (_sa['ath_pct'] as num?)?.toDouble());
+        final returns = returnsGrid(_sa);
+        final hasReturns = returns.any((r) => r.$2 != null);
+        final street = streetStats(_sa);
+        if (day.isEmpty && stats.isEmpty && !hasReturns && street.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return LedgerSection('Overview',
+            footnote:
+                'Yahoo (delayed) · Stock Analysis (S&P Global) · sector = same-sector P/E',
+            children: [
+              if (day.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                StatGrid(day),
+              ],
+              if (q != null && q.dayHigh != null && q.dayLow != null)
+                ..._range3('DAY RANGE', q.dayLow!, q.dayHigh!, q.price),
+              if (q != null)
+                ..._range3('52-WEEK RANGE', q.low52, q.high52, q.price, marks: [
+                  if (sma50 != null) (sma50, '50D'),
+                  if (sma200 != null) (sma200, '200D'),
+                ]),
+              if (stats.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Text('KEY STATS', style: monoLabel),
+                const SizedBox(height: 6),
+                StatGrid([
+                  for (final s in stats)
+                    StatTile(s.label, s.value,
+                        sub: s.sub,
+                        color: s.tone == 0 ? null : KvTable.toneColor(s.tone)),
+                ]),
+              ],
+              if (hasReturns) ...[
+                const SizedBox(height: 14),
+                Text('RETURNS', style: monoLabel),
+                const SizedBox(height: 6),
+                for (var i = 0; i < returns.length; i += 3)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(children: [
+                      for (var j = i; j < i + 3 && j < returns.length; j++) ...[
+                        if (j > i) const SizedBox(width: 6),
+                        Expanded(
+                          child: HeatCell(returns[j].$1, returns[j].$2,
+                              scale: 20,
+                              height: 48,
+                              pctText: returns[j].$2 == null
+                                  ? '—'
+                                  : fmtPct(returns[j].$2, decimals: 1)),
+                        ),
+                      ],
+                    ]),
+                  ),
+              ],
+              if (street.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text('ANALYSTS', style: monoLabel),
+                const SizedBox(height: 6),
+                StatGrid([
+                  for (final s in street)
+                    StatTile(s.label, s.value,
+                        sub: s.sub,
+                        color: s.tone == 0 ? null : KvTable.toneColor(s.tone)),
+                ], columns: 2),
+              ],
+            ]);
       });
 
   /// FUNDAMENTALS: the full labelled table against sector medians, then the
@@ -549,9 +669,9 @@ class _StockScreenState extends State<StockScreen> {
 
   /// RETURNS: the Stock Analysis columns of this symbol's screener_metrics
   /// row — returns ladder, records, risk, street view, fair values, dates.
-  Widget _returns() => LedgerSection('Returns & street',
+  Widget _returns() => LedgerSection('Risk & street',
           action: _stamp('as of ${dmy(_sa['sa_price_date'])}'),
-          footnote: 'Returns, risk and calendar: Stock Analysis (S&P Global)',
+          footnote: 'Risk, fair values and calendar: Stock Analysis (S&P Global)',
           children: [
             const SizedBox(height: 2),
             KvTable(const ['METRIC', 'VALUE', '', 'READ'], saRows(_sa)),
@@ -658,10 +778,10 @@ class _StockScreenState extends State<StockScreen> {
         crossAxisAlignment: CrossAxisAlignment.start, children: children);
     return [
       (id: 'chart', label: 'CHART', child: col(_priceHeader())),
-      (id: 'snapshot', label: 'SNAPSHOT', child: _snapshot()),
-      (id: 'fundamentals', label: 'FUNDAMENTALS', child: _fundamentals()),
+      (id: 'overview', label: 'OVERVIEW', child: _overview()),
       (id: 'technicals', label: 'TECHNICALS', child: _technicals()),
-      if (_sa.isNotEmpty) (id: 'returns', label: 'RETURNS', child: _returns()),
+      (id: 'fundamentals', label: 'FUNDAMENTALS', child: _fundamentals()),
+      if (_sa.isNotEmpty) (id: 'returns', label: 'STREET', child: _returns()),
       if ((f.summary['pros'] as List?)?.isNotEmpty == true ||
           (f.summary['cons'] as List?)?.isNotEmpty == true)
         (
@@ -739,7 +859,7 @@ class _StockScreenState extends State<StockScreen> {
           ])
         ),
       if (_events.isNotEmpty) (id: 'tape', label: 'TAPE', child: _tape()),
-      (id: 'stories', label: 'STORIES', child: _storyList()),
+      (id: 'stories', label: 'NEWS', child: _storyList()),
     ];
   }
 
@@ -779,7 +899,7 @@ class _StockScreenState extends State<StockScreen> {
       return scaffold(
         body: ListView(padding: const EdgeInsets.all(20), children: [
           ..._priceHeader(),
-          _snapshot(),
+          _overview(),
           _fundamentals(),
           _technicals(),
           if (_events.isNotEmpty) _tape(),
