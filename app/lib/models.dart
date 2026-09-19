@@ -339,6 +339,11 @@ class Quote {
   final DateTime? asOf;
   final List<double> opens, highs, lows;
 
+  /// Phase 4: corporate actions from the same call with `events=div,splits`
+  /// (newest first). Empty unless the caller asked for events.
+  final List<({DateTime date, double amount})> dividends;
+  final List<({DateTime date, String ratio})> splits;
+
   factory Quote.fromChartJson(Map<String, dynamic> j) =>
       Quote._(Map<String, dynamic>.from(j['chart']['result'][0]));
 
@@ -356,7 +361,9 @@ class Quote {
         asOf = null,
         opens = const [],
         highs = const [],
-        lows = const [];
+        lows = const [],
+        dividends = const [],
+        splits = const [];
 
   factory Quote._(Map<String, dynamic> r) {
     final q = Map<String, dynamic>.from(r['indicators']['quote'][0] as Map);
@@ -386,6 +393,19 @@ class Quote {
     final m = Map<String, dynamic>.from(r['meta'] as Map);
     double? d(String k) => (m[k] as num?)?.toDouble();
     final t = (m['regularMarketTime'] as num?)?.toInt();
+    final ev = (r['events'] as Map?)?.cast<String, dynamic>() ?? const {};
+    DateTime at(Map e) => DateTime.fromMillisecondsSinceEpoch(
+        ((e['date'] as num?)?.toInt() ?? 0) * 1000,
+        isUtc: true);
+    final dividends = [
+      for (final e in ((ev['dividends'] as Map?)?.values ?? const []))
+        if (e is Map && e['amount'] is num)
+          (date: at(e), amount: (e['amount'] as num).toDouble())
+    ]..sort((a, b) => b.date.compareTo(a.date));
+    final splits = [
+      for (final e in ((ev['splits'] as Map?)?.values ?? const []))
+        if (e is Map) (date: at(e), ratio: '${e['splitRatio'] ?? ''}')
+    ]..sort((a, b) => b.date.compareTo(a.date));
     return Quote._fields(
         d('regularMarketPrice')!,
         // previousClose is yesterday's close on every range; chartPreviousClose
@@ -404,7 +424,9 @@ class Quote {
             : DateTime.fromMillisecondsSinceEpoch(t * 1000, isUtc: true),
         opens: opens,
         highs: highs,
-        lows: lows);
+        lows: lows,
+        dividends: dividends,
+        splits: splits);
   }
 
   Quote._fields(this.price, this.prevClose, this.high52, this.low52,
@@ -416,7 +438,9 @@ class Quote {
       this.asOf,
       this.opens = const [],
       this.highs = const [],
-      this.lows = const []});
+      this.lows = const [],
+      this.dividends = const [],
+      this.splits = const []});
 }
 
 /// One newspaper page of a deep read (spec 2026-08-16).

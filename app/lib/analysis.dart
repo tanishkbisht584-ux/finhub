@@ -735,3 +735,29 @@ MonthStats monthStats(Seasonality s, int month) {
     avg: mean(vals),
   );
 }
+
+/// DELIVERY & VOLUME (MC's block) from screener_metrics.tape — today,
+/// yesterday, 1-week and 1-month averages of volume vs delivered quantity.
+typedef DeliveryRow = ({String label, double vol, double deliv, double pct});
+
+List<DeliveryRow> deliveryRows(Map<String, dynamic>? tape) {
+  final d = [
+    for (final e in (tape?['d'] as List? ?? const []))
+      if (e is Map && e['vol'] is num && e['deliv_qty'] is num)
+        (vol: (e['vol'] as num).toDouble(), deliv: (e['deliv_qty'] as num).toDouble())
+  ];
+  if (d.isEmpty) return const [];
+  DeliveryRow avg(String label, Iterable<({double vol, double deliv})> xs) {
+    final l = xs.toList();
+    final v = l.fold(0.0, (a, x) => a + x.vol) / l.length;
+    final q = l.fold(0.0, (a, x) => a + x.deliv) / l.length;
+    return (label: label, vol: v, deliv: q, pct: v == 0 ? 0 : q / v * 100);
+  }
+
+  return [
+    avg('Today', d.take(1)),
+    if (d.length > 1) avg('Yesterday', d.skip(1).take(1)),
+    if (d.length > 2) avg('1 week avg', d.take(5)),
+    if (d.length > 5) avg('1 month avg', d.take(22)),
+  ];
+}

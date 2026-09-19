@@ -80,6 +80,22 @@ void main() {
     expect(streetStats(const {'sa': {'analystRatings': 'Sell'}}).single.tone, -1);
   });
 
+  test('deliveryRows: today / yesterday / 1-week / 1-month averages', () {
+    final d = [
+      for (var i = 0; i < 22; i++)
+        {'date': '2026-09-${18 - i}', 'vol': 100.0 * (i + 1), 'deliv_qty': 50.0 * (i + 1)}
+    ];
+    final rows = deliveryRows({'asof': '2026-09-18', 'd': d});
+    expect([for (final r in rows) r.label], ['Today', 'Yesterday', '1 week avg', '1 month avg']);
+    expect(rows[0].vol, 100); // newest first in the tape
+    expect(rows[1].vol, 200);
+    expect(rows[2].vol, 300); // mean of 100..500
+    expect(rows[3].vol, 1150); // mean of 100..2200
+    expect(rows[3].pct, 50);
+    expect(deliveryRows(null), isEmpty);
+    expect(deliveryRows({'d': [{'date': 'x', 'vol': 10, 'deliv_qty': 4}]}).single.pct, 40);
+  });
+
   test('techStats: trend / RSI / MACD tiles with tone', () {
     final tiles = techStats(meta);
     expect([for (final t in tiles) t.label], ['Trend', 'RSI-14', 'MACD']);

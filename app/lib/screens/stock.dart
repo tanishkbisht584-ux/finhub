@@ -92,7 +92,7 @@ class _StockScreenState extends State<StockScreen> {
     try {
       final r = await http.get(
         Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/'
-            '${widget.company.nseSymbol}.NS?range=max&interval=1mo'),
+            '${widget.company.nseSymbol}.NS?range=max&interval=1mo&events=div,splits'),
         headers: {'User-Agent': 'Mozilla/5.0'},
       ).timeout(const Duration(seconds: 12));
       if (!mounted || r.statusCode != 200) return;
@@ -152,7 +152,7 @@ class _StockScreenState extends State<StockScreen> {
             'industry,sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
             'ath_pct,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
-            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend')
+            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno')
         .eq('symbol', widget.company.nseSymbol)
         .maybeSingle()
         .then((self) {
@@ -542,6 +542,7 @@ class _StockScreenState extends State<StockScreen> {
         final sma200 = (t['sma200'] as num?)?.toDouble();
         final sa = (_sa['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
         final avgVol = (_sa['avg_vol'] as num?)?.toDouble();
+        final tapeD = ((_sa['tape'] as Map?)?['d'] as List?)?.firstOrNull as Map?;
         final day = q == null
             ? const <Widget>[]
             : [
@@ -558,6 +559,13 @@ class _StockScreenState extends State<StockScreen> {
                 if (avgVol != null)
                   StatTile('Avg volume', fmtNum(avgVol, decimals: 0),
                       sub: '20-day'),
+                if (tapeD?['vwap'] is num)
+                  StatTile('VWAP', '₹${fmtNum((tapeD!['vwap'] as num).toDouble())}',
+                      sub: 'NSE ${dmy(tapeD['date'])}'),
+                if (tapeD?['turnover_cr'] is num)
+                  StatTile('Turnover',
+                      '₹${fmtNum((tapeD!['turnover_cr'] as num).toDouble(), decimals: 0)} Cr',
+                      sub: '${fmtNum(((tapeD['trades'] as num?) ?? 0).toDouble(), decimals: 0)} trades'),
               ];
         final stats = snapshotStats(meta,
             sectorPe: (_sa['sector_pe'] as num?)?.toDouble(),
@@ -893,6 +901,186 @@ class _StockScreenState extends State<StockScreen> {
             children: children);
       });
 
+  /// DELIVERY (Phase 4): volume vs delivered quantity, MC's four rows, from
+  /// the NSE full bhavcopy the pipeline keeps for 22 sessions.
+  Widget _delivery() {
+    final tape = (_sa['tape'] as Map?)?.cast<String, dynamic>();
+    final rows = deliveryRows(tape);
+    if (rows.isEmpty) return const SizedBox.shrink();
+    return LedgerSection('Delivery & volume',
+        action: _stamp('NSE · ${dmy(tape!['asof'])}'),
+        footnote:
+            'delivered = shares that changed hands for keeps, not intraday · a rising delivery % on a move is conviction',
+        children: [
+          const SizedBox(height: 8),
+          for (final r in rows) ...[
+            LedgerRow(
+                lead: r.label,
+                main:
+                    'vol ${fmtNum(r.vol, decimals: 0)} · delivered ${fmtNum(r.deliv, decimals: 0)}',
+                trail: '${r.pct.toStringAsFixed(1)}%',
+                trailColor: r.pct >= 50 ? green : ink),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: PairedBar(r.vol, r.deliv, colorA: inkDim, colorB: green),
+            ),
+          ],
+        ]);
+  }
+
+  /// F&O (Phase 4): the futures ladder and the nearest-expiry chain around
+  /// the underlying, from the NSE F&O bhavcopy.
+  Widget _fno() {
+    final f = (_sa['fno'] as Map?)?.cast<String, dynamic>();
+    if (f == null) return const SizedBox.shrink();
+    final futures = [
+      for (final x in (f['futures'] as List? ?? const []))
+        Map<String, dynamic>.from(x as Map)
+    ];
+    final chain = [
+      for (final x in (f['chain'] as List? ?? const []))
+        Map<String, dynamic>.from(x as Map)
+    ];
+    final pcr = (f['pcr'] as num?)?.toDouble();
+    final und = (f['underlying'] as num?)?.toDouble();
+    String n0(Object? v) => v is num ? fmtNum(v.toDouble(), decimals: 0) : '—';
+    String signed(Object? v) => v is num
+        ? '${v >= 0 ? '+' : '−'}${fmtNum(v.abs().toDouble(), decimals: 0)}'
+        : '—';
+    return LedgerSection('F&O',
+        action: _stamp('NSE · ${dmy(f['asof'])}'),
+        footnote:
+            'end-of-day · OI = open interest, contracts · lot ${n0(futures.firstOrNull?['lot'])} · PCR = put OI ÷ call OI',
+        children: [
+          if (futures.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('FUTURES', style: monoLabel),
+            const SizedBox(height: 6),
+            LedgerTable(const [
+              LtCol('Expiry', right: false),
+              LtCol('Close ₹'),
+              LtCol('Chg'),
+              LtCol('OI'),
+              LtCol('Δ OI'),
+              LtCol('Volume'),
+            ], [
+              for (final x in futures)
+                (
+                  cells: [
+                    dmy(x['expiry']),
+                    fmtNum(((x['close'] as num?) ?? 0).toDouble()),
+                    fmtPct((x['chg_pct'] as num?)?.toDouble()),
+                    n0(x['oi']),
+                    signed(x['oi_chg']),
+                    n0(x['vol']),
+                  ],
+                  tone: ((x['chg_pct'] as num?) ?? 0) >= 0 ? 1 : -1,
+                  onTap: null,
+                ),
+            ], toneCol: 2),
+          ],
+          if (pcr != null) ...[
+            const SizedBox(height: 14),
+            Text('OPTIONS · ${dmy(f['expiry'])}', style: monoLabel),
+            const SizedBox(height: 6),
+            StatGrid([
+              StatTile('PCR', pcr.toStringAsFixed(2),
+                  color: pcr >= 1 ? green : red,
+                  sub: pcr >= 1 ? 'puts lead' : 'calls lead'),
+              StatTile('Max call OI', '₹${n0(f['max_ce'])}', sub: 'resistance'),
+              StatTile('Max put OI', '₹${n0(f['max_pe'])}', sub: 'support'),
+              StatTile('Call OI', n0(f['ce_oi'])),
+              StatTile('Put OI', n0(f['pe_oi'])),
+              if (und != null) StatTile('Underlying', '₹${fmtNum(und)}'),
+            ]),
+            if (chain.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              LedgerTable(const [
+                LtCol('Call OI'),
+                LtCol('Δ'),
+                LtCol('Call ₹'),
+                LtCol('Strike'),
+                LtCol('Put ₹'),
+                LtCol('Δ'),
+                LtCol('Put OI'),
+              ], [
+                for (final s in chain)
+                  (
+                    cells: [
+                      n0(s['ce_oi']),
+                      signed(s['ce_oi_chg']),
+                      s['ce_ltp'] is num
+                          ? fmtNum((s['ce_ltp'] as num).toDouble())
+                          : '—',
+                      n0(s['strike']),
+                      s['pe_ltp'] is num
+                          ? fmtNum((s['pe_ltp'] as num).toDouble())
+                          : '—',
+                      signed(s['pe_oi_chg']),
+                      n0(s['pe_oi']),
+                    ],
+                    tone: und != null && (s['strike'] as num) >= und ? 1 : -1,
+                    onTap: null,
+                  ),
+              ], toneCol: 3),
+            ],
+          ],
+        ]);
+  }
+
+  /// ACTIONS (Phase 4): dividend and split history from Yahoo's events on
+  /// the monthly chart call. Bonus / rights need an NSE source (not wired).
+  Widget _actions() {
+    final q = _seasonQ;
+    if (q == null || (q.dividends.isEmpty && q.splits.isEmpty)) {
+      return const SizedBox.shrink();
+    }
+    final year = DateTime.now().year;
+    final ttm = q.dividends
+        .where((d) => d.date.isAfter(DateTime.now().subtract(const Duration(days: 365))))
+        .fold(0.0, (a, d) => a + d.amount);
+    return LedgerSection('Corporate actions',
+        action: _stamp('Yahoo · per share'),
+        footnote:
+            'dividends by ex-date · splits by effective date · bonus and rights: source not wired yet',
+        children: [
+          const SizedBox(height: 8),
+          if (q.dividends.isNotEmpty) ...[
+            LedgerRow(
+                lead: 'DIVIDENDS',
+                main: '${q.dividends.length} paid on record',
+                trail: 'TTM ₹${fmtNum(ttm)}',
+                trailColor: green),
+            LedgerTable(const [
+              LtCol('Ex-date', right: false),
+              LtCol('₹ / share'),
+              LtCol('Year'),
+            ], [
+              for (final d in q.dividends)
+                (
+                  cells: [
+                    dmy(d.date.toIso8601String()),
+                    fmtNum(d.amount),
+                    '${d.date.year}',
+                  ],
+                  tone: d.date.year == year ? 1 : 0,
+                  onTap: null,
+                ),
+            ], initial: 8),
+          ],
+          if (q.splits.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text('SPLITS & BONUSES (AS RATIOS)', style: monoLabel),
+            const SizedBox(height: 6),
+            for (final s in q.splits)
+              LedgerRow(
+                  lead: dmy(s.date.toIso8601String()),
+                  main: 'ratio ${s.ratio}',
+                  trail: '${s.date.year}'),
+          ],
+        ]);
+  }
+
   /// SEASONALITY (Phase 3): year × month returns from the monthly chart.
   Widget _seasonality() {
     final sq = _seasonQ;
@@ -1220,7 +1408,13 @@ class _StockScreenState extends State<StockScreen> {
       (id: 'overview', label: 'OVERVIEW', child: _overview()),
       (id: 'insights', label: 'INSIGHTS', child: _insights()),
       (id: 'technicals', label: 'TECHNICALS', child: _technicals()),
+      if (_sa['tape'] != null)
+        (id: 'delivery', label: 'DELIVERY', child: _delivery()),
+      if (_sa['fno'] != null) (id: 'fno', label: 'F&O', child: _fno()),
       (id: 'vitals', label: 'VITALS', child: _vitals()),
+      if (_seasonQ != null &&
+          (_seasonQ!.dividends.isNotEmpty || _seasonQ!.splits.isNotEmpty))
+        (id: 'actions', label: 'ACTIONS', child: _actions()),
       (id: 'fundamentals', label: 'FUNDAMENTALS', child: _fundamentals()),
       if (_sa.isNotEmpty) (id: 'returns', label: 'STREET', child: _returns()),
       if (_seasonQ != null)

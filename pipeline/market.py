@@ -154,7 +154,7 @@ DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
               "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30),
               "participant_oi": (19, 0), "shipping": (7, 30),
-              "monsoon": (9, 0)}
+              "monsoon": (9, 0), "bhav": (19, 30)}
 
 
 def due(group, now):
@@ -2197,6 +2197,12 @@ def refresh_stockanalysis(sb, now):
     return stockanalysis.refresh_stockanalysis(sb, now)
 
 
+def refresh_bhav(sb, now):
+    """Daily 19:30 IST: NSE archive bhavcopies -> screener_metrics.tape / .fno."""
+    import bhav
+    return bhav.refresh_bhav(sb, now)
+
+
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
           ("global", refresh_global),
@@ -2213,7 +2219,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm),
           ("deep_drain", refresh_deep_drain),
           ("screener", refresh_screener), ("screener_px", refresh_screener_px),
-          ("stockanalysis", refresh_stockanalysis))
+          ("stockanalysis", refresh_stockanalysis), ("bhav", refresh_bhav))
 
 
 def refresh(sb, now=None):

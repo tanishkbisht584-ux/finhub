@@ -90,6 +90,24 @@ void main() {
     expect(q.closes, [2124.9, 2105.0]);
   });
 
+  test('Quote reads dividend and split events, newest first', () {
+    final j = yahoo();
+    (j['chart']['result'][0] as Map<String, dynamic>)['events'] = {
+      'dividends': {
+        '1768535100': {'amount': 57.0, 'date': 1768535100},
+        '1779680700': {'amount': 31.0, 'date': 1779680700},
+      },
+      'splits': {
+        '1527738300': {'date': 1527738300, 'numerator': 2.0, 'denominator': 1.0, 'splitRatio': '2:1'}
+      },
+    };
+    final q = Quote.fromChartJson(j);
+    expect([for (final d in q.dividends) d.amount], [31.0, 57.0]);
+    expect(q.dividends.first.date.isUtc, isTrue);
+    expect(q.splits.single.ratio, '2:1');
+    expect(Quote.fromChartJson(yahoo()).dividends, isEmpty);
+  });
+
   test('Company parses a companies row', () {
     final c = Company.fromJson({'id': 7, 'name': 'Reliance Industries', 'nse_symbol': 'RELIANCE'});
     expect(c.id, 7);
