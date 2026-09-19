@@ -408,6 +408,14 @@ def test_parse_shp_xml_empty_or_alien():
     assert fu.parse_shp_xml("<xml></xml>") == {}
 
 
+def test_parse_shp_xml_omitted_category_is_nil_holding():
+    # a small cap with no foreign or domestic institutions leaves those
+    # contexts out of the filing: that is 0%, not a missing split
+    xml = SHP_XBRL.replace("InstitutionsForeign_ContextI", "X").replace("InstitutionsDomestic_ContextI", "Y")
+    m = fu.parse_shp_xml(xml)
+    assert m["fiis"] == 0.0 and m["diis"] == 0.0 and m["promoters"] == 50.48
+
+
 # ---------- screening engine ----------
 
 def annuals_for_screen(**newest_extra):

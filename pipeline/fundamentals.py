@@ -501,6 +501,12 @@ def parse_shp_xml(xml):
             out[key] = round(float(by_ctx[ctx]) * 100, 2)
         except (KeyError, ValueError):
             continue
+    if "promoters" in out:
+        # a category the filing omits is a nil holding (small caps with no
+        # foreign or no domestic institutions leave the context out), not an
+        # unknown: 567 symbols sat on shp.split for that on 19 Sep 2026
+        for key in ("fiis", "diis", "govt"):
+            out.setdefault(key, 0.0)
     m = re.search(r"<[\w.-]+:NumberOfShareholders contextRef="
                   r"\"ShareholdingPattern_ContextI\"[^>]*>([^<]*)<", xml)
     if m:
