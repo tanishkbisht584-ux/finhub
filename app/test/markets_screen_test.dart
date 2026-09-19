@@ -27,7 +27,8 @@ Tick _t(String sym, String kind, String name, double price, double? pct,
 final _data = MarketsData(ticks: [
   _t('^NSEI', 'index', 'NIFTY 50', 24252, 0.08, closes: [24000, 24252]),
   _t('USDINR=X', 'fx', 'USD/INR', 95.71, -0.06, closes: [95.8, 95.71]),
-  _t('bitcoin', 'crypto', 'Bitcoin', 7395017, -0.19),
+  _t('bitcoin', 'crypto', 'Bitcoin', 7395017, -0.19,
+      prev: 7409093, meta: {'usd': 88000, 'vol_24h': 4005655243996}),
   _t('GC=F', 'commodity', 'Gold (USD/oz)', 4624.1, 2.39, cur: 'USD'),
   _t('GOLD_INR_10G', 'commodity', 'Gold (₹/10g)', 142290, 2.39,
       meta: {'derived': true, 'label': 'intl spot × USD/INR, ex-duty'}),
@@ -499,6 +500,16 @@ void main() {
     // Pick CRYPTO: pill + chip + header; India-only sections leave the page.
     await _region(tester, 'CRYPTO');
     expect(find.text('CRYPTO'), findsNWidgets(3));
+    expect(find.text('₹73,95,017'), findsOneWidget);
+    expect(find.text('−14,076'), findsOneWidget); // 24h ₹ move
+    expect(find.text('₹4,00,566 Cr'), findsOneWidget); // 24h volume
+    await tester.tap(find.text('USD'));
+    await tester.pump();
+    expect(find.text('\$88,000'), findsOneWidget);
+    expect(find.text('\$47.7B'), findsOneWidget);
+    expect(find.text('−167.50'), findsOneWidget);
+    await tester.tap(find.text('INR'));
+    await tester.pump();
     expect(find.text('₹73,95,017'), findsOneWidget);
     expect(find.text('INDICES'), findsNothing);
     expect(find.text('SECTIONS'), findsNothing);

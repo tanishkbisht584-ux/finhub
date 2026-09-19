@@ -81,8 +81,9 @@ US_STOCKS = {  # symbol: (name, index tags)
 }
 # Stablecoins ride the same call (P3, 4 Sep): USDT/INR vs USDINR is the
 # on-ramp premium Indian crypto users actually watch; peg drift + mcap in meta.
-CRYPTO = {"bitcoin": "Bitcoin", "ethereum": "Ethereum", "solana": "Solana",
-          "tether": "Tether (USDT)", "usd-coin": "USD Coin (USDC)"}
+CRYPTO = {"bitcoin": "Bitcoin", "ethereum": "Ethereum", "ripple": "XRP", "binancecoin": "BNB",
+          "solana": "Solana", "tron": "TRON", "dogecoin": "Dogecoin", "cardano": "Cardano",
+          "tether": "Tether (USDT)", "usd-coin": "USD Coin (USDC)"}  # MC's Top Cryptos (19 Sep)
 STABLE = ("tether", "usd-coin")
 
 # Direct-Growth scheme codes verified against mfapi.in/mf/search on 2026-08-22.
@@ -384,6 +385,17 @@ def refresh_crypto(sb, now):
                              "include_24hr_change": "true", "include_market_cap": "true"},
                      headers=BROWSER_UA, timeout=TIMEOUT)
     r.raise_for_status()
+    # 1c (19 Sep): 24h volume + mcap for the Crypto tab — one more free call.
+    # A miss here costs the volume column, not the quote.
+    vol = {}
+    try:
+        m = requests.get("https://api.coingecko.com/api/v3/coins/markets",
+                         params={"vs_currency": "inr", "ids": ",".join(CRYPTO)},
+                         headers=BROWSER_UA, timeout=TIMEOUT)
+        m.raise_for_status()
+        vol = {c["id"]: c for c in m.json() if isinstance(c, dict) and c.get("id")}
+    except Exception as e:
+        print(f"MARKET crypto volume: {e}")
     rows = []
     for cid, name in CRYPTO.items():
         d = r.json().get(cid) or {}
@@ -393,6 +405,10 @@ def refresh_crypto(sb, now):
         prev = round(d["inr"] / (1 + pct / 100), 2) if pct is not None else None
         p = Parsed(d["inr"], prev, round(pct, 2) if pct is not None else None, now.isoformat(), None)
         meta = {"usd": d.get("usd")}
+        v = vol.get(cid) or {}
+        if v.get("total_volume") is not None:
+            meta["vol_24h"] = v["total_volume"]      # ₹
+            meta["mcap"] = v.get("market_cap")
         if cid in STABLE and d.get("usd") is not None:
             meta["peg_pct"] = round((d["usd"] - 1) * 100, 3)   # drift from $1
             meta["usd_mcap"] = d.get("usd_market_cap")

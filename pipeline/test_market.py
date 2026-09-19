@@ -625,20 +625,28 @@ def test_refresh_bonds_writes_gsec_curve_and_rbi_rates_with_day_over_day(monkeyp
 
 def test_refresh_crypto_marks_stablecoin_peg_and_mcap(monkeypatch):
     class R:
+        def __init__(self, body):
+            self.body = body
+
         def raise_for_status(self):
             pass
 
         def json(self):
-            return {"bitcoin": {"inr": 7395017, "usd": 88000, "inr_24h_change": -0.19},
-                    "tether": {"inr": 94.47, "usd": 0.999943, "inr_24h_change": 0.11,
-                               "usd_market_cap": 183370476603.6}}
+            return self.body
 
-    monkeypatch.setattr(market.requests, "get", lambda *a, **k: R())
+    price = {"bitcoin": {"inr": 7395017, "usd": 88000, "inr_24h_change": -0.19},
+             "tether": {"inr": 94.47, "usd": 0.999943, "inr_24h_change": 0.11,
+                        "usd_market_cap": 183370476603.6}}
+    markets = [{"id": "bitcoin", "total_volume": 4005655243996, "market_cap": 156317407378926}]
+    monkeypatch.setattr(market.requests, "get",
+                        lambda url, *a, **k: R(markets if url.endswith("coins/markets") else price))
     rows = []
     monkeypatch.setattr(market, "upsert", lambda sb, r: rows.extend(r) or len(r))
     assert market.refresh_crypto(None, NOW) == 2
     by = {r["symbol"]: r for r in rows}
     assert "peg_pct" not in by["bitcoin"]["meta"]
+    assert by["bitcoin"]["meta"]["vol_24h"] == 4005655243996 and by["bitcoin"]["meta"]["mcap"] == 156317407378926
+    assert "vol_24h" not in by["tether"]["meta"]  # missing from the markets call: column blank, row kept
     assert by["tether"]["meta"]["peg_pct"] == -0.006
     assert by["tether"]["meta"]["usd_mcap"] == 183370476603.6
     assert by["tether"]["name"] == "Tether (USDT)"

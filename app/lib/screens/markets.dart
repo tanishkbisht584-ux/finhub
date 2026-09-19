@@ -392,6 +392,9 @@ class _MarketsBodyState extends State<MarketsBody> {
   String _usIndex = 'ALL';
   String _usList = 'top';
 
+  /// CRYPTO quote currency (MC's USD ⇄ INR switch). Session-only.
+  bool _cryptoUsd = false;
+
   /// A symbol from a blob row -> its stock page (same lookup as SCREENS).
   Future<void> _openSymbol(String symbol) async {
     try {
@@ -998,9 +1001,42 @@ class _MarketsBodyState extends State<MarketsBody> {
         (
           id: 'crypto',
           label: 'CRYPTO',
-          child: LedgerSection('Crypto', children: [
-            for (final t in data.kind('crypto')) _TickRow(t),
-          ]),
+          child: LedgerSection('Crypto',
+              action: Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  for (final usd in const [false, true])
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: filterPill(usd ? 'USD' : 'INR', _cryptoUsd == usd,
+                          green, () => setState(() => _cryptoUsd = usd),
+                          fontSize: 9),
+                    ),
+                ]),
+              ),
+              footnote: 'CoinGecko · 24h change and volume · stablecoin rows show the ₹ on-ramp price',
+              children: [
+                LedgerTable(const [
+                  LtCol('Coin', right: false),
+                  LtCol('Price'),
+                  LtCol('24h chg'),
+                  LtCol('24h vol'),
+                  LtCol('Chg'),
+                ], [
+                  for (final t in data.kind('crypto'))
+                    (
+                      cells: [
+                        t.name,
+                        _cryptoPx(t, _cryptoUsd),
+                        _cryptoAbs(t, _cryptoUsd),
+                        _cryptoVol(t, _cryptoUsd),
+                        fmtPct(t.changePct),
+                      ],
+                      tone: t.changePct == null ? 0 : (t.up ? 1 : -1),
+                      onTap: null,
+                    ),
+                ], initial: 8),
+              ]),
         ),
       if (worldIdx.isNotEmpty)
         (
@@ -1649,6 +1685,48 @@ double? _numOf(Object? v) => v is num
         : double.tryParse('$v'.replaceAll(',', '').trim());
 
 String _rs(Object? v) => _numOf(v) == null ? '—' : '₹${fmtNum(_numOf(v)!)}';
+
+/// Crypto cells in the picked quote currency. USD comes from meta.usd (same
+/// CoinGecko call); the USD/INR rate implied by the two prices converts the
+/// ₹ volume and the ₹ 24h move.
+double? _usdInr(Tick t) {
+  final usd = (t.meta['usd'] as num?)?.toDouble();
+  return usd == null || usd == 0 ? null : t.price / usd;
+}
+
+String _cryptoPx(Tick t, bool usd) {
+  if (!usd) return '₹${fmtNum(t.price)}';
+  final u = (t.meta['usd'] as num?)?.toDouble();
+  return u == null ? '—' : '\$${fmtNum(u, indian: false)}';
+}
+
+String _cryptoAbs(Tick t, bool usd) {
+  final prev = t.prevClose;
+  if (prev == null) return '—';
+  var d = t.price - prev;
+  final rate = _usdInr(t);
+  if (usd) {
+    if (rate == null) return '—';
+    d /= rate;
+  }
+  final s = fmtNum(d.abs(), indian: !usd);
+  return '${d >= 0 ? '+' : '−'}$s';
+}
+
+/// ₹4,00,565 Cr / \$47.5B — volumes are too long for grouped digits.
+String _cryptoVol(Tick t, bool usd) {
+  var v = (t.meta['vol_24h'] as num?)?.toDouble();
+  if (v == null) return '—';
+  if (usd) {
+    final rate = _usdInr(t);
+    if (rate == null) return '—';
+    v /= rate;
+    return v >= 1e9
+        ? '\$${(v / 1e9).toStringAsFixed(1)}B'
+        : '\$${(v / 1e6).toStringAsFixed(0)}M';
+  }
+  return '₹${fmtNum(v / 1e7, decimals: 0)} Cr';
+}
 
 String _n0(Object? v) =>
     _numOf(v) == null ? '—' : fmtNum(_numOf(v)!, decimals: 0);
