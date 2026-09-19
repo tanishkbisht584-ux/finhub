@@ -12,7 +12,7 @@ app's "Stock Analysis" footnote is true per column.
 ToS: "not allowed to republish content in full" - attributed, additive fields.
 """
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from itertools import product
 
 import requests
@@ -27,13 +27,19 @@ NUM = {"ch1w": "ret_1w", "ch1m": "ret_1m", "ch3m": "ret_3m", "ch6m": "ret_6m", "
        "sortinoRatio": "sortino", "atr": "atr", "grahamUpside": "graham_upside", "fScore": "f_score",
        "psRatio": "ps", "earningsYield": "earnings_yield", "fcfYield": "fcf_yield", "roic": "roic",
        "interestCoverage": "int_cov", "evEbitda": "ev_ebitda", "sectorPe": "sector_pe",
-       "industryPe": "industry_pe", "sharesYoY": "shares_yoy"}
+       "industryPe": "industry_pe", "sharesYoY": "shares_yoy",
+       # 024 (19 Sep): universe technicals for the Markets TRENDS section + stock page
+       "zScore": "altman_z", "ma50": "ma50", "ma200": "ma200", "rsi": "rsi",
+       "high52": "hi52", "low52": "lo52"}
 # display-only extras -> `sa` jsonb (dates, analyst, company facts)
 SA_KEYS = ("allTimeHigh", "allTimeHighDate", "high52Date", "low52Date", "grahamNumber",
            "nextEarningsDate", "lastReportDate", "exDivDate", "paymentDate", "employees",
            "founded", "website", "isin", "float", "buybackYield", "analystRatings",
            "analystCount", "priceTarget", "priceTargetChange")
-COLUMNS = ",".join(("n", "sector", "industry", "priceDate", "dollarVolume", *NUM, *SA_KEYS))
+# price/change are read for the trend state and the blob only — never stored (fundamentals.py owns price)
+COLUMNS = ",".join(("n", "sector", "industry", "priceDate", "dollarVolume", "price", "change", *NUM, *SA_KEYS))
+TURN_DAYS = 7      # "turning" = the trend flipped within the last week of closes
+TREND_CAP = 40     # rows per bucket in the trends blob
 SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9&-]{0,19}$")  # = migration 018 CHECK; one bad row fails a 100-row batch
 
 
@@ -74,12 +80,37 @@ def resolve_symbol(sym, known):
     return None
 
 
+def trend_of(r):
+    """Moneycontrol-style technical trend from the site's row: price above a
+    rising MA stack = bullish, below a falling one = bearish, anything else
+    mixed; None when the MAs are missing (young listings)."""
+    p, m50, m200 = (_num(r.get(k)) for k in ("price", "ma50", "ma200"))
+    if None in (p, m50, m200):
+        return None
+    return "bullish" if p > m50 > m200 else "bearish" if p < m50 < m200 else "mixed"
+
+
+def trend_cols(r, prev):
+    """The four trend columns: carried from the last pull while the trend
+    holds, reset (prev/since/price) the pull it flips. First sighting has no
+    prev, so it never reads as "turning"."""
+    t, prev = trend_of(r), prev or {}
+    carry = {k: prev.get(k) for k in ("trend_prev", "trend_since", "trend_price")}
+    if t is None or t == prev.get("trend"):
+        return {"trend": t if t is not None else prev.get("trend"), **carry}
+    return {"trend": t, "trend_prev": prev.get("trend"), "trend_since": r.get("priceDate"),
+            "trend_price": _num(r.get("price"))}
+
+
 def sa_rows(raw, existing, now, known=None):
     """Site row -> screener_metrics row, SA-owned columns only, sector and
     industry included (the peer keys). Every row carries the same keys (one
     PGRST102 bucket); symbols not yet in the table also get a name (a second
-    bucket) so they aren't blank."""
-    out, known = [], known or existing
+    bucket) so they aren't blank. `existing` is a set of symbols, or (024) a
+    {symbol: {trend, trend_prev, trend_since, trend_price}} dict so the trend
+    state survives across pulls."""
+    out, known = [], known or set(existing)
+    prev_of = existing.get if isinstance(existing, dict) else (lambda s: None)
     for sym, r in raw.items():
         sym = resolve_symbol(sym, known)
         if not sym:
@@ -88,11 +119,38 @@ def sa_rows(raw, existing, now, known=None):
                "turnover_cr": _num(r.get("dollarVolume"), 1e7),
                "sector": r.get("sector") or None, "industry": r.get("industry") or None,
                "sa": {k: r[k] for k in SA_KEYS if r.get(k) not in (None, "")},
-               "sa_price_date": r.get("priceDate"), "sa_at": now.isoformat()}
+               "sa_price_date": r.get("priceDate"), "sa_at": now.isoformat(),
+               **trend_cols(r, prev_of(sym))}
         if sym not in existing:
             row["name"] = r.get("n")
         out.append(row)
     return out
+
+
+def trends_blob(raw, rows, now):
+    """Markets TRENDS blob: bullish / bearish (top TREND_CAP by mcap — `raw`
+    arrives mcap-desc) and turning_bullish / turning_bearish (flipped within
+    TURN_DAYS, newest flip first). perf = move since the flip."""
+    by_sym = {r["symbol"]: r for r in rows}
+    asof = next((r.get("priceDate") for r in raw.values()), None)
+    cutoff = (date.fromisoformat(asof) - timedelta(days=TURN_DAYS)).isoformat() if asof else ""
+    buckets = {"bullish": [], "bearish": [], "turning_bullish": [], "turning_bearish": []}
+    for site_sym, r in raw.items():
+        row = by_sym.get(resolve_symbol(site_sym, by_sym) or "")
+        if not row or row["trend"] not in ("bullish", "bearish"):
+            continue
+        price, since_px = _num(r.get("price")), row["trend_price"]
+        e = {"symbol": row["symbol"], "name": r.get("n"), "price": price, "chg": _num(r.get("change")),
+             "trend": row["trend"], "prev": row["trend_prev"], "since": row["trend_since"],
+             "since_price": since_px,
+             "perf": round((price / since_px - 1) * 100, 2) if price and since_px else None}
+        if len(buckets[row["trend"]]) < TREND_CAP:
+            buckets[row["trend"]].append(e)
+        if row["trend_prev"] and (row["trend_since"] or "") >= cutoff:
+            buckets["turning_" + row["trend"]].append(e)
+    for k in ("turning_bullish", "turning_bearish"):
+        buckets[k] = sorted(buckets[k], key=lambda e: e["since"] or "", reverse=True)[:TREND_CAP]
+    return {"key": "trends", "payload": {"asof": asof, **buckets}, "updated_at": now.isoformat()}
 
 
 def sa_blobs(raw, now, ist_today):
@@ -124,10 +182,12 @@ def refresh_stockanalysis(sb, now, session=requests):
     if not pd or (mark and mark[0].get("sa_price_date") == pd):
         return 0
     raw = fetch(session=session)
-    existing = {r["symbol"] for r in sb("GET", "screener_metrics?select=symbol")}
-    known = existing | {c["nse_symbol"] for c in sb("GET", "companies?select=nse_symbol") if c.get("nse_symbol")}
-    n = upsert(sb, sa_rows(raw, existing, now, known), table="screener_metrics", key="symbol")
-    write_blobs(sb, sa_blobs(raw, now, now.astimezone(IST).date()))
+    existing = {r["symbol"]: r for r in
+                sb("GET", "screener_metrics?select=symbol,trend,trend_prev,trend_since,trend_price")}
+    known = set(existing) | {c["nse_symbol"] for c in sb("GET", "companies?select=nse_symbol") if c.get("nse_symbol")}
+    rows = sa_rows(raw, existing, now, known)
+    n = upsert(sb, rows, table="screener_metrics", key="symbol")
+    write_blobs(sb, sa_blobs(raw, now, now.astimezone(IST).date()) + [trends_blob(raw, rows, now)])
     return n
 
 

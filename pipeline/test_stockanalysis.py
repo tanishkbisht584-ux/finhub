@@ -94,7 +94,7 @@ def test_refresh_full_pull_writes_two_buckets_and_blobs(monkeypatch):
     new = next(b for b in metrics if len(b) == 1)[0]
     assert new["symbol"] == "NEWCO" and new["name"] == "NEWCO Ltd" and new["ret_1y"] is None
     (blobs,) = [rows for p, rows in posts if p == "market_blobs?on_conflict=key"]
-    assert {b["key"] for b in blobs} == {"earnings_calendar", "records"}
+    assert {b["key"] for b in blobs} == {"earnings_calendar", "records", "trends"}
 
 
 def test_sa_blobs_window_and_records():
@@ -119,7 +119,61 @@ def test_resolve_symbol(site, known, out):
 def test_columns_cover_every_mapped_id():
     cols = set(sa.COLUMNS.split(","))
     assert set(sa.NUM) <= cols and set(sa.SA_KEYS) <= cols
-    assert {"n", "sector", "industry", "priceDate", "dollarVolume"} <= cols
+    assert {"n", "sector", "industry", "priceDate", "dollarVolume", "price", "change"} <= cols
+
+
+# ---------- 024: trend state + trends blob ----------
+
+def tech(sym, price, ma50, ma200, **kw):
+    return site_row(sym, **{"price": price, "ma50": ma50, "ma200": ma200, "priceDate": "2026-09-18", "change": 1.5, **kw})
+
+
+@pytest.mark.parametrize("price,ma50,ma200,out", [
+    (110, 105, 100, "bullish"), (90, 95, 100, "bearish"), (110, 95, 100, "mixed"),
+    (100, 100, 100, "mixed"), (110, None, 100, None)])
+def test_trend_of(price, ma50, ma200, out):
+    assert sa.trend_of({"price": price, "ma50": ma50, "ma200": ma200}) == out
+
+
+def test_trend_cols_first_sighting_flip_and_hold():
+    first = sa.trend_cols(tech("A", 110, 105, 100), None)
+    assert first == {"trend": "bullish", "trend_prev": None, "trend_since": "2026-09-18", "trend_price": 110}
+    held = sa.trend_cols(tech("A", 112, 106, 101, priceDate="2026-09-19"), first)
+    assert held == first                                          # same trend: everything carried
+    flipped = sa.trend_cols(tech("A", 90, 95, 100, priceDate="2026-09-19"), held)
+    assert flipped == {"trend": "bearish", "trend_prev": "bullish", "trend_since": "2026-09-19", "trend_price": 90}
+    gone = sa.trend_cols(tech("A", 90, None, 100, priceDate="2026-09-20"), flipped)
+    assert gone == flipped                                        # MAs vanish: keep the last known state
+
+
+def test_sa_rows_carries_trend_state_from_existing_dict():
+    raw = {"A": tech("A", 90, 95, 100), "B": tech("B", 110, 105, 100)}
+    prev = {"A": {"symbol": "A", "trend": "bullish", "trend_prev": None, "trend_since": "2026-09-01", "trend_price": 100}}
+    rows = {r["symbol"]: r for r in sa.sa_rows(raw, prev, NOW)}
+    assert rows["A"]["trend"] == "bearish" and rows["A"]["trend_prev"] == "bullish"
+    assert rows["A"]["trend_since"] == "2026-09-18" and rows["A"]["trend_price"] == 90
+    assert rows["B"]["trend"] == "bullish" and rows["B"]["trend_prev"] is None and "name" in rows["B"]
+    assert rows["A"]["ma50"] == 95 and rows["A"]["altman_z"] is None and "price" not in rows["A"]
+
+
+def test_trends_blob_buckets_turning_window_and_perf():
+    raw = {"BIG": tech("BIG", 110, 105, 100), "FLIP": tech("FLIP", 90, 95, 100),
+           "OLD": tech("OLD", 80, 95, 100), "MIX": tech("MIX", 110, 95, 100), "M_M": tech("M_M", 120, 105, 100)}
+    prev = {"FLIP": {"trend": "bullish", "trend_prev": None, "trend_since": "2026-09-01", "trend_price": 100},
+            "OLD": {"trend": "bearish", "trend_prev": "bullish", "trend_since": "2026-09-01", "trend_price": 100},
+            "M&M": {"trend": "bullish", "trend_prev": "bearish", "trend_since": "2026-09-15", "trend_price": 100}}
+    rows = sa.sa_rows(raw, prev, NOW, known={"M&M"})
+    blob = sa.trends_blob(raw, rows, NOW)
+    p = blob["payload"]
+    assert blob["key"] == "trends" and p["asof"] == "2026-09-18"
+    assert [e["symbol"] for e in p["bullish"]] == ["BIG", "M&M"]       # mcap order, MIX excluded
+    assert [e["symbol"] for e in p["bearish"]] == ["FLIP", "OLD"]
+    assert [e["symbol"] for e in p["turning_bearish"]] == ["FLIP"]     # OLD flipped 17 days ago
+    assert [e["symbol"] for e in p["turning_bullish"]] == ["M&M"]
+    mm = p["turning_bullish"][0]
+    assert mm == {"symbol": "M&M", "name": "M_M Ltd", "price": 120, "chg": 1.5, "trend": "bullish",
+                  "prev": "bearish", "since": "2026-09-15", "since_price": 100, "perf": 20.0}
+    assert p["turning_bearish"][0]["perf"] == 0.0                  # flipped today: since_price is today's price
 
 
 @pytest.mark.parametrize("v,scale,out", [(None, 1, None), (True, 1, None), ("x", 1, None),
