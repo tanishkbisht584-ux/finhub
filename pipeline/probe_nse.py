@@ -244,6 +244,42 @@ def market_rows(j):
     return [r for r in _rows(j) if isinstance(r, dict)]
 
 
+def tape_shapes():
+    """20 Sep 2026 (Phase 4, MC stock page): per-symbol tape — quote header
+    (VWAP, circuits, delivery), trade_info (order book, delivery %), derivative
+    quote (futures / options per expiry), corporate actions, board meetings."""
+    def dump(label, j, n=1400):
+        print(f"
+-- {label}: type={type(j).__name__} keys={sorted(j) if isinstance(j, dict) else None}")
+        print("  ", json.dumps(j)[:n])
+
+    for sym in ("TCS", "IDEA"):
+        q = get("quote-equity", symbol=sym)
+        dump(f"quote-equity {sym}", q, 600)
+        for k in ("priceInfo", "securityInfo", "preOpenMarket", "industryInfo", "metadata"):
+            if isinstance(q, dict) and k in q:
+                print(f"   {k}:", json.dumps(q[k])[:900])
+        t = get("quote-equity", symbol=sym, section="trade_info")
+        dump(f"trade_info {sym}", t, 2500)
+    d = get("quote-derivative", symbol="TCS")
+    dump("quote-derivative TCS", d, 600)
+    if isinstance(d, dict):
+        print("   info:", json.dumps(d.get("info"))[:300], "| fut_timestamp:", d.get("fut_timestamp"), "| opt_timestamp:", d.get("opt_timestamp"))
+        st = d.get("stocks") or []
+        print("   stocks rows:", len(st))
+        kinds = {}
+        for r in st:
+            md = r.get("metadata") or {}
+            kinds.setdefault(md.get("instrumentType"), []).append(r)
+        for k, rows in kinds.items():
+            print(f"   [{k}] {len(rows)} rows; first:", json.dumps(rows[0])[:1500])
+        print("   strikePrices:", json.dumps(d.get("strikePrices"))[:300], "| expiryDates:", json.dumps(d.get("expiryDates"))[:300])
+    dump("corporate-actions TCS", get("corporate-actions", index="equities", symbol="TCS"), 1500)
+    dump("board-meetings TCS", get("corporate-board-meetings", index="equities", symbol="TCS"), 1200)
+    dump("option-chain-equities TCS", get("option-chain-equities", symbol="TCS"), 1200)
+
+
+show("tape shapes (quote / trade_info / derivative / actions / meetings)", tape_shapes)
 show("results listing 2025+ (industrial + bank)", results_listing)
 show("market shapes (F&O, 52wk, announcements)", market_shapes)
 show("SHP master + XBRL", shp)
