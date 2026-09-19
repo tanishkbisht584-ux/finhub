@@ -249,8 +249,7 @@ def tape_shapes():
     (VWAP, circuits, delivery), trade_info (order book, delivery %), derivative
     quote (futures / options per expiry), corporate actions, board meetings."""
     def dump(label, j, n=1400):
-        print(f"
--- {label}: type={type(j).__name__} keys={sorted(j) if isinstance(j, dict) else None}")
+        print(f"\n-- {label}: type={type(j).__name__} keys={sorted(j) if isinstance(j, dict) else None}")
         print("  ", json.dumps(j)[:n])
 
     for sym in ("TCS", "IDEA"):
