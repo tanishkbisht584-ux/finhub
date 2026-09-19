@@ -245,37 +245,57 @@ def market_rows(j):
 
 
 def tape_shapes():
-    """20 Sep 2026 (Phase 4, MC stock page): per-symbol tape — quote header
-    (VWAP, circuits, delivery), trade_info (order book, delivery %), derivative
-    quote (futures / options per expiry), corporate actions, board meetings."""
+    """20 Sep 2026 (Phase 4, MC stock page): per-symbol tape. Every endpoint
+    isolated (a 403 on one must not hide the rest); the quote API wants the
+    cookies the quote PAGE sets, so that page is visited first."""
     def dump(label, j, n=1400):
-        print(f"\n-- {label}: type={type(j).__name__} keys={sorted(j) if isinstance(j, dict) else None}")
+        print()
+        print(f"-- {label}: type={type(j).__name__} keys={sorted(j) if isinstance(j, dict) else None}")
         print("  ", json.dumps(j)[:n])
 
-    for sym in ("TCS", "IDEA"):
+    def attempt(label, fn):
+        try:
+            fn()
+        except Exception as e:
+            print(f"-- {label}: FAILED {str(e)[:200]}")
+
+    for url in ("https://www.nseindia.com/get-quotes/equity?symbol=TCS",
+                "https://www.nseindia.com/get-quotes/derivatives?symbol=TCS"):
+        try:
+            r = s.get(url, timeout=15)
+            print(f"[{r.status_code}] warm-up {url} cookies={sorted(s.cookies.keys())}")
+        except Exception as e:
+            print("warm-up failed", e)
+
+    def quote(sym):
         q = get("quote-equity", symbol=sym)
         dump(f"quote-equity {sym}", q, 600)
         for k in ("priceInfo", "securityInfo", "preOpenMarket", "industryInfo", "metadata"):
             if isinstance(q, dict) and k in q:
                 print(f"   {k}:", json.dumps(q[k])[:900])
-        t = get("quote-equity", symbol=sym, section="trade_info")
-        dump(f"trade_info {sym}", t, 2500)
-    d = get("quote-derivative", symbol="TCS")
-    dump("quote-derivative TCS", d, 600)
-    if isinstance(d, dict):
-        print("   info:", json.dumps(d.get("info"))[:300], "| fut_timestamp:", d.get("fut_timestamp"), "| opt_timestamp:", d.get("opt_timestamp"))
-        st = d.get("stocks") or []
-        print("   stocks rows:", len(st))
-        kinds = {}
-        for r in st:
-            md = r.get("metadata") or {}
-            kinds.setdefault(md.get("instrumentType"), []).append(r)
-        for k, rows in kinds.items():
-            print(f"   [{k}] {len(rows)} rows; first:", json.dumps(rows[0])[:1500])
-        print("   strikePrices:", json.dumps(d.get("strikePrices"))[:300], "| expiryDates:", json.dumps(d.get("expiryDates"))[:300])
-    dump("corporate-actions TCS", get("corporate-actions", index="equities", symbol="TCS"), 1500)
-    dump("board-meetings TCS", get("corporate-board-meetings", index="equities", symbol="TCS"), 1200)
-    dump("option-chain-equities TCS", get("option-chain-equities", symbol="TCS"), 1200)
+    attempt("quote-equity", lambda: quote("TCS"))
+    attempt("trade_info", lambda: dump("trade_info TCS", get("quote-equity", symbol="TCS", section="trade_info"), 2500))
+
+    def deriv():
+        d = get("quote-derivative", symbol="TCS")
+        dump("quote-derivative TCS", d, 600)
+        if isinstance(d, dict):
+            print("   info:", json.dumps(d.get("info"))[:300], "| fut_timestamp:", d.get("fut_timestamp"), "| opt_timestamp:", d.get("opt_timestamp"))
+            st = d.get("stocks") or []
+            print("   stocks rows:", len(st))
+            kinds = {}
+            for r in st:
+                md = r.get("metadata") or {}
+                kinds.setdefault(md.get("instrumentType"), []).append(r)
+            for k, rows in kinds.items():
+                print(f"   [{k}] {len(rows)} rows; first:", json.dumps(rows[0])[:1500])
+            print("   strikePrices:", json.dumps(d.get("strikePrices"))[:300], "| expiryDates:", json.dumps(d.get("expiryDates"))[:300])
+    attempt("quote-derivative", deriv)
+    attempt("corporate-actions", lambda: dump("corporate-actions TCS", get("corporate-actions", index="equities", symbol="TCS"), 1500))
+    attempt("board-meetings", lambda: dump("board-meetings TCS", get("corporate-board-meetings", index="equities", symbol="TCS"), 1200))
+    attempt("option-chain", lambda: dump("option-chain-equities TCS", get("option-chain-equities", symbol="TCS"), 1200))
+    attempt("equity-meta", lambda: dump("equity-meta-info TCS", get("equity-meta-info", symbol="TCS"), 800))
+    attempt("chart-databyindex", lambda: dump("chart-databyindex TCSEQN", get("chart-databyindex", index="TCSEQN"), 400))
 
 
 show("tape shapes (quote / trade_info / derivative / actions / meetings)", tape_shapes)
