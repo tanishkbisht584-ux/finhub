@@ -1054,15 +1054,33 @@ def test_refresh_rehydrates_last_run_from_status_row(monkeypatch):
 def test_refresh_global_prefixes_adrs_and_marks_meta_global(monkeypatch):
     spark = {s: {"close": [100.0, 101.0], "timestamp": [1, 2]}
              for s in list(market.GLOBAL_INDICES) + list(market.ADRS)}
-    monkeypatch.setattr(market, "fetch_spark", lambda syms, rng="5d": spark)
+    # US batch: a 1y ramp (very bullish) for NVDA, nothing for the rest
+    us = {"NVDA": {"close": [100.0 + i for i in range(250)], "timestamp": list(range(250))}}
+    calls = []
+    monkeypatch.setattr(market, "fetch_spark",
+                        lambda syms, rng="5d": calls.append((len(syms), rng)) or (us if rng == "1y" else spark))
     rows = []
     monkeypatch.setattr(market, "upsert", lambda sb, r: rows.extend(r) or len(r))
-    assert market.refresh_global(None, NOW) == len(spark)
+    assert market.refresh_global(None, NOW) == len(spark) + 1
+    assert calls == [(len(spark), "1mo"), (len(market.US_STOCKS), "1y")]
     by = {r["symbol"]: r for r in rows}
     assert by["^GSPC"]["kind"] == "index" and by["^GSPC"]["meta"] == {"global": True}
     # bare "INFY" is the NSE equity row (quotes PK) - the ADR must never use it
     assert "INFY" not in by and by["ADR:INFY"]["meta"] == {"global": True, "adr": True}
     assert by["ADR:INFY"]["kind"] == "index" and by["ADR:INFY"]["currency"] == "USD"
+    # US stock: prefixed, USD, 22-close sparkline, trend word + 52w levels
+    nv = by["US:NVDA"]
+    assert "NVDA" not in by and nv["kind"] == "index" and nv["currency"] == "USD"
+    assert len(nv["closes"]) == 22 and nv["price"] == 349.0 and nv["change_pct"] == 0.29
+    assert nv["meta"] == {"global": True, "us": True, "idx": ["DOW", "NASDAQ"], "trend": "VERY BULLISH",
+                          "hi52": 349.0, "lo52": 100.0}
+
+
+@pytest.mark.parametrize("c,m50,m200,out", [
+    (110, 105, 100, "VERY BULLISH"), (110, 100, 105, "BULLISH"), (102, 105, 100, "NEUTRAL"),
+    (90, 95, 100, "VERY BEARISH"), (90, 100, 95, "BEARISH"), (90, None, 95, None)])
+def test_trend_word(c, m50, m200, out):
+    assert market.trend_word({"close": c, "sma50": m50, "sma200": m200}) == out
 
 
 def test_refresh_macro_scales_trade_series(monkeypatch):

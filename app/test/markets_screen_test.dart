@@ -397,6 +397,30 @@ final _phase3 = MarketsData(
         cur: '', closes: [7700, 7716], meta: {'global': true}),
     _t('ADR:INFY', 'index', 'Infosys ADR (NYSE)', 11.75, -2.77,
         cur: 'USD', meta: {'global': true, 'adr': true}),
+    _t('US:NVDA', 'index', 'Nvidia', 222.25, 1.33,
+        cur: 'USD',
+        prev: 219.34,
+        closes: [200, 222.25],
+        meta: {
+          'global': true,
+          'us': true,
+          'idx': ['DOW', 'NASDAQ'],
+          'trend': 'VERY BULLISH',
+          'hi52': 224.0,
+          'lo52': 86.6
+        }),
+    _t('US:CAT', 'index', 'Caterpillar', 808.99, -1.30,
+        cur: 'USD',
+        prev: 819.64,
+        closes: [790, 808.99],
+        meta: {
+          'global': true,
+          'us': true,
+          'idx': ['DOW'],
+          'trend': 'NEUTRAL',
+          'hi52': 900.0,
+          'lo52': 600.0
+        }),
     _t('MF:122639', 'mf', 'Parag Parikh Flexi Cap Fund', 90.8656, 0.14, meta: {
       'scheme_code': 122639,
       'ret_1y': -1.2,
@@ -610,6 +634,31 @@ void main() {
     expect(find.text('INDIA ADRS (NYSE)'), findsOneWidget);
     expect(find.text('ODDS'), findsNWidgets(2));
     expect(find.textContaining('Fed cut 25 bps'), findsOneWidget);
+    // US stocks are their own MARKET MOVERS table, not GLOBAL rows.
+    expect(find.text('MARKET MOVERS'), findsNWidgets(2));
+    expect(find.text('Nvidia'), findsOneWidget);
+    expect(find.text('VERY BULLISH'), findsOneWidget);
+    expect(find.text('222.25'), findsOneWidget);
+    expect(find.text('+2.91'), findsOneWidget); // Chg \$ from prev close
+    expect(find.text('▲1.33%'), findsOneWidget);
+    expect(find.text('Caterpillar'), findsOneWidget);
+    await tester.ensureVisible(find.text('NASDAQ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('NASDAQ'));
+    await tester.pump();
+    expect(find.text('Caterpillar'), findsNothing); // Dow-only name filtered
+    await tester.tap(find.text('ALL'));
+    await tester.pump();
+    await tester.tap(find.text('52W HIGH'));
+    await tester.pump();
+    expect(find.text('Nvidia'), findsOneWidget); // within 2% of its high
+    expect(find.text('Caterpillar'), findsNothing);
+    await tester.tap(find.text('LOSERS'));
+    await tester.pump();
+    expect(
+        tester.getTopLeft(find.text('Caterpillar')).dy <
+            tester.getTopLeft(find.text('Nvidia')).dy,
+        isTrue);
     await _region(tester, 'INDIA');
     expect(find.text('4.33%'), findsOneWidget);
     expect(find.text('-0.25'), findsOneWidget);

@@ -57,6 +57,28 @@ GLOBAL_INDICES = {"^GSPC": "S&P 500", "^IXIC": "Nasdaq", "^DJI": "Dow Jones",
                   "^VIX": "US VIX", "DX-Y.NYB": "Dollar Index"}
 ADRS = {"INFY": "Infosys ADR (NYSE)", "HDB": "HDFC Bank ADR (NYSE)",
         "IBN": "ICICI Bank ADR (NYSE)", "WIT": "Wipro ADR (NYSE)"}
+# US stocks (19 Sep, Moneycontrol Markets > US Stocks): Dow 30 (2025 roster,
+# static snapshot) + the Nasdaq-100 heavyweights not in it, mcap-ish order.
+# Same 15-min global group, 1y spark so the row carries an MA-stack trend
+# word like MC ("VERY BULLISH" … "VERY BEARISH") and 52-week levels.
+# ponytail: static roster — a reshuffle is a dict edit, not a fetch.
+US_STOCKS = {  # symbol: (name, index tags)
+    "NVDA": ("Nvidia", "DOW NASDAQ"), "MSFT": ("Microsoft", "DOW NASDAQ"),
+    "AAPL": ("Apple", "DOW NASDAQ"), "AMZN": ("Amazon", "DOW NASDAQ"),
+    "GOOGL": ("Alphabet", "NASDAQ"), "META": ("Meta", "NASDAQ"), "AVGO": ("Broadcom", "NASDAQ"),
+    "TSLA": ("Tesla", "NASDAQ"), "WMT": ("Walmart", "DOW"), "JPM": ("JPMorgan", "DOW"),
+    "V": ("Visa", "DOW"), "UNH": ("UnitedHealth", "DOW"), "COST": ("Costco", "NASDAQ"),
+    "NFLX": ("Netflix", "NASDAQ"), "JNJ": ("Johnson & Johnson", "DOW"), "PG": ("Procter & Gamble", "DOW"),
+    "HD": ("Home Depot", "DOW"), "AMD": ("AMD", "NASDAQ"), "KO": ("Coca-Cola", "DOW"),
+    "CSCO": ("Cisco", "DOW NASDAQ"), "CRM": ("Salesforce", "DOW"), "CVX": ("Chevron", "DOW"),
+    "PLTR": ("Palantir", "NASDAQ"), "IBM": ("IBM", "DOW"), "MRK": ("Merck", "DOW"),
+    "PEP": ("PepsiCo", "NASDAQ"), "ADBE": ("Adobe", "NASDAQ"), "QCOM": ("Qualcomm", "NASDAQ"),
+    "MCD": ("McDonald's", "DOW"), "AXP": ("American Express", "DOW"), "GS": ("Goldman Sachs", "DOW"),
+    "CAT": ("Caterpillar", "DOW"), "INTC": ("Intel", "NASDAQ"), "DIS": ("Disney", "DOW"),
+    "HON": ("Honeywell", "DOW NASDAQ"), "AMGN": ("Amgen", "DOW NASDAQ"), "BA": ("Boeing", "DOW"),
+    "SHW": ("Sherwin-Williams", "DOW"), "TRV": ("Travelers", "DOW"), "MMM": ("3M", "DOW"),
+    "NKE": ("Nike", "DOW"), "VZ": ("Verizon", "DOW"),
+}
 # Stablecoins ride the same call (P3, 4 Sep): USDT/INR vs USDINR is the
 # on-ramp premium Indian crypto users actually watch; peg drift + mcap in meta.
 CRYPTO = {"bitcoin": "Bitcoin", "ethereum": "Ethereum", "solana": "Solana",
@@ -248,6 +270,33 @@ def refresh_indices(sb, now):
     return upsert(sb, rows)
 
 
+def trend_word(t):
+    """Moneycontrol's five-step read of the MA stack from a compute_technicals
+    dict: above a rising stack = VERY BULLISH, above both but stack crossed
+    down = BULLISH, split = NEUTRAL, and the mirror below."""
+    c, m50, m200 = t.get("close"), t.get("sma50"), t.get("sma200")
+    if None in (c, m50, m200):
+        return None
+    if c > m50 and c > m200:
+        return "VERY BULLISH" if m50 > m200 else "BULLISH"
+    if c < m50 and c < m200:
+        return "VERY BEARISH" if m50 < m200 else "BEARISH"
+    return "NEUTRAL"
+
+
+def us_row(sym, name, tags, entry, now):
+    """One US stock: 1y spark -> quote + 22-close sparkline + trend word /
+    52-week levels in meta. `US:` prefix keeps clear of NSE symbols (V, BA…)."""
+    p = parse_spark(entry)
+    if not p:
+        return None
+    t = compute_technicals(p.closes, None)
+    p = Parsed(p.price, p.prev, p.change_pct, p.as_of, p.closes[-22:])
+    return row(f"US:{sym}", "index", name, p, now, currency="USD", closes=True,
+               meta={"global": True, "us": True, "idx": tags.split(), "trend": trend_word(t),
+                     "hi52": t.get("hi52"), "lo52": t.get("lo52")})
+
+
 def refresh_global(sb, now):
     data = fetch_spark(list(GLOBAL_INDICES) + list(ADRS), rng="1mo")
     rows = [row(s, "index", n, p, now, currency="", closes=True, meta={"global": True})
@@ -255,6 +304,8 @@ def refresh_global(sb, now):
     rows += [row(f"ADR:{s}", "index", n, p, now, currency="USD", closes=True,
                  meta={"global": True, "adr": True})
              for s, n in ADRS.items() if (p := parse_spark(data.get(s, {})))]
+    us = fetch_spark(list(US_STOCKS), rng="1y")
+    rows += [r for s, (n, tags) in US_STOCKS.items() if (r := us_row(s, n, tags, us.get(s, {}), now))]
     return upsert(sb, rows)
 
 

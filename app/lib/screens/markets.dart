@@ -337,6 +337,7 @@ class _MarketsBodyState extends State<MarketsBody> {
     'unlisted': 'UNLISTED',
     'crypto': 'CRYPTO',
     'global': 'US',
+    'movers': 'US',
     'odds': 'US',
   };
 
@@ -379,6 +380,17 @@ class _MarketsBodyState extends State<MarketsBody> {
     ('turning_bearish', 'TURNING BEARISH'),
   ];
   String _bucket = 'bullish';
+
+  /// US MARKET MOVERS: index filter + list (MC's chips).
+  static const _usIdx = ['ALL', 'DOW', 'NASDAQ'];
+  static const _usLists = [
+    ('top', 'TOP'),
+    ('gainers', 'GAINERS'),
+    ('losers', 'LOSERS'),
+    ('hi52', '52W HIGH'),
+  ];
+  String _usIndex = 'ALL';
+  String _usList = 'top';
 
   /// A symbol from a blob row -> its stock page (same lookup as SCREENS).
   Future<void> _openSymbol(String symbol) async {
@@ -453,8 +465,32 @@ class _MarketsBodyState extends State<MarketsBody> {
     ];
     final worldIdx = [
       for (final t in allIdx)
-        if (t.meta['global'] == true && t.meta['adr'] != true) t
+        if (t.meta['global'] == true &&
+            t.meta['adr'] != true &&
+            t.meta['us'] != true)
+          t
     ];
+    // US stocks (market.py US_STOCKS): roster order = mcap-ish = MC's "top".
+    final usAll = [
+      for (final t in allIdx)
+        if (t.meta['us'] == true &&
+            (_usIndex == 'ALL' ||
+                ((t.meta['idx'] as List?) ?? const []).contains(_usIndex)))
+          t
+    ];
+    final usRows = switch (_usList) {
+      'gainers' => [...usAll]
+        ..sort((a, b) => (b.changePct ?? 0).compareTo(a.changePct ?? 0)),
+      'losers' => [...usAll]
+        ..sort((a, b) => (a.changePct ?? 0).compareTo(b.changePct ?? 0)),
+      'hi52' => [
+          for (final t in usAll)
+            if (t.meta['hi52'] is num &&
+                t.price >= (t.meta['hi52'] as num) * 0.98)
+              t
+        ],
+      _ => usAll,
+    };
     final adrs = [
       for (final t in allIdx)
         if (t.meta['adr'] == true) t
@@ -978,6 +1014,53 @@ class _MarketsBodyState extends State<MarketsBody> {
               for (final t in adrs) _TickRow(t, spark: t.closes.length > 1),
             ],
           ]),
+        ),
+      if (usAll.isNotEmpty || _usIndex != 'ALL')
+        (
+          id: 'movers',
+          label: 'MARKET MOVERS',
+          child: LedgerSection('Market movers',
+              footnote:
+                  'Dow 30 + Nasdaq heavyweights · trend = price vs 50 & 200-day averages · Yahoo · delayed',
+              children: [
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, children: [
+                  for (final i in _usIdx)
+                    filterPill(i, _usIndex == i, amber,
+                        () => setState(() => _usIndex = i),
+                        fontSize: 9),
+                  for (final (key, label) in _usLists)
+                    filterPill(label, _usList == key, green,
+                        () => setState(() => _usList = key),
+                        fontSize: 9),
+                ]),
+                const SizedBox(height: 10),
+                if (usRows.isEmpty)
+                  Text('none right now', style: mono.copyWith(fontSize: 12))
+                else
+                  LedgerTable(const [
+                    LtCol('Company', right: false, text: true),
+                    LtCol('Trend', right: false),
+                    LtCol('Value \$'),
+                    LtCol('Chg \$'),
+                    LtCol('Chg'),
+                  ], [
+                    for (final t in usRows)
+                      (
+                        cells: [
+                          t.name,
+                          '${t.meta['trend'] ?? '—'}',
+                          fmtNum(t.price, indian: false, decimals: 2),
+                          t.prevClose == null
+                              ? '—'
+                              : '${t.price - t.prevClose! >= 0 ? '+' : '−'}${(t.price - t.prevClose!).abs().toStringAsFixed(2)}',
+                          fmtPct(t.changePct),
+                        ],
+                        tone: t.changePct == null ? 0 : (t.up ? 1 : -1),
+                        onTap: null,
+                      ),
+                  ], wrap: 140, initial: 15),
+              ]),
         ),
       if (predictions.isNotEmpty)
         (
