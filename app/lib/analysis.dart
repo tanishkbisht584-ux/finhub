@@ -452,3 +452,286 @@ List<KvRow> saRows(Map<String, dynamic> r) {
 /// backfills it within ~5 min).
 bool needsAnalysisRequest(Map<String, dynamic> meta) =>
     meta['f'] == null && meta['t'] == null;
+
+// ---------------------------------------------------------------------------
+// Phase 3 (20 Sep): INSIGHTS · VITALS · TECHNICALS · SEASONALITY — pure
+// functions over data the app already holds (quotes.meta, screener_metrics,
+// fundamentals summary/annual, a Yahoo monthly chart). Nothing here fetches.
+// ---------------------------------------------------------------------------
+
+/// One scored dimension: label, points earned, points possible, one-line read.
+typedef ScorePart = ({String label, int points, int max, String read});
+
+/// FinSwipe score: 0–100, normalised over the dimensions we can actually
+/// measure for this stock (a missing dimension shrinks the denominator rather
+/// than dragging the score). Transparent on purpose — the section prints
+/// every part. Weights: strength 30 · growth 25 · valuation 25 · trend 20.
+typedef ScoreCard = ({int score, String verdict, List<ScorePart> parts});
+
+ScoreCard? finScore(Map<String, dynamic> meta,
+    {Map<String, dynamic> sa = const {}, Map<String, dynamic> summary = const {}}) {
+  final f = _sub(meta, 'f') ?? const {};
+  final t = _sub(meta, 't') ?? const {};
+  double? fn(String k) => (f[k] as num?)?.toDouble();
+  double? sn(String k) => (sa[k] as num?)?.toDouble();
+  final parts = <ScorePart>[];
+
+  // Financial strength: Piotroski (0–9 → 0–20) + leverage (0–10).
+  final fs = sn('f_score'), de = fn('de'), roe = fn('roe');
+  if (fs != null || roe != null) {
+    final base = fs != null ? (fs / 9 * 20).round() : roe! >= 15 ? 14 : roe >= 8 ? 8 : 0;
+    final lev = de == null ? 5 : de < 1 ? 10 : de < 2 ? 5 : 0;
+    parts.add((
+      label: 'Financial strength',
+      points: base + lev,
+      max: 30,
+      read: [
+        if (fs != null) 'Piotroski ${fs.round()}/9',
+        if (de != null) 'D/E ${_n2(de)}',
+        if (fs == null && roe != null) 'ROE ${_pct1(roe)}',
+      ].join(' · '),
+    ));
+  }
+  // Growth: 3-year profit CAGR, else the quarterly earnings growth Yahoo gives.
+  final cagr = (summary['cagr'] as Map?)?.cast<String, dynamic>();
+  final profit3 = ((cagr?['profit'] as Map?)?['y3'] as num?)?.toDouble();
+  final g = profit3 ?? fn('earn_growth');
+  if (g != null) {
+    parts.add((
+      label: 'Growth',
+      points: g >= 20 ? 25 : g >= 10 ? 15 : g >= 0 ? 8 : 0,
+      max: 25,
+      read: profit3 != null ? 'profit ${_signed(g)} CAGR 3y' : 'earnings ${_signed(g)} YoY',
+    ));
+  }
+  // Valuation: P/E against the sector's.
+  final pe = fn('pe'), spe = sn('sector_pe');
+  if (pe != null && spe != null && spe > 0) {
+    final r = pe / spe;
+    parts.add((
+      label: 'Valuation',
+      points: r <= 0.8 ? 25 : r <= 1 ? 18 : r <= 1.3 ? 10 : 3,
+      max: 25,
+      read: 'P/E ${_n2(pe)} vs sector ${_n2(spe)}',
+    ));
+  }
+  // Trend: the MA-stack read the pipeline already computes.
+  final trend = t['trend'] as String?;
+  if (trend != null) {
+    parts.add((
+      label: 'Trend',
+      points: trend == 'up' ? 20 : trend == 'mixed' ? 10 : 0,
+      max: 20,
+      read: '$trend · ${t['above200'] == true ? 'above' : 'below'} 200-DMA',
+    ));
+  }
+  if (parts.isEmpty) return null;
+  final max = parts.fold(0, (a, p) => a + p.max);
+  final pts = parts.fold(0, (a, p) => a + p.points);
+  final score = (pts / max * 100).round();
+  String grade(String label, List<String> words) {
+    final p = parts.where((x) => x.label == label).firstOrNull;
+    if (p == null) return '';
+    final r = p.points / p.max;
+    return r >= 0.75 ? words[0] : r >= 0.4 ? words[1] : words[2];
+  }
+
+  final verdict = [
+    grade('Financial strength', ['Strong financials', 'Fair financials', 'Weak financials']),
+    grade('Growth', ['high growth', 'moderate growth', 'low growth']),
+    grade('Valuation', ['attractive valuation', 'reasonable valuation', 'expensive valuation']),
+    grade('Trend', ['uptrend', 'sideways', 'downtrend']),
+  ].where((s) => s.isNotEmpty).join(', ');
+  return (score: score, verdict: verdict, parts: parts);
+}
+
+/// SWOT: strengths / weaknesses from the pipeline's pros / cons plus a few
+/// rule reads; opportunities and threats from the street, the tape and the
+/// chart. Each list is short sentences ready to print.
+typedef Swot = ({List<String> s, List<String> w, List<String> o, List<String> t});
+
+Swot swot(Map<String, dynamic> meta,
+    {Map<String, dynamic> sa = const {}, Map<String, dynamic> summary = const {}}) {
+  final f = _sub(meta, 'f') ?? const {};
+  final t = _sub(meta, 't') ?? const {};
+  final saj = (sa['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
+  double? fn(String k) => (f[k] as num?)?.toDouble();
+  double? tn(String k) => (t[k] as num?)?.toDouble();
+  double? sn(String k) => (sa[k] as num?)?.toDouble();
+  final s = [for (final p in (summary['pros'] as List? ?? const [])) '$p'];
+  final w = [for (final c in (summary['cons'] as List? ?? const [])) '$c'];
+  final o = <String>[], th = <String>[];
+  final de = fn('de');
+  if (de != null && de < 0.15 && !s.any((x) => x.toLowerCase().contains('debt'))) {
+    s.add('Company is almost debt-free');
+  }
+  final roe = fn('roe');
+  if (roe != null && roe >= 20 && !s.any((x) => x.contains('ROE'))) {
+    s.add('ROE of ${_pct1(roe)} is well above the 15% bar');
+  }
+  final up = (saj['priceTargetChange'] as num?)?.toDouble();
+  final target = (saj['priceTarget'] as num?)?.toDouble();
+  if (up != null && up >= 15 && target != null) {
+    o.add('Street target ₹${fmtNum(target, decimals: 0)} is ${_signed(up)} away');
+  }
+  final ath = sn('ath_pct'), fs = sn('f_score');
+  if (ath != null && ath <= -30 && fs != null && fs >= 6) {
+    o.add('${_signed(ath)} from its all-time high with Piotroski ${fs.round()}/9');
+  }
+  final pe = fn('pe'), spe = sn('sector_pe');
+  if (pe != null && spe != null && spe > 0 && pe <= spe * 0.8) {
+    o.add('P/E ${_n2(pe)} is a discount to the sector\'s ${_n2(spe)}');
+  }
+  final rsi = tn('rsi14');
+  if (rsi != null && rsi >= 70) th.add('RSI ${rsi.round()} — overbought');
+  if (t['above200'] == false) th.add('Trading below its 200-day average');
+  if (de != null && de > 2) th.add('Debt/Equity ${_n2(de)} — heavily leveraged');
+  final promo = fn('promoter_pct');
+  if (promo != null && promo < 40) th.add('Promoter holding only ${_pct1(promo)}');
+  final dil = sn('shares_yoy');
+  if (dil != null && dil > 5) th.add('Share count up ${_signed(dil)} in a year — dilution');
+  return (s: s, w: w, o: o, t: th);
+}
+
+/// ESSENTIALS: ten yes/no checks (MC's "% pass"); null = not measurable here.
+List<(String, bool?)> essentials(Map<String, dynamic> meta,
+    {Map<String, dynamic> sa = const {}, Map<String, dynamic> summary = const {}}) {
+  final f = _sub(meta, 'f') ?? const {};
+  final t = _sub(meta, 't') ?? const {};
+  double? fn(String k) => (f[k] as num?)?.toDouble();
+  double? sn(String k) => (sa[k] as num?)?.toDouble();
+  final cagr = (summary['cagr'] as Map?)?.cast<String, dynamic>();
+  double? c3(String k) => ((cagr?[k] as Map?)?['y3'] as num?)?.toDouble();
+  bool? gt(double? v, double bar) => v == null ? null : v > bar;
+  bool? lt(double? v, double bar) => v == null ? null : v < bar;
+  final pe = fn('pe'), spe = sn('sector_pe');
+  return [
+    ('ROE above 15%', gt(fn('roe'), 15)),
+    ('ROCE above 15%', gt(fn('roce') ?? (summary['roce'] as num?)?.toDouble(), 15)),
+    ('Debt/Equity below 1', lt(fn('de'), 1)),
+    ('Profit growing >10% a year (3y)', gt(c3('profit'), 10)),
+    ('Sales growing >10% a year (3y)', gt(c3('sales'), 10)),
+    ('Promoters hold over 50%', gt(fn('promoter_pct'), 50)),
+    ('P/E below the sector\'s', pe == null || spe == null || spe <= 0 ? null : pe < spe),
+    ('Piotroski 6 or better', gt(sn('f_score'), 5.5)),
+    ('Above its 200-day average', t['above200'] as bool?),
+    ('Pays a dividend', gt(fn('div_yield'), 0)),
+  ];
+}
+
+/// DuPont from the latest annual row (₹ Cr): ROE = margin × turnover ×
+/// leverage. Any missing input leaves that factor (and the product) null.
+typedef DuPont = ({double? npm, double? at, double? em, double? roe});
+
+DuPont dupont(Map<String, dynamic> annual) {
+  double? n(String k) => (annual[k] as num?)?.toDouble();
+  final sales = n('sales'), np = n('net_profit'), ta = n('total_assets');
+  final eq = n('equity_cap') != null || n('reserves') != null
+      ? (n('equity_cap') ?? 0) + (n('reserves') ?? 0)
+      : null;
+  final npm = sales != null && sales != 0 && np != null ? np / sales * 100 : null;
+  final at = sales != null && ta != null && ta != 0 ? sales / ta : null;
+  final em = ta != null && eq != null && eq != 0 ? ta / eq : null;
+  final roe = npm != null && at != null && em != null ? npm * at * em : null;
+  return (npm: npm, at: at, em: em, roe: roe);
+}
+
+/// Pivot levels from one bar's high / low / close — classic, Fibonacci and
+/// Camarilla, the three MC shows. Checked against MC's TCS card (18 Sep 2026):
+/// H 2177.30 L 2101.20 C 2105 → P 2127.83, R1 2154.47, S3 2002.27.
+Map<String, Map<String, double>> pivots(double h, double l, double c) {
+  final p = (h + l + c) / 3, r = h - l;
+  return {
+    'Classic': {
+      'R3': h + 2 * (p - l), 'R2': p + r, 'R1': 2 * p - l, 'P': p,
+      'S1': 2 * p - h, 'S2': p - r, 'S3': l - 2 * (h - p),
+    },
+    'Fibonacci': {
+      'R3': p + r, 'R2': p + 0.618 * r, 'R1': p + 0.382 * r, 'P': p,
+      'S1': p - 0.382 * r, 'S2': p - 0.618 * r, 'S3': p - r,
+    },
+    'Camarilla': {
+      'R3': c + r * 1.1 / 4, 'R2': c + r * 1.1 / 6, 'R1': c + r * 1.1 / 12, 'P': p,
+      'S1': c - r * 1.1 / 12, 'S2': c - r * 1.1 / 6, 'S3': c - r * 1.1 / 4,
+    },
+  };
+}
+
+/// Moving-average reads: close vs each average the pipeline stores, plus the
+/// 50/200 crossover. (label, bullish?) — null level = not stored.
+typedef MaRead = ({List<(String, bool)> above, String? crossover, int bull, int bear});
+
+MaRead maSignals(Map<String, dynamic> meta) {
+  final t = _sub(meta, 't') ?? const {};
+  double? n(String k) => (t[k] as num?)?.toDouble();
+  final close = n('close');
+  final above = <(String, bool)>[
+    for (final k in const ['sma20', 'sma50', 'sma200'])
+      if (close != null && n(k) != null) ('${k.substring(3)}-DMA', close > n(k)!),
+  ];
+  final s50 = n('sma50'), s200 = n('sma200');
+  final cross = s50 == null || s200 == null
+      ? null
+      : s50 > s200
+          ? 'Golden cross · 50-DMA above 200-DMA'
+          : 'Death cross · 50-DMA below 200-DMA';
+  final bull = above.where((a) => a.$2).length + (s50 != null && s200 != null && s50 > s200 ? 1 : 0);
+  final bear = above.length - above.where((a) => a.$2).length + (s50 != null && s200 != null && s50 <= s200 ? 1 : 0);
+  return (above: above, crossover: cross, bull: bull, bear: bear);
+}
+
+/// Seasonality from a monthly chart (Yahoo range=max&interval=1mo): month
+/// return = close / previous month's close − 1, keyed year → month (1–12).
+/// Years newest first; the month labels are shared by the table and callout.
+typedef Seasonality = ({
+  Map<int, Map<int, double>> table, // year -> month -> %
+  List<int> years, // newest first
+  List<double?> avg, // 12 entries, average % per month over the years
+  List<double?> posPct, // 12 entries, % of years the month was positive
+});
+
+Seasonality? seasonality(List<double> closes, List<DateTime> times) {
+  if (closes.length < 13 || closes.length != times.length) return null;
+  final table = <int, Map<int, double>>{};
+  for (var i = 1; i < closes.length; i++) {
+    final prev = closes[i - 1];
+    if (prev == 0) continue;
+    final d = times[i];
+    (table[d.year] ??= {})[d.month] = (closes[i] / prev - 1) * 100;
+  }
+  final years = table.keys.toList()..sort((a, b) => b - a);
+  final avg = <double?>[], pos = <double?>[];
+  for (var m = 1; m <= 12; m++) {
+    final vals = [for (final y in years) if (table[y]![m] != null) table[y]![m]!];
+    avg.add(vals.isEmpty ? null : vals.reduce((a, b) => a + b) / vals.length);
+    pos.add(vals.isEmpty ? null : vals.where((v) => v > 0).length / vals.length * 100);
+  }
+  return (table: table, years: years, avg: avg, posPct: pos);
+}
+
+const monthAbbr = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/// The callout for one month: "11 of 18 years negative in September", best,
+/// worst, average up / down / overall.
+typedef MonthStats = ({int years, int negative, (int, double)? best, (int, double)? worst,
+  double? avgPos, double? avgNeg, double? avg});
+
+MonthStats monthStats(Seasonality s, int month) {
+  final vals = <(int, double)>[
+    for (final y in s.years) if (s.table[y]![month] != null) (y, s.table[y]![month]!)
+  ];
+  if (vals.isEmpty) {
+    return (years: 0, negative: 0, best: null, worst: null, avgPos: null, avgNeg: null, avg: null);
+  }
+  final pos = vals.where((v) => v.$2 > 0).toList(), neg = vals.where((v) => v.$2 <= 0).toList();
+  double mean(List<(int, double)> l) => l.fold(0.0, (a, v) => a + v.$2) / l.length;
+  return (
+    years: vals.length,
+    negative: neg.length,
+    best: vals.reduce((a, b) => a.$2 >= b.$2 ? a : b),
+    worst: vals.reduce((a, b) => a.$2 <= b.$2 ? a : b),
+    avgPos: pos.isEmpty ? null : mean(pos),
+    avgNeg: neg.isEmpty ? null : mean(neg),
+    avg: mean(vals),
+  );
+}

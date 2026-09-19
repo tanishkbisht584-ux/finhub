@@ -59,6 +59,8 @@ class _StockScreenState extends State<StockScreen> {
   List<DateTime> _chartTimes = const [];
   Quote? _chartQ; // the range's own OHLC (candles); header numbers stay on 1M
   bool _candles = false;
+  Quote? _seasonQ; // Yahoo max/1mo, fetched once: SEASONALITY
+  String _swotTab = 's';
   bool _showPe = false;
   bool _heat = false; // statement tables: tint cells by change vs prior period
   final _tracker = SectionTracker();
@@ -82,7 +84,24 @@ class _StockScreenState extends State<StockScreen> {
     super.initState();
     _load();
     _loadFundamentals();
+    _loadSeasonality();
   }
+
+  /// One monthly chart for the whole listing life — seasonality's only input.
+  Future<void> _loadSeasonality() async {
+    try {
+      final r = await http.get(
+        Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/'
+            '${widget.company.nseSymbol}.NS?range=max&interval=1mo'),
+        headers: {'User-Agent': 'Mozilla/5.0'},
+      ).timeout(const Duration(seconds: 12));
+      if (!mounted || r.statusCode != 200) return;
+      final q = Quote.fromChartJson(jsonDecode(r.body));
+      if (mounted && q.closes.length >= 13) setState(() => _seasonQ = q);
+    } catch (_) {} // section simply stays absent
+  }
+
+  static Color _scoreColor(int s) => s >= 60 ? green : s >= 40 ? amber : red;
 
   @override
   void dispose() {
@@ -133,7 +152,7 @@ class _StockScreenState extends State<StockScreen> {
             'industry,sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
             'ath_pct,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
-            'shares_yoy,sa,sa_price_date')
+            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend')
         .eq('symbol', widget.company.nseSymbol)
         .maybeSingle()
         .then((self) {
@@ -391,9 +410,16 @@ class _StockScreenState extends State<StockScreen> {
             if (q.asOf != null)
               '${fmtDay(q.asOf!.toIso8601String())} ${hhmmIst(q.asOf!)}',
           ].join(' · ');
+    final card = finScore(meta, sa: _sa, summary: _fund.summary);
     return [
       Row(children: [
         Text(widget.company.nseSymbol, style: mono.copyWith(fontSize: 12)),
+        if (card != null) ...[
+          const SizedBox(width: 8),
+          filterPill('SCORE ${card.score}', false, _scoreColor(card.score),
+              () => _tracker.jump('insights'),
+              fontSize: 9),
+        ],
         if (sectorLine.isNotEmpty) ...[
           const SizedBox(width: 10),
           Expanded(
@@ -605,6 +631,356 @@ class _StockScreenState extends State<StockScreen> {
             ]);
       });
 
+  /// INSIGHTS (Phase 3): the FinSwipe score with its parts, SWOT, essentials.
+  Widget _insights() => _onTicks((meta) {
+        final card = finScore(meta, sa: _sa, summary: _fund.summary);
+        final sw = swot(meta, sa: _sa, summary: _fund.summary);
+        final ess = essentials(meta, sa: _sa, summary: _fund.summary);
+        final measured = ess.where((e) => e.$2 != null).toList();
+        final passed = measured.where((e) => e.$2 == true).length;
+        final list = switch (_swotTab) {
+          'w' => sw.w,
+          'o' => sw.o,
+          't' => sw.t,
+          _ => sw.s,
+        };
+        if (card == null && sw.s.isEmpty && sw.w.isEmpty && measured.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return LedgerSection('Insights',
+            footnote:
+                'FinSwipe score = strength 30 · growth 25 · valuation 25 · trend 20, scaled to what is measurable · not advice',
+            children: [
+              if (card != null) ...[
+                const SizedBox(height: 10),
+                Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Text('${card.score}',
+                      style: serif.copyWith(
+                          fontSize: 34,
+                          fontWeight: FontWeight.w700,
+                          color: _scoreColor(card.score))),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6, left: 4),
+                    child: Text('/100',
+                        style: mono.copyWith(fontSize: 12, color: inkDim)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child:
+                          Text(card.verdict, style: serif.copyWith(fontSize: 14)),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                ScaleBar(card.score.toDouble(), zones: const [
+                  (0, 40, red),
+                  (40, 60, amber),
+                  (60, 100, green)
+                ]),
+                for (final p in card.parts)
+                  LedgerRow(
+                      lead: p.label,
+                      main: p.read,
+                      trail: '${p.points}/${p.max}',
+                      trailColor: _scoreColor((p.points / p.max * 100).round()),
+                      bar: p.points / p.max,
+                      barColor: _scoreColor((p.points / p.max * 100).round())),
+              ],
+              const SizedBox(height: 14),
+              Text('SWOT', style: monoLabel),
+              const SizedBox(height: 6),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                for (final (k, label, n, tint) in [
+                  ('s', 'STRENGTHS', sw.s.length, green),
+                  ('w', 'WEAKNESSES', sw.w.length, red),
+                  ('o', 'OPPORTUNITIES', sw.o.length, green),
+                  ('t', 'THREATS', sw.t.length, amber),
+                ])
+                  filterPill('$label ($n)', _swotTab == k, tint,
+                      () => setState(() => _swotTab = k),
+                      fontSize: 9),
+              ]),
+              const SizedBox(height: 8),
+              if (list.isEmpty)
+                Text('nothing flagged',
+                    style: mono.copyWith(fontSize: 12, color: inkDim))
+              else
+                for (final line in list)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('•  ',
+                              style: serif.copyWith(fontSize: 13, color: inkDim)),
+                          Expanded(
+                              child: Text(line,
+                                  style: serif.copyWith(fontSize: 13))),
+                        ]),
+                  ),
+              if (measured.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                LedgerRow(
+                    lead: 'ESSENTIALS',
+                    main: '${measured.length} checks',
+                    trail: '${(passed / measured.length * 100).round()}% pass',
+                    trailColor:
+                        _scoreColor((passed / measured.length * 100).round()),
+                    bar: passed / measured.length,
+                    barColor: green,
+                    barTrack: red.withValues(alpha: 0.35)),
+                for (final e in ess)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(children: [
+                      SizedBox(
+                        width: 18,
+                        child: Text(
+                            e.$2 == null
+                                ? '·'
+                                : e.$2!
+                                    ? '✓'
+                                    : '✗',
+                            style: mono.copyWith(
+                                fontSize: 12,
+                                color: e.$2 == null
+                                    ? inkDim
+                                    : e.$2!
+                                        ? green
+                                        : red)),
+                      ),
+                      Expanded(
+                          child: Text(e.$1,
+                              style: mono.copyWith(
+                                  fontSize: 11,
+                                  color: e.$2 == null ? inkDim : ink))),
+                    ]),
+                  ),
+              ],
+            ]);
+      });
+
+  /// One MC-style vitals card: value box + verdict, zoned bar, plain read.
+  List<Widget> _gauge(String title, double v,
+      {required double min,
+      required double max,
+      required List<(double, double, Color)> zones,
+      required String value,
+      required String verdict,
+      required Color tone,
+      required String explain}) {
+    return [
+      const SizedBox(height: 14),
+      Row(children: [
+        Expanded(child: Text(title, style: monoLabel)),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+              color: surface, border: Border.all(color: border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(value,
+                style: mono.copyWith(fontSize: 14, fontWeight: FontWeight.w700)),
+            Text(verdict, style: mono.copyWith(fontSize: 9, color: tone)),
+          ]),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      ScaleBar(v.clamp(min, max).toDouble(), min: min, max: max, zones: zones),
+      const SizedBox(height: 4),
+      Text(explain, style: mono.copyWith(fontSize: 10, height: 1.5)),
+    ];
+  }
+
+  /// VITALS (Phase 3): Altman Z, Piotroski, Graham, DuPont.
+  Widget _vitals() => _onTicks((meta) {
+        final q = _quote;
+        final z = (_sa['altman_z'] as num?)?.toDouble();
+        final fs = (_sa['f_score'] as num?)?.toDouble();
+        final sa = (_sa['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
+        final graham = (sa['grahamNumber'] as num?)?.toDouble();
+        final annual = _fund.annual.values.lastOrNull;
+        final dp = annual == null ? null : dupont(annual);
+        final peerRoe =
+            sectorMedians(_peers, self: widget.company.nseSymbol)['roe'];
+        final children = <Widget>[
+          if (z != null)
+            ..._gauge('ALTMAN Z-SCORE', z,
+                min: 0,
+                max: 8,
+                zones: const [(0, 1.8, red), (1.8, 3, amber), (3, 8, green)],
+                value: z.toStringAsFixed(2),
+                verdict: z < 1.8
+                    ? 'Distress zone'
+                    : z < 3
+                        ? 'Grey zone'
+                        : 'Safe zone',
+                tone: z < 1.8
+                    ? red
+                    : z < 3
+                        ? amber
+                        : green,
+                explain:
+                    'Bankruptcy-risk model from five balance-sheet ratios. Above 3 the company has robust financial health and a low chance of distress; below 1.8 it is in the danger zone.'),
+          if (fs != null)
+            ..._gauge('PIOTROSKI F-SCORE', fs,
+                min: 0,
+                max: 9,
+                zones: const [(0, 3, red), (3, 6, amber), (6, 9, green)],
+                value: '${fs.round()}/9',
+                verdict: fs >= 7
+                    ? 'Strong'
+                    : fs >= 4
+                        ? 'Middling'
+                        : 'Weak',
+                tone: fs >= 7
+                    ? green
+                    : fs >= 4
+                        ? amber
+                        : red,
+                explain:
+                    'Nine yes/no accounting checks on profitability, leverage and efficiency. 7 or more is a strong business; 3 or less is a weak one.'),
+          if (graham != null && graham > 0 && q != null)
+            ..._gauge('GRAHAM NUMBER', q.price / graham,
+                min: 0.5,
+                max: 1.5,
+                zones: const [
+                  (0.5, 0.9, green),
+                  (0.9, 1.1, amber),
+                  (1.1, 1.5, red)
+                ],
+                value: '₹${fmtNum(graham, decimals: 0)}',
+                verdict: q.price > graham ? 'Overvalued' : 'Undervalued',
+                tone: q.price > graham * 1.1
+                    ? red
+                    : q.price < graham * 0.9
+                        ? green
+                        : amber,
+                explain: q.price > graham
+                    ? 'The stock trades ${((q.price / graham - 1) * 100).round()}% above its Graham number (√(22.5 × EPS × book value)), the most a defensive investor would pay: the market is pricing in more than the books show.'
+                    : 'The stock trades ${((1 - q.price / graham) * 100).round()}% below its Graham number (√(22.5 × EPS × book value)), the most a defensive investor would pay.'),
+          if (dp != null && dp.roe != null) ...[
+            const SizedBox(height: 14),
+            Text('DUPONT · ROE = MARGIN × TURNOVER × LEVERAGE', style: monoLabel),
+            const SizedBox(height: 6),
+            StatGrid([
+              StatTile('Net margin', '${dp.npm!.toStringAsFixed(1)}%',
+                  sub: 'profit / sales'),
+              StatTile('Asset turnover', '${dp.at!.toStringAsFixed(2)}×',
+                  sub: 'sales / assets'),
+              StatTile('Leverage', '${dp.em!.toStringAsFixed(2)}×',
+                  sub: 'assets / equity'),
+            ]),
+            const SizedBox(height: 6),
+            LedgerRow(
+                lead: 'ROE',
+                main: peerRoe == null
+                    ? 'from the latest annual report'
+                    : 'peers\' median ${peerRoe.toStringAsFixed(1)}%',
+                trail: '${dp.roe!.toStringAsFixed(1)}%',
+                trailColor: peerRoe == null
+                    ? ink
+                    : dp.roe! >= peerRoe
+                        ? green
+                        : red),
+          ],
+        ];
+        if (children.isEmpty) return const SizedBox.shrink();
+        return LedgerSection('Vitals',
+            footnote:
+                'Altman Z, Piotroski, Graham: Stock Analysis (S&P Global) · DuPont: latest annual report · peers by industry',
+            children: children);
+      });
+
+  /// SEASONALITY (Phase 3): year × month returns from the monthly chart.
+  Widget _seasonality() {
+    final sq = _seasonQ;
+    final s = sq == null ? null : seasonality(sq.closes, sq.times);
+    if (s == null) return const SizedBox.shrink();
+    final m = DateTime.now().month;
+    final ms = monthStats(s, m);
+    final name = monthAbbr[m - 1];
+    Widget cell(double? v, {double width = 50}) => SizedBox(
+        width: width,
+        child: Padding(
+          padding: const EdgeInsets.all(1.5),
+          child: HeatCell('', v,
+              scale: 10,
+              height: 30,
+              pctText: v == null ? '—' : fmtPct(v, decimals: 1)),
+        ));
+    Widget lead(String t) => SizedBox(
+        width: 44,
+        child: Text(t, style: mono.copyWith(fontSize: 10, color: inkDim)));
+    return LedgerSection('Seasonality',
+        action: _stamp('${s.years.length} years'),
+        footnote:
+            'month-on-month close · Yahoo monthly · the current month is month-to-date',
+        children: [
+          const SizedBox(height: 8),
+          if (ms.years > 0)
+            Text(
+                '${ms.negative} of ${ms.years} years ${widget.company.nseSymbol} gave a negative return in $name.',
+                style: serif.copyWith(fontSize: 14, height: 1.4)),
+          const SizedBox(height: 8),
+          if (ms.years > 0)
+            StatGrid([
+              if (ms.best != null)
+                StatTile('Best $name', fmtPct(ms.best!.$2, decimals: 1),
+                    sub: '${ms.best!.$1}', color: green),
+              if (ms.worst != null)
+                StatTile('Worst $name', fmtPct(ms.worst!.$2, decimals: 1),
+                    sub: '${ms.worst!.$1}', color: red),
+              if (ms.avg != null)
+                StatTile('Average $name', fmtPct(ms.avg!, decimals: 1),
+                    sub: [
+                      if (ms.avgPos != null) 'up ${fmtPct(ms.avgPos!, decimals: 1)}',
+                      if (ms.avgNeg != null) 'down ${fmtPct(ms.avgNeg!, decimals: 1)}',
+                    ].join(' · ')),
+            ]),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                lead('YEAR'),
+                for (final mo in monthAbbr)
+                  SizedBox(
+                      width: 50,
+                      child: Text(mo.toUpperCase(),
+                          textAlign: TextAlign.center,
+                          style: mono.copyWith(fontSize: 9, color: inkDim))),
+              ]),
+              Row(children: [
+                lead('AVG'),
+                for (final v in s.avg) cell(v),
+              ]),
+              for (final y in s.years)
+                Row(children: [
+                  lead('$y'),
+                  for (var mo = 1; mo <= 12; mo++) cell(s.table[y]![mo]),
+                ]),
+              Row(children: [
+                lead('UP %'),
+                for (final v in s.posPct)
+                  SizedBox(
+                      width: 50,
+                      child: Text(v == null ? '—' : '${v.round()}%',
+                          textAlign: TextAlign.center,
+                          style: mono.copyWith(
+                              fontSize: 9,
+                              color: v == null
+                                  ? inkDim
+                                  : v >= 50
+                                      ? green
+                                      : red))),
+              ]),
+            ]),
+          ),
+        ]);
+  }
+
   /// FUNDAMENTALS: the full labelled table against sector medians, then the
   /// eight-quarter sales/profit bars.
   Widget _fundamentals() => _onTicks((meta) {
@@ -644,15 +1020,23 @@ class _StockScreenState extends State<StockScreen> {
             ]);
       });
 
-  /// TECHNICALS: three one-word tiles, then every level against the close.
+  /// TECHNICALS: three one-word tiles, the MA read, every level against the
+  /// close, then pivot levels from the last session (Phase 3).
   Widget _technicals() => _onTicks((meta) {
         final tiles = techStats(meta);
         final rows = technicalRows(meta);
-        if (tiles.isEmpty && rows.isEmpty) return const SizedBox.shrink();
+        final ma = maSignals(meta);
+        final q = _quote;
+        final pv = q != null && q.highs.isNotEmpty && q.lows.isNotEmpty
+            ? pivots(q.highs.last, q.lows.last, q.closes.last)
+            : null;
+        if (tiles.isEmpty && rows.isEmpty && pv == null) {
+          return const SizedBox.shrink();
+        }
         return LedgerSection('Technicals',
             action: _stamp('1y daily closes'),
             footnote:
-                'computed from 1y daily closes · as of ${fmtDay(meta['t_at'])}',
+                'computed from 1y daily closes · as of ${fmtDay(meta['t_at'])} · pivots from the last session',
             children: [
               if (tiles.isNotEmpty) ...[
                 const SizedBox(height: 10),
@@ -663,7 +1047,62 @@ class _StockScreenState extends State<StockScreen> {
                 ]),
                 const SizedBox(height: 14),
               ],
-              KvTable(const ['INDICATOR', 'LEVEL', 'VS PRICE', 'SIGNAL'], rows),
+              if (ma.above.isNotEmpty) ...[
+                LedgerRow(
+                    lead: 'MOVING AVERAGES',
+                    main: [
+                      for (final a in ma.above) '${a.$2 ? '▲' : '▼'} ${a.$1}'
+                    ].join('  '),
+                    trail: '${ma.bull}▲ ${ma.bear}▼',
+                    trailColor: ma.bull >= ma.bear ? green : red,
+                    bar: ma.bull + ma.bear == 0
+                        ? 0
+                        : ma.bull / (ma.bull + ma.bear),
+                    barColor: green,
+                    barTrack: red.withValues(alpha: 0.35)),
+                if (ma.crossover != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, bottom: 10),
+                    child: Text(ma.crossover!,
+                        style: mono.copyWith(
+                            fontSize: 11,
+                            color: ma.crossover!.startsWith('Golden')
+                                ? green
+                                : red)),
+                  ),
+              ],
+              if (rows.isNotEmpty)
+                KvTable(const ['INDICATOR', 'LEVEL', 'VS PRICE', 'SIGNAL'], rows),
+              if (pv != null) ...[
+                const SizedBox(height: 14),
+                Text('PIVOT LEVELS', style: monoLabel),
+                const SizedBox(height: 6),
+                LedgerTable(const [
+                  LtCol('Level', right: false),
+                  LtCol('Classic'),
+                  LtCol('Fibonacci'),
+                  LtCol('Camarilla'),
+                ], [
+                  for (final lvl in const ['R3', 'R2', 'R1', 'P', 'S1', 'S2', 'S3'])
+                    (
+                      cells: [
+                        lvl,
+                        for (final m in const ['Classic', 'Fibonacci', 'Camarilla'])
+                          fmtNum(pv[m]![lvl]!, decimals: 2),
+                      ],
+                      tone: lvl.startsWith('R')
+                          ? 1
+                          : lvl.startsWith('S')
+                              ? -1
+                              : 0,
+                      onTap: null,
+                    ),
+                ], toneCol: 0),
+                const SizedBox(height: 4),
+                Text(
+                    'last session H ₹${fmtNum(q!.highs.last)} · L ₹${fmtNum(q.lows.last)} · C ₹${fmtNum(q.closes.last)}',
+                    style: mono.copyWith(fontSize: 10)),
+              ],
             ]);
       });
 
@@ -779,9 +1218,13 @@ class _StockScreenState extends State<StockScreen> {
     return [
       (id: 'chart', label: 'CHART', child: col(_priceHeader())),
       (id: 'overview', label: 'OVERVIEW', child: _overview()),
+      (id: 'insights', label: 'INSIGHTS', child: _insights()),
       (id: 'technicals', label: 'TECHNICALS', child: _technicals()),
+      (id: 'vitals', label: 'VITALS', child: _vitals()),
       (id: 'fundamentals', label: 'FUNDAMENTALS', child: _fundamentals()),
       if (_sa.isNotEmpty) (id: 'returns', label: 'STREET', child: _returns()),
+      if (_seasonQ != null)
+        (id: 'seasonality', label: 'SEASONALITY', child: _seasonality()),
       if ((f.summary['pros'] as List?)?.isNotEmpty == true ||
           (f.summary['cons'] as List?)?.isNotEmpty == true)
         (

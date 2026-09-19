@@ -242,4 +242,115 @@ void main() {
     expect(needsAnalysisRequest(const {'f': {'pe': 10.0}}), isFalse);
     expect(needsAnalysisRequest(const {'t': {'rsi14': 50.0}}), isFalse);
   });
+
+  // ---------- Phase 3 ----------
+
+  test('finScore: four parts, normalised, verdict words track the parts', () {
+    final card = finScore(meta, sa: const {'f_score': 8, 'sector_pe': 22.76}, summary: const {
+      'cagr': {'profit': {'y3': 12.0}}
+    })!;
+    expect([for (final p in card.parts) p.label],
+        ['Financial strength', 'Growth', 'Valuation', 'Trend']);
+    // strength: 8/9*20 = 18 + D/E 0.1 -> 10 = 28; growth 12% -> 15; P/E 16.72 is 0.73× the
+    // sector's 22.76 -> 25; trend mixed -> 10 => 78/100
+    expect([for (final p in card.parts) p.points], [28, 15, 25, 10]);
+    expect(card.score, 78);
+    expect(card.verdict, 'Strong financials, moderate growth, attractive valuation, sideways');
+    // No sector P/E and no CAGR: valuation drops out, growth falls back to earn_growth (4.6 -> 8)
+    final thin = finScore(meta)!;
+    expect([for (final p in thin.parts) p.label], ['Financial strength', 'Growth', 'Trend']);
+    expect(thin.parts[0].points, 24); // ROE 47.7 -> 14, D/E -> 10
+    expect(thin.parts[1].read, 'earnings +4.6% YoY');
+    expect(finScore(const {}), isNull);
+  });
+
+  test('swot: pros/cons pass through, rules add the rest', () {
+    final s = swot(meta,
+        sa: const {'ath_pct': -54.2, 'f_score': 7, 'sector_pe': 40.0, 'shares_yoy': 6.1,
+          'sa': {'priceTarget': 2460, 'priceTargetChange': 33.3}},
+        summary: const {'pros': ['Company has a good return on equity'], 'cons': ['Stock is trading at 7.6× book']});
+    expect(s.s.first, 'Company has a good return on equity');
+    expect(s.s, contains('Company is almost debt-free')); // D/E 0.1
+    expect(s.w, ['Stock is trading at 7.6× book']);
+    expect(s.o, [
+      'Street target ₹2,460 is +33.3% away',
+      '−54.2% from its all-time high with Piotroski 7/9',
+      'P/E 16.72 is a discount to the sector\'s 40.00',
+    ]);
+    expect(s.t, [
+      'RSI 78 — overbought',
+      'Trading below its 200-day average',
+      'Share count up +6.1% in a year — dilution',
+    ]);
+  });
+
+  test('essentials: ten checks, unmeasurable ones are null', () {
+    final e = essentials(meta, sa: const {'f_score': 7, 'sector_pe': 22.76});
+    expect(e.length, 10);
+    final by = {for (final x in e) x.$1: x.$2};
+    expect(by['ROE above 15%'], isTrue);
+    expect(by['Debt/Equity below 1'], isTrue);
+    expect(by['Profit growing >10% a year (3y)'], isNull); // no summary
+    expect(by['ROCE above 15%'], isNull);
+    expect(by['P/E below the sector\'s'], isTrue);
+    expect(by['Piotroski 6 or better'], isTrue);
+    expect(by['Above its 200-day average'], isFalse);
+    expect(by['Pays a dividend'], isTrue);
+  });
+
+  test('dupont: ROE = margin × turnover × leverage from an annual row', () {
+    final d = dupont(const {'sales': 255324, 'net_profit': 48553, 'total_assets': 150000,
+      'equity_cap': 362, 'reserves': 94394});
+    expect(d.npm!.toStringAsFixed(2), '19.02');
+    expect(d.at!.toStringAsFixed(2), '1.70');
+    expect(d.em!.toStringAsFixed(2), '1.58');
+    expect(d.roe!.toStringAsFixed(1), '51.2');
+    expect(dupont(const {'sales': 100}).roe, isNull);
+  });
+
+  test('pivots: classic levels match MC\'s TCS card for 18 Sep 2026', () {
+    final p = pivots(2177.30, 2101.20, 2105.00);
+    final c = p['Classic']!;
+    expect(c['P']!.toStringAsFixed(2), '2127.83');
+    expect(c['R1']!.toStringAsFixed(2), '2154.47');
+    expect(c['R2']!.toStringAsFixed(2), '2203.93');
+    expect(c['R3']!.toStringAsFixed(2), '2230.57');
+    expect(c['S1']!.toStringAsFixed(2), '2078.37');
+    expect(c['S2']!.toStringAsFixed(2), '2051.73');
+    expect(c['S3']!.toStringAsFixed(2), '2002.27');
+    expect(p['Fibonacci']!['R1']!, closeTo(2127.83 + 0.382 * 76.1, 0.01));
+    expect(p['Camarilla']!['S3']!, closeTo(2105 - 76.1 * 1.1 / 4, 0.01));
+  });
+
+  test('maSignals: above/below each stored average and the 50/200 cross', () {
+    final m = maSignals(meta); // close 2302 vs 2310 / 2254.6 / 2332.3, sma50 < sma200
+    expect(m.above, [('20-DMA', false), ('50-DMA', true), ('200-DMA', false)]);
+    expect(m.crossover, startsWith('Death cross'));
+    expect((m.bull, m.bear), (1, 3));
+    expect(maSignals(const {}).above, isEmpty);
+  });
+
+  test('seasonality: month-on-month table, averages, up-% and the month callout', () {
+    // 25 monthly closes: Jan 2024 .. Jan 2026, +1% every month except Septembers (−3%)
+    final closes = <double>[100];
+    final times = <DateTime>[DateTime(2024, 1, 1)];
+    for (var i = 1; i < 25; i++) {
+      final d = DateTime(2024 + (i ~/ 12), i % 12 + 1, 1);
+      times.add(d);
+      closes.add(closes.last * (d.month == 9 ? 0.97 : 1.01));
+    }
+    final s = seasonality(closes, times)!;
+    expect(s.years, [2026, 2025, 2024]);
+    expect(s.table[2024]![9]!, closeTo(-3.0, 1e-9));
+    expect(s.table[2024]![2]!, closeTo(1.0, 1e-9));
+    expect(s.table[2024]!.containsKey(1), isFalse); // first close has no prior month
+    expect(s.avg[8]!, closeTo(-3.0, 1e-9)); // September column
+    expect(s.posPct[8], 0);
+    expect(s.posPct[1], 100);
+    final sep = monthStats(s, 9);
+    expect((sep.years, sep.negative), (2, 2));
+    expect(sep.worst!.$2, closeTo(-3.0, 1e-9));
+    expect(sep.avgPos, isNull);
+    expect(seasonality(closes.take(5).toList(), times.take(5).toList()), isNull);
+  });
 }
