@@ -66,6 +66,7 @@ class _StockScreenState extends State<StockScreen> {
   String _holderKey = 'promoters'; // SHAREHOLDING trend category
   int _peerMetric = 1; // index into peerMetrics
   bool _peerRadar = true;
+  String _delivMode = 'combined'; // DELIVERY: combined / nse / bse (MC's toggle)
   bool _showPe = false;
   bool _heat = false; // statement tables: tint cells by change vs prior period
   final _tracker = SectionTracker();
@@ -157,7 +158,7 @@ class _StockScreenState extends State<StockScreen> {
             'industry,sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
             'ath_pct,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
-            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno')
+            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno,tape_bse')
         .eq('symbol', widget.company.nseSymbol)
         .maybeSingle()
         .then((self) {
@@ -917,13 +918,22 @@ class _StockScreenState extends State<StockScreen> {
   /// the NSE full bhavcopy the pipeline keeps for 22 sessions.
   Widget _delivery() {
     final tape = (_sa['tape'] as Map?)?.cast<String, dynamic>();
-    final rows = deliveryRows(tape);
+    final bse = (_sa['tape_bse'] as Map?)?.cast<String, dynamic>();
+    final mode = bse == null ? 'nse' : _delivMode;
+    final rows = deliveryRows(tape, bse: bse, mode: mode);
     if (rows.isEmpty) return const SizedBox.shrink();
     return LedgerSection('Delivery & volume',
-        action: _stamp('NSE · ${dmy(tape!['asof'])}'),
+        action: _stamp('${mode == 'bse' ? 'BSE' : mode == 'combined' ? 'NSE + BSE' : 'NSE'} · ${dmy((mode == 'bse' ? bse : tape)!['asof'])}'),
         footnote:
-            'delivered = shares that changed hands for keeps, not intraday · a rising delivery % on a move is conviction',
+            'delivered = shares that changed hands for keeps, not intraday · a rising delivery % on a move is conviction · BSE joined by ISIN',
         children: [
+          if (bse != null) ...[
+            const SizedBox(height: 8),
+            pillRow([
+              for (final (k, label) in const [('combined', 'COMBINED'), ('nse', 'NSE'), ('bse', 'BSE')])
+                filterPill(label, mode == k, green, () => setState(() => _delivMode = k), fontSize: 9),
+            ]),
+          ],
           const SizedBox(height: 8),
           for (final r in rows) ...[
             LedgerRow(

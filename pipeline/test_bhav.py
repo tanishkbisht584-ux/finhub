@@ -78,6 +78,7 @@ def test_refresh_bhav_writes_tape_for_known_symbols_and_fno(monkeypatch):
     fo = [fo_row("TCS", "STF", "2026-09-29"), fo_row("NOPE", "STF", "2026-09-29")]
     monkeypatch.setattr(bhav, "fetch_full", lambda d, session=None: full)
     monkeypatch.setattr(bhav, "fetch_fo", lambda d, session=None: fo)
+    monkeypatch.setattr(bhav, "refresh_bse", lambda sb_, d: 0)
     posts = []
 
     def sb(method, path, **kw):
@@ -105,3 +106,32 @@ def test_fno_max_oi_ignores_far_stale_strikes():
             fo_row("TCS", "STO", "2026-09-29", strike="2200", opt="CE", oi="700")]
     f = bhav.fno_of(rows, date(2026, 9, 18))
     assert f["max_pe"] == 2000 and f["max_pe_oi"] == 500 and f["max_ce"] == 2200
+
+
+BSE_TCS = {"FinInstrmTp": "STK", "FinInstrmId": "532540", "ISIN": "INE467B01029", "TckrSymb": "TCS", "SctySrs": "A",
+           "OpnPric": "2170.00", "HghPric": "2178.00", "LwPric": "2100.10", "ClsPric": "2101.00", "PrvsClsgPric": "2189.00",
+           "TtlTradgVol": "340214", "TtlTrfVal": "722507049.00", "TtlNbOfTxsExctd": "25282"}
+
+
+def test_tape_bse_entry_and_rows_join_by_isin():
+    deliv = {"532540": (208459, 340214, 61.27)}
+    e = bhav.tape_bse_entry(BSE_TCS, deliv, date(2026, 9, 18))
+    assert e == {"date": "2026-09-18", "prev": 2189.0, "open": 2170.0, "high": 2178.0, "low": 2100.1, "close": 2101.0,
+                 "vwap": 2123.68, "vol": 340214, "turnover_cr": 72.25, "trades": 25282, "deliv_qty": 208459, "deliv_pct": 61.27}
+    cm = [BSE_TCS, {**BSE_TCS, "ISIN": "INE000000000"}, {**BSE_TCS, "FinInstrmTp": "IDX"}]
+    rows = bhav.tape_bse_rows(cm, deliv, date(2026, 9, 18), {"INE467B01029": "TCS"},
+                              {"TCS": {"asof": "2026-09-17", "d": [{"date": "2026-09-17", "vol": 1}]}})
+    assert [r["symbol"] for r in rows] == ["TCS"]
+    assert [x["date"] for x in rows[0]["tape_bse"]["d"]] == ["2026-09-18", "2026-09-17"]
+    # no delivery file: the day still lands, delivery fields empty
+    e2 = bhav.tape_bse_entry(BSE_TCS, {}, date(2026, 9, 18))
+    assert e2["vol"] == 340214 and e2["deliv_qty"] is None and e2["deliv_pct"] is None
+
+
+def test_refresh_bhav_runs_bse_after_nse_and_survives_its_failure(monkeypatch):
+    monkeypatch.setattr(bhav, "fetch_full", lambda d, session=None: [TCS])
+    monkeypatch.setattr(bhav, "fetch_fo", lambda d, session=None: None)
+    monkeypatch.setattr(bhav, "refresh_bse", lambda sb, d: (_ for _ in ()).throw(RuntimeError("bse down")))
+    monkeypatch.setattr(market, "upsert", lambda sb_, rows, table, key: len(rows))
+    sb = lambda method, path, **kw: [{"symbol": "TCS", "tape": None}]
+    assert bhav.refresh_bhav(sb, NOW, day=date(2026, 9, 18)) == 1   # NSE row written, BSE failure logged

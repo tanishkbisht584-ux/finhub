@@ -752,14 +752,27 @@ MonthStats monthStats(Seasonality s, int month) {
 /// yesterday, 1-week and 1-month averages of volume vs delivered quantity.
 typedef DeliveryRow = ({String label, double vol, double deliv, double pct});
 
-List<DeliveryRow> deliveryRows(Map<String, dynamic>? tape) {
-  final d = [
-    for (final e in (tape?['d'] as List? ?? const []))
-      if (e is Map && e['vol'] is num && e['deliv_qty'] is num)
-        (vol: (e['vol'] as num).toDouble(), deliv: (e['deliv_qty'] as num).toDouble())
-  ];
+/// [bse] is the BSE tape; with [mode] 'combined' the two exchanges are
+/// summed per date (MC's Combined view), 'bse' reads the BSE tape alone.
+List<DeliveryRow> deliveryRows(Map<String, dynamic>? tape,
+    {Map<String, dynamic>? bse, String mode = 'nse'}) {
+  List<({String date, double vol, double deliv})> read(Map<String, dynamic>? t) => [
+        for (final e in (t?['d'] as List? ?? const []))
+          if (e is Map && e['vol'] is num && e['deliv_qty'] is num)
+            (date: '${e['date']}', vol: (e['vol'] as num).toDouble(), deliv: (e['deliv_qty'] as num).toDouble())
+      ];
+  var d = mode == 'bse' ? read(bse) : read(tape);
+  if (mode == 'combined' && bse != null) {
+    final byDate = {for (final e in read(bse)) e.date: e};
+    d = [
+      for (final e in d)
+        byDate[e.date] == null
+            ? e
+            : (date: e.date, vol: e.vol + byDate[e.date]!.vol, deliv: e.deliv + byDate[e.date]!.deliv)
+    ];
+  }
   if (d.isEmpty) return const [];
-  DeliveryRow avg(String label, Iterable<({double vol, double deliv})> xs) {
+  DeliveryRow avg(String label, Iterable<({String date, double vol, double deliv})> xs) {
     final l = xs.toList();
     final v = l.fold(0.0, (a, x) => a + x.vol) / l.length;
     final q = l.fold(0.0, (a, x) => a + x.deliv) / l.length;

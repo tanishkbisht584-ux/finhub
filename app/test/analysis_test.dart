@@ -98,6 +98,14 @@ void main() {
     expect(rows[3].vol, 1150); // mean of 100..2200
     expect(rows[3].pct, 50);
     expect(deliveryRows(null), isEmpty);
+    // BSE join: combined sums per date, bse reads the BSE tape alone, a date BSE lacks stays NSE-only
+    final nse = {'d': [{'date': '2026-09-18', 'vol': 100.0, 'deliv_qty': 50.0}, {'date': '2026-09-17', 'vol': 80.0, 'deliv_qty': 40.0}]};
+    final bse = {'d': [{'date': '2026-09-18', 'vol': 20.0, 'deliv_qty': 15.0}]};
+    final comb = deliveryRows(nse, bse: bse, mode: 'combined');
+    expect((comb[0].vol, comb[0].deliv), (120.0, 65.0));
+    expect((comb[1].vol, comb[1].deliv), (80.0, 40.0));
+    expect(deliveryRows(nse, bse: bse, mode: 'bse').single.vol, 20.0);
+    expect(deliveryRows(nse, bse: bse, mode: 'nse')[0].vol, 100.0);
     expect(deliveryRows({'d': [{'date': 'x', 'vol': 10, 'deliv_qty': 4}]}).single.pct, 40);
   });
 

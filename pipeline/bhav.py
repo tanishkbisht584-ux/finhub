@@ -23,6 +23,12 @@ import requests
 
 ARCH = "https://nsearchives.nseindia.com/"
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinSwipe/1.0"}
+# BSE (20 Sep review, Tanis: "what about BSE"): the same two shapes live on
+# bseindia.com — the CM bhavcopy (NSE's column layout, ISIN per row) and a
+# pipe-delimited gross-delivery file keyed by scrip code. Joined to our NSE
+# symbols by ISIN (screener_metrics.sa.isin, 2,170 of 2,467 quoted names).
+BSE = "https://www.bseindia.com/"
+BSE_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0) FinSwipe/1.0", "Referer": "https://www.bseindia.com/"}
 TAPE_DAYS = 22      # ~one trading month, the longest MC average
 FNO_STRIKES = 6     # strikes each side of the underlying kept in the chain
 NEAR = 0.15         # max-OI strikes must sit within ±15% of the underlying
@@ -64,6 +70,68 @@ def fetch_fo(day, session=requests):
     z = zipfile.ZipFile(io.BytesIO(r.content))
     with z.open(z.namelist()[0]) as fh:
         return _clean(csv.DictReader(io.TextIOWrapper(fh, encoding="utf-8")))
+
+
+def fetch_bse(day, session=requests):
+    """(cm rows, {scrip: (deliv_qty, volume, deliv_pct)}) for `day`; None when
+    the bhavcopy is not published (holiday). A missing delivery file leaves
+    the delivery fields null rather than dropping the day."""
+    r = session.get(BSE + f"download/BhavCopy/Equity/BhavCopy_BSE_CM_0_0_0_{day:%Y%m%d}_F_0000.CSV",
+                    headers=BSE_UA, timeout=90)
+    if r.status_code == 404 or "html" in r.headers.get("content-type", ""):
+        return None
+    r.raise_for_status()
+    cm = _clean(csv.DictReader(io.StringIO(r.text)))
+    deliv = {}
+    try:
+        d = session.get(BSE + f"BSEDATA/gross/{day:%Y}/SCBSEALL{day:%d%m}.zip", headers=BSE_UA, timeout=90)
+        if d.ok and d.content[:2] == b"PK":
+            z = zipfile.ZipFile(io.BytesIO(d.content))
+            text = z.read(z.namelist()[0]).decode("utf-8", "replace")
+            for line in text.splitlines()[1:]:
+                p = line.split("|")
+                if len(p) >= 7:
+                    deliv[p[1].strip()] = (_i(p[2]), _i(p[4]), _f(p[6]))
+    except Exception as e:  # noqa: BLE001
+        print(f"BHAV bse delivery {day}: {e}")
+    return cm, deliv
+
+
+def tape_bse_entry(r, deliv, day):
+    vol, val = _i(r.get("TtlTradgVol")), _f(r.get("TtlTrfVal"))
+    dq, _, dp = deliv.get(r.get("FinInstrmId"), (None, None, None))
+    return {"date": day.isoformat(), "prev": _f(r.get("PrvsClsgPric")), "open": _f(r.get("OpnPric")),
+            "high": _f(r.get("HghPric")), "low": _f(r.get("LwPric")), "close": _f(r.get("ClsPric")),
+            "vwap": round(val / vol, 2) if vol and val else None, "vol": vol,
+            "turnover_cr": round(val / 1e7, 2) if val is not None else None,
+            "trades": _i(r.get("TtlNbOfTxsExctd")), "deliv_qty": dq, "deliv_pct": dp}
+
+
+def tape_bse_rows(cm, deliv, day, isin_to_sym, existing):
+    """screener_metrics rows {symbol, tape_bse} for BSE stock rows whose ISIN
+    is one of ours. `existing` = {symbol: stored tape_bse}."""
+    out = []
+    for r in cm or []:
+        sym = isin_to_sym.get(r.get("ISIN"))
+        if r.get("FinInstrmTp") != "STK" or not sym:
+            continue
+        out.append({"symbol": sym, "tape_bse": merge_tape(existing.get(sym), tape_bse_entry(r, deliv, day))})
+    return out
+
+
+def _isin_map(sb):
+    return {r["isin"]: r["symbol"] for r in sb("GET", "screener_metrics?select=symbol,isin:sa->>isin") if r.get("isin")}
+
+
+def refresh_bse(sb, day):
+    bse = fetch_bse(day)
+    if bse is None:
+        print(f"BHAV bse {day}: not published")
+        return 0
+    from market import upsert
+    cm, deliv = bse
+    existing = {r["symbol"]: r.get("tape_bse") for r in sb("GET", "screener_metrics?select=symbol,tape_bse")}
+    return upsert(sb, tape_bse_rows(cm, deliv, day, _isin_map(sb), existing), table="screener_metrics", key="symbol")
 
 
 def tape_entry(row):
@@ -195,6 +263,10 @@ def refresh_bhav(sb, now, day=None, session=requests):
     fo = fetch_fo(day, session)
     if fo is not None:
         n += upsert(sb, fno_rows(fo, day, set(existing)), table="screener_metrics", key="symbol")
+    try:  # BSE never blocks the NSE side
+        n += refresh_bse(sb, day)
+    except Exception as e:  # noqa: BLE001
+        print(f"BHAV bse {day}: {e}")
     return n
 
 
@@ -215,7 +287,11 @@ def backfill(sb, now, days=TAPE_DAYS + 8):
         existing = {r["symbol"]: r.get("tape") for r in sb("GET", "screener_metrics?select=symbol,tape")}
         rows = tape_rows(full, existing)
         total += upsert(sb, rows, table="screener_metrics", key="symbol")
-        print(f"BHAV backfill {d}: {len(rows)} symbols")
+        try:
+            nb = refresh_bse(sb, d)
+        except Exception as e:  # noqa: BLE001
+            nb = f"bse failed: {e}"
+        print(f"BHAV backfill {d}: {len(rows)} symbols, bse {nb}")
         last = (d, set(existing))
     if last:  # F&O only for the last session: the chain is a snapshot, not a history
         fo = fetch_fo(last[0])
