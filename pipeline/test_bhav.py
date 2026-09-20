@@ -53,7 +53,7 @@ def test_fno_of_ladder_pcr_max_strikes_and_chain_window():
     assert [x["expiry"] for x in f["futures"]] == ["2026-09-29", "2026-10-27"]  # sorted
     assert f["futures"][0]["chg_pct"] == -4.4 and f["futures"][0]["oi"] == 6930000 and f["futures"][0]["lot"] == 225
     assert f["ce_oi"] == 1750 and f["pe_oi"] == 1625 and f["pcr"] == 0.93
-    assert f["max_ce"] == 2200 and f["max_pe"] == 2000
+    assert f["max_ce"] == 2200 and f["max_pe"] == 2000 and f["max_ce_oi"] == 900 and f["max_pe_oi"] == 800
     assert [s["strike"] for s in f["chain"]] == [2000, 2100, 2200, 2300, 2400]  # all within ±6 of ATM
     assert f["chain"][1] == {"strike": 2100.0, "ce_oi": 300, "ce_oi_chg": 100, "ce_ltp": 10.0, "ce_vol": 10,
                              "pe_oi": 600, "pe_oi_chg": 100, "pe_ltp": 12.0, "pe_vol": 10}
@@ -96,3 +96,12 @@ def test_refresh_bhav_writes_tape_for_known_symbols_and_fno(monkeypatch):
 
 def test_group_registered_daily():
     assert "bhav" in dict(market.GROUPS) and market.DAILY_SLOT["bhav"] == (19, 30)
+
+
+def test_fno_max_oi_ignores_far_stale_strikes():
+    rows = [fo_row("TCS", "STF", "2026-09-29", und="2105"),
+            fo_row("TCS", "STO", "2026-09-29", strike="2800", opt="PE", oi="999999"),   # 33% away: ignored
+            fo_row("TCS", "STO", "2026-09-29", strike="2000", opt="PE", oi="500"),
+            fo_row("TCS", "STO", "2026-09-29", strike="2200", opt="CE", oi="700")]
+    f = bhav.fno_of(rows, date(2026, 9, 18))
+    assert f["max_pe"] == 2000 and f["max_pe_oi"] == 500 and f["max_ce"] == 2200

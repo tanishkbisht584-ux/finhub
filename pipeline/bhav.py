@@ -25,6 +25,7 @@ ARCH = "https://nsearchives.nseindia.com/"
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinSwipe/1.0"}
 TAPE_DAYS = 22      # ~one trading month, the longest MC average
 FNO_STRIKES = 6     # strikes each side of the underlying kept in the chain
+NEAR = 0.15         # max-OI strikes must sit within ±15% of the underlying
 FUT_TYPES = ("STF",)
 OPT_TYPES = ("STO",)
 
@@ -137,11 +138,17 @@ def fno_of(rows, day):
     ordered = sorted(strikes.values(), key=lambda s: s["strike"])
     at = next((i for i, s in enumerate(ordered) if underlying is not None and s["strike"] >= underlying), len(ordered))
     lo, hi = max(0, at - FNO_STRIKES), min(len(ordered), at + FNO_STRIKES)
+    # 20 Sep review: TCS's biggest put pile sat at 2,800 with the stock at
+    # 2,105 — a stale deep-ITM position, not "support". Only strikes within
+    # NEAR of the underlying count for the max-OI reads (all strikes if none).
+    near = [s for s in ordered if underlying and abs(s["strike"] / underlying - 1) <= NEAR] or ordered
+    max_ce = max(near, key=lambda s: s.get("ce_oi") or 0)
+    max_pe = max(near, key=lambda s: s.get("pe_oi") or 0)
     out.update({
         "expiry": expiry, "ce_oi": ce_oi, "pe_oi": pe_oi,
         "pcr": round(pe_oi / ce_oi, 2) if ce_oi else None,
-        "max_ce": max(strikes.values(), key=lambda s: s.get("ce_oi") or 0)["strike"],
-        "max_pe": max(strikes.values(), key=lambda s: s.get("pe_oi") or 0)["strike"],
+        "max_ce": max_ce["strike"], "max_ce_oi": max_ce.get("ce_oi"),
+        "max_pe": max_pe["strike"], "max_pe_oi": max_pe.get("pe_oi"),
         "chain": ordered[lo:hi],
     })
     return out

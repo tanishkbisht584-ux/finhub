@@ -30,7 +30,9 @@ NUM = {"ch1w": "ret_1w", "ch1m": "ret_1m", "ch3m": "ret_3m", "ch6m": "ret_6m", "
        "industryPe": "industry_pe", "sharesYoY": "shares_yoy",
        # 024 (19 Sep): universe technicals for the Markets TRENDS section + stock page
        "zScore": "altman_z", "ma50": "ma50", "ma200": "ma200", "rsi": "rsi",
-       "high52": "hi52", "low52": "lo52"}
+       "high52": "hi52", "low52": "lo52",
+       # 026 (20 Sep review): Yahoo's beta read 0.17 for TCS vs MC's 0.78; the site's 5Y beta matches MC
+       "beta": "beta_5y"}
 # display-only extras -> `sa` jsonb (dates, analyst, company facts)
 SA_KEYS = ("allTimeHigh", "allTimeHighDate", "high52Date", "low52Date", "grahamNumber",
            "nextEarningsDate", "lastReportDate", "exDivDate", "paymentDate", "employees",
