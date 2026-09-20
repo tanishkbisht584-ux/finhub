@@ -105,7 +105,9 @@ def fno_of(rows, day):
     underlying = _f(futs[0].get("UndrlygPric"))
     futures = []
     for r in futs:
-        close, prev = _f(r.get("ClsPric")), _f(r.get("PrvsClsgPric"))
+        # LastPric is what MC prints (2,095 for TCS Sep on 18 Sep); ClsPric is
+        # the exchange's settlement-ish close (2,098.20). Last when it traded.
+        close, prev = _f(r.get("LastPric")) or _f(r.get("ClsPric")), _f(r.get("PrvsClsgPric"))
         futures.append({"expiry": r.get("XpryDt"), "close": close, "prev": prev,
                         "chg_pct": round((close / prev - 1) * 100, 2) if close and prev else None,
                         "oi": _i(r.get("OpnIntrst")), "oi_chg": _i(r.get("ChngInOpnIntrst")),
