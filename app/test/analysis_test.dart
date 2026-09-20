@@ -154,6 +154,28 @@ void main() {
     expect(estimateLabel(const {'period': '0y'}), '0y');
   });
 
+  test('withScreenerTech synthesises meta.t from screener columns only when absent', () {
+    final m = withScreenerTech(const {'f': {'pe': 1}}, const {'ma50': 2300.0, 'ma200': 2550.0, 'rsi': 32.0, 'hi52': 3350.0, 'lo52': 1976.8, 'trend': 'bearish'}, 2105.0);
+    final t = m['t'] as Map;
+    expect(t['sma50'], 2300.0);
+    expect(t['trend'], 'down');
+    expect(t['above200'], isFalse);
+    expect((t['pos52'] as double).toStringAsFixed(3), '0.093');
+    expect(t['src'], 'screener');
+    expect(withScreenerTech(meta, const {'ma50': 1.0}, 2105.0)['t'], same(meta['t'])); // existing t untouched
+    expect(withScreenerTech(const {}, const {}, 2105.0).containsKey('t'), isFalse);
+    expect(withScreenerTech(const {}, const {'ma50': 1.0}, null).containsKey('t'), isFalse);
+  });
+
+  test('altmanZ from the annual row: TCS-like inputs land in the safe zone', () {
+    final z = altmanZ({'total_assets': 182372, 'sales': 267021, 'reserves': 106878, 'equity_cap': 362,
+      'pbt': 65487, 'interest': 1227, 'wc_days': 102}, 761607)!;
+    expect(z, greaterThan(8)); // MC prints 8.58 on its own inputs
+    expect(altmanZ({'total_assets': 100}, 10), isNull);
+    expect(altmanZ({'total_assets': 100, 'sales': 50, 'reserves': 120, 'equity_cap': 5, 'pbt': 1, 'wc_days': 10}, 10), isNull); // TL ≤ 0
+    expect(snapshotStats(const {'f': {'pe': 10.0}}, roeFallback: 21.5).firstWhere((t) => t.label == 'ROE').value, '21.5%');
+  });
+
   test('techStats: trend / RSI / MACD tiles with tone', () {
     final tiles = techStats(meta);
     expect([for (final t in tiles) t.label], ['Trend', 'RSI-14', 'MACD']);

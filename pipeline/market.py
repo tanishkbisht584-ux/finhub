@@ -736,8 +736,14 @@ def refresh_analysis_all(sb, now):
             existing.update({r["symbol"]: {} for r in rows})
     todo = needs_refresh([s for s in universe if s in existing], existing, "f_at", now)
     todo.sort(key=lambda s: existing[s].get("f_at") or "")
-    updates = fetch_fundamentals_for(todo[:ANALYSIS_ALL_CAP])
-    return merge_meta(sb, updates, "f", now) if updates else 0
+    batch = todo[:ANALYSIS_ALL_CAP]
+    updates = fetch_fundamentals_for(batch)
+    n = merge_meta(sb, updates, "f", now) if updates else 0
+    # the audit (20 Sep) found meta.t on 45% of the sample only: the same
+    # batch gets its technicals from the 1y chart, so TECHNICALS is populated
+    # for the whole universe too (one chart call per symbol per day).
+    t_updates = fetch_technicals_for(needs_refresh(batch, existing, "t_at", now))
+    return n + (merge_meta(sb, t_updates, "t", now) if t_updates else 0)
 
 
 def fetch_fundamentals_for(symbols):

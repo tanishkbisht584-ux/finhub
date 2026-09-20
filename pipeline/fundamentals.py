@@ -954,6 +954,14 @@ def deep_fetch(sb, symbols, now, nse=True, q_cap=2, yahoo=True):
                 print(f"FUND basis mismatch {sym}: yahoo statements dropped"
                       f"{' (' + str(stats.get('currency')) + ')' if foreign else ''}")
                 annuals, quarters = {}, {}
+                # 20 Sep: rows a previous pass wrote before the gate caught this
+                # symbol (INFY's USD quarters) must go too — nothing overwrites
+                # them otherwise. kaggle / nse rows stay.
+                for kind, rows in (("annual", prior), ("quarter", prior_q)):
+                    for p in [p for p, d in rows.items() if (d.get("src") or "").startswith("yahoo")]:
+                        sb("DELETE", f"fundamentals?symbol=eq.{qsym}&kind=eq.{kind}&period=eq.{p}")
+                        del rows[p]
+                        counters["junk_deleted"] += 1
             annuals, quarters = _overwritable(annuals, prior), _overwritable(quarters, prior_q)
             shareholding, docs = {}, None
             if nse:

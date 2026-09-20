@@ -36,10 +36,12 @@ String _signed(double v, {int decimals = 1}) =>
 /// tile carries MC's verdict ("below sector 22.8") and a tone; [ath] /
 /// [athPct] (Stock Analysis) add the all-time-high tile.
 List<Stat> snapshotStats(Map<String, dynamic> meta,
-    {double? sectorPe, double? ath, double? athPct, double? ttmDivYield}) {
+    {double? sectorPe, double? ath, double? athPct, double? ttmDivYield, double? roeFallback}) {
   final f = _sub(meta, 'f');
   if (f == null || f.isEmpty) return const [];
-  double? n(String k) => (f[k] as num?)?.toDouble();
+  // audit: Yahoo's ROE is absent for 85% of names; the screener's (from the
+  // stored annual rows) stands in.
+  double? n(String k) => (f[k] as num?)?.toDouble() ?? (k == 'roe' ? roeFallback : null);
   final out = <Stat>[];
   void add(String label, double? v, String Function(double) fmt,
       {String? sub, int tone = 0}) {
@@ -889,4 +891,56 @@ String estimateLabel(Map e) {
   final p = '${e['period'] ?? ''}';
   if (p.endsWith('q')) return 'Q ${monthAbbr[d.month - 1]} ${d.year % 100}';
   return 'FY${d.year % 100}';
+}
+
+/// Audit fixes (20 Sep review). The 60-stock audit found meta.t on 45% of
+/// the sample, Yahoo's ROE on 15% and Stock Analysis' Altman Z on 2%.
+
+/// meta with a technicals block synthesised from the screener row's
+/// universe-wide columns (ma50 / ma200 / rsi / hi52 / lo52 / trend) when the
+/// pipeline has not computed meta.t for this symbol yet.
+Map<String, dynamic> withScreenerTech(Map<String, dynamic> meta, Map<String, dynamic> sa, double? price) {
+  final t = _sub(meta, 't');
+  if (t != null && t.isNotEmpty) return meta;
+  double? n(String k) => (sa[k] as num?)?.toDouble();
+  final ma50 = n('ma50'), ma200 = n('ma200');
+  if (price == null || (ma50 == null && ma200 == null)) return meta;
+  const word = {'bullish': 'up', 'bearish': 'down', 'mixed': 'mixed'};
+  return {
+    ...meta,
+    't': {
+      'close': price,
+      if (ma50 != null) 'sma50': ma50,
+      if (ma200 != null) 'sma200': ma200,
+      if (n('rsi') != null) 'rsi14': n('rsi'),
+      if (n('hi52') != null) 'hi52': n('hi52'),
+      if (n('lo52') != null) 'lo52': n('lo52'),
+      if (n('hi52') != null && n('lo52') != null && n('hi52')! > n('lo52')!)
+        'pos52': ((price - n('lo52')!) / (n('hi52')! - n('lo52')!)).clamp(0.0, 1.0),
+      if (ma200 != null) 'above200': price > ma200,
+      if (ma200 != null) 'vs200': (price / ma200 - 1) * 100,
+      if (ma50 != null) 'vs50': (price / ma50 - 1) * 100,
+      'trend': word[sa['trend']] ?? 'mixed',
+      'src': 'screener',
+    },
+  };
+}
+
+/// Altman Z from the latest annual row (₹ Cr) and the market cap, the
+/// original 1968 form: 1.2·WC/TA + 1.4·RE/TA + 3.3·EBIT/TA + 0.6·MVE/TL +
+/// 1.0·Sales/TA. WC comes back from the stored working-capital days. Null
+/// for lenders (no wc_days, no meaning) or when any input is missing.
+double? altmanZ(Map<String, dynamic> annual, double? mcapCr) {
+  double? n(String k) => (annual[k] as num?)?.toDouble();
+  final ta = n('total_assets'), sales = n('sales'), re = n('reserves');
+  final pbt = n('pbt'), interest = n('interest') ?? 0, wcDays = n('wc_days');
+  final eq = n('equity_cap') != null || re != null ? (n('equity_cap') ?? 0) + (re ?? 0) : null;
+  if (ta == null || ta <= 0 || sales == null || re == null || pbt == null || wcDays == null || eq == null || mcapCr == null) {
+    return null;
+  }
+  final tl = ta - eq;
+  if (tl <= 0) return null;
+  final wc = wcDays / 365 * sales;
+  final ebit = pbt + interest;
+  return 1.2 * wc / ta + 1.4 * re / ta + 3.3 * ebit / ta + 0.6 * mcapCr / tl + 1.0 * sales / ta;
 }

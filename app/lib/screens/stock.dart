@@ -158,7 +158,7 @@ class _StockScreenState extends State<StockScreen> {
             'industry,sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
             'ath_pct,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
-            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno,tape_bse')
+            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno,tape_bse,roe,mcap_cr')
         .eq('symbol', widget.company.nseSymbol)
         .maybeSingle()
         .then((self) {
@@ -514,8 +514,10 @@ class _StockScreenState extends State<StockScreen> {
   Widget _onTicks(Widget Function(Map<String, dynamic> meta) build) =>
       ValueListenableBuilder<Map<String, Tick>>(
         valueListenable: ticks,
-        builder: (_, m, __) =>
-            build(m[widget.company.nseSymbol]?.meta ?? const {}),
+        builder: (_, m, __) => build(withScreenerTech(
+            m[widget.company.nseSymbol]?.meta ?? const {},
+            _sa,
+            _quote?.price ?? m[widget.company.nseSymbol]?.price)),
       );
 
   Widget _stamp(String s) => Text(s, style: mono.copyWith(fontSize: 10));
@@ -583,7 +585,8 @@ class _StockScreenState extends State<StockScreen> {
             athPct: (_sa['ath_pct'] as num?)?.toDouble(),
             // 20 Sep review: Yahoo's yield read 3.1% for TCS vs MC's 5.23 — the
             // trailing-12-month dividends we already hold give MC's number.
-            ttmDivYield: divs.isEmpty || q == null || q.price == 0 ? null : ttmDiv / q.price * 100);
+            ttmDivYield: divs.isEmpty || q == null || q.price == 0 ? null : ttmDiv / q.price * 100,
+            roeFallback: (_sa['roe'] as num?)?.toDouble());
         final returns = returnsGrid(_sa);
         final hasReturns = returns.any((r) => r.$2 != null);
         final street = streetStats(_sa);
@@ -817,7 +820,10 @@ class _StockScreenState extends State<StockScreen> {
   /// VITALS (Phase 3): Altman Z, Piotroski, Graham, DuPont.
   Widget _vitals() => _onTicks((meta) {
         final q = _quote;
-        final z = (_sa['altman_z'] as num?)?.toDouble();
+        final annualRow = _fund.annual.values.lastOrNull;
+        final zSa = (_sa['altman_z'] as num?)?.toDouble();
+        final z = zSa ??
+            (annualRow == null ? null : altmanZ(annualRow, (_sa['mcap_cr'] as num?)?.toDouble()));
         final fs = (_sa['f_score'] as num?)?.toDouble();
         final sa = (_sa['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
         final graham = (sa['grahamNumber'] as num?)?.toDouble();
@@ -843,7 +849,7 @@ class _StockScreenState extends State<StockScreen> {
                         ? amber
                         : green,
                 explain:
-                    'Bankruptcy-risk model from five balance-sheet ratios. Above 3 the company has robust financial health and a low chance of distress; below 1.8 it is in the danger zone.'),
+                    'Bankruptcy-risk model from five balance-sheet ratios${zSa == null ? ', computed here from the latest annual report and market cap' : ''}. Above 3 the company has robust financial health and a low chance of distress; below 1.8 it is in the danger zone.'),
           if (fs != null)
             ..._gauge('PIOTROSKI F-SCORE', fs,
                 min: 0,
@@ -1392,9 +1398,10 @@ class _StockScreenState extends State<StockScreen> {
           return const SizedBox.shrink();
         }
         return LedgerSection('Technicals',
-            action: _stamp('1y daily closes'),
-            footnote:
-                'computed from 1y daily closes · as of ${fmtDay(meta['t_at'])} · pivots from the last session',
+            action: _stamp((meta['t'] as Map?)?['src'] == 'screener' ? 'screener averages' : '1y daily closes'),
+            footnote: (meta['t'] as Map?)?['src'] == 'screener'
+                ? '50 & 200-day averages and RSI from Stock Analysis · the pipeline computes the full set on first open · pivots from the last session'
+                : 'computed from 1y daily closes · as of ${fmtDay(meta['t_at'])} · pivots from the last session',
             children: [
               if (tiles.isNotEmpty) ...[
                 const SizedBox(height: 10),

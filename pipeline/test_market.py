@@ -1473,11 +1473,13 @@ def test_refresh_analysis_all_creates_rows_then_refreshes_oldest(monkeypatch):
 
     monkeypatch.setattr(market, "fetch_spark",
                         lambda syms, rng="5d": {"NEW.NS": {"close": [9.0, 10.0], "timestamp": [1, 2]}})  # GONE.NS: no data
-    fetched = []
+    fetched, tech = [], []
     monkeypatch.setattr(market, "fetch_fundamentals_for", lambda syms: fetched.extend(syms) or {s: {"pe": 1} for s in syms})
+    monkeypatch.setattr(market, "fetch_technicals_for", lambda syms: tech.extend(syms) or {s: {"rsi14": 50} for s in syms})
     writes = []
     monkeypatch.setattr(market, "upsert", lambda sb_, rows, **k: writes.append(rows) or len(rows))
-    assert market.refresh_analysis_all(sb, NOW) == 2
+    assert market.refresh_analysis_all(sb, NOW) == 4
     assert [r["symbol"] for r in writes[0]] == ["NEW"]              # price row for the quote-less one
     assert fetched == ["NEW", "OLD"]                               # never-fetched, then stale; HOT (fresh) skipped
     assert {r["symbol"] for r in writes[1]} == {"OLD", "NEW"} and writes[1][0]["meta"]["f"] == {"pe": 1}
+    assert tech == ["NEW", "OLD"] and writes[2][0]["meta"]["t"] == {"rsi14": 50}   # same batch gets technicals
