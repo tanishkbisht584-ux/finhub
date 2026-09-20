@@ -126,6 +126,16 @@ void main() {
     expect(infoRows(const {}, const {}), isEmpty);
   });
 
+  test('hitsMisses and estimateLabel (Phase 6)', () {
+    final hm = hitsMisses(const [
+      {'surprise': 2.5}, {'surprise': 1.1}, {'surprise': -0.5}, {'surprise': -14.5}, {'x': 1}
+    ]);
+    expect((hm.beats, hm.misses, hm.inline), (1, 1, 2));
+    expect(estimateLabel(const {'period': '0q', 'end': '2026-09-30'}), 'Q Sep 26');
+    expect(estimateLabel(const {'period': '+1y', 'end': '2028-03-31'}), 'FY28');
+    expect(estimateLabel(const {'period': '0y'}), '0y');
+  });
+
   test('techStats: trend / RSI / MACD tiles with tone', () {
     final tiles = techStats(meta);
     expect([for (final t in tiles) t.label], ['Trend', 'RSI-14', 'MACD']);

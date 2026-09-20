@@ -822,3 +822,34 @@ List<(String, String)> infoRows(Map<String, dynamic> meta, Map<String, dynamic> 
     if (s(j['lastReportDate']) != null) ('Last report', dmy(j['lastReportDate'])),
   ];
 }
+
+/// FORECAST (Phase 6): the street block from meta.f.street. Beats / misses
+/// use MC's read of the surprise: beyond ±2% counts, inside is in line.
+typedef HitCount = ({int beats, int misses, int inline});
+
+HitCount hitsMisses(List hist) {
+  var b = 0, m = 0, i = 0;
+  for (final h in hist) {
+    final s = (h is Map ? h['surprise'] as num? : null)?.toDouble();
+    if (s == null) continue;
+    if (s > 2) {
+      b++;
+    } else if (s < -2) {
+      m++;
+    } else {
+      i++;
+    }
+  }
+  return (beats: b, misses: m, inline: i);
+}
+
+/// 'Q Sep 26' for a quarter period, 'FY27' for a fiscal year (Indian FY ends
+/// in March, so the FY is the end date's year).
+String estimateLabel(Map e) {
+  final end = '${e['end'] ?? ''}';
+  final d = DateTime.tryParse(end);
+  if (d == null) return '${e['period'] ?? ''}';
+  final p = '${e['period'] ?? ''}';
+  if (p.endsWith('q')) return 'Q ${monthAbbr[d.month - 1]} ${d.year % 100}';
+  return 'FY${d.year % 100}';
+}

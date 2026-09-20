@@ -1174,6 +1174,152 @@ class _StockScreenState extends State<StockScreen> {
         ]);
   }
 
+  /// FORECAST (Phase 6, MC's Forecast tab): target ladder, EPS / revenue
+  /// estimates, consensus by month, hits / misses — Yahoo quoteSummary.
+  Widget _forecast() => _onTicks((meta) {
+        final f = (meta['f'] as Map?)?.cast<String, dynamic>() ?? const {};
+        final st = (f['street'] as Map?)?.cast<String, dynamic>();
+        final q = _quote;
+        if (st == null) return const SizedBox.shrink();
+        final target = (st['target'] as Map?)?.cast<String, dynamic>() ?? const {};
+        final est = [for (final e in (st['est'] as List? ?? const [])) Map<String, dynamic>.from(e as Map)];
+        final trend = [for (final t in (st['trend'] as List? ?? const [])) Map<String, dynamic>.from(t as Map)];
+        final hist = [for (final h in (st['hist'] as List? ?? const [])) Map<String, dynamic>.from(h as Map)]
+          ..sort((a, b) => '${b['q']}'.compareTo('${a['q']}'));
+        final hm = hitsMisses(hist);
+        double? tn(String k) => (target[k] as num?)?.toDouble();
+        final lo = tn('lo'), hi = tn('hi'), mean = tn('mean');
+        String n0(Object? v) => v is num ? fmtNum(v.toDouble(), decimals: 0) : '—';
+        String n2(Object? v) => v is num ? v.toDouble().toStringAsFixed(2) : '—';
+        const monthLabel = {'0m': 'This month', '-1m': '1 month ago', '-2m': '2 months ago', '-3m': '3 months ago'};
+        return LedgerSection('Forecast',
+            action: _stamp('as of ${fmtDay(meta['f_at'])}'),
+            footnote:
+                'Yahoo Finance consensus · EPS in ₹, revenue in ₹ Cr · beat / miss = surprise beyond ±2% · not advice',
+            children: [
+              if (lo != null && hi != null && mean != null && q != null) ...[
+                const SizedBox(height: 8),
+                Text('PRICE TARGETS · ${n0(target['n'])} ANALYSTS', style: monoLabel),
+                const SizedBox(height: 6),
+                StatGrid([
+                  StatTile('Low', '₹${n0(lo)}', color: red),
+                  StatTile('Mean', '₹${n0(mean)}',
+                      sub: '${fmtPct((mean / q.price - 1) * 100, decimals: 1)} vs price',
+                      color: mean >= q.price ? green : red),
+                  StatTile('High', '₹${n0(hi)}', color: green),
+                ]),
+                const SizedBox(height: 8),
+                ScaleBar(q.price,
+                    min: lo < q.price ? lo : q.price,
+                    max: hi > q.price ? hi : q.price,
+                    zones: [(lo, mean, red), (mean, hi, green)],
+                    marks: [(mean, 'mean')]),
+                Text('marker = current price ₹${fmtNum(q.price)}', style: mono.copyWith(fontSize: 10)),
+              ],
+              if (est.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Text('ESTIMATES', style: monoLabel),
+                const SizedBox(height: 6),
+                LedgerTable(const [
+                  LtCol('Period', right: false),
+                  LtCol('EPS avg'),
+                  LtCol('EPS low'),
+                  LtCol('EPS high'),
+                  LtCol('Revenue ₹Cr'),
+                  LtCol('Growth'),
+                  LtCol('Analysts'),
+                ], [
+                  for (final e in est)
+                    (
+                      cells: [
+                        estimateLabel(e),
+                        n2(e['eps']),
+                        n2(e['eps_lo']),
+                        n2(e['eps_hi']),
+                        n0(e['rev_cr']),
+                        e['growth'] is num ? fmtPct((e['growth'] as num).toDouble() * 100, decimals: 1) : '—',
+                        n0(e['eps_n'] ?? e['rev_n']),
+                      ],
+                      tone: 0,
+                      onTap: null,
+                    ),
+                ]),
+              ],
+              if (trend.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Text('CONSENSUS · ANALYST COUNT BY GRADE', style: monoLabel),
+                const SizedBox(height: 6),
+                for (final t in trend) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, bottom: 3),
+                    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                      Text(monthLabel[t['period']] ?? '${t['period']}', style: mono.copyWith(fontSize: 10, color: inkDim)),
+                      Text('${[for (final k in const ['sb', 'b', 'h', 's', 'ss']) (t[k] as num?) ?? 0].fold<num>(0, (a, b) => a + b)} analysts',
+                          style: mono.copyWith(fontSize: 10, color: inkDim)),
+                    ]),
+                  ),
+                  StackedBar([
+                    for (final (k, label, c) in [
+                      ('sb', 'Strong buy', green),
+                      ('b', 'Buy', green.withValues(alpha: 0.6)),
+                      ('h', 'Hold', inkDim),
+                      ('s', 'Sell', red.withValues(alpha: 0.6)),
+                      ('ss', 'Strong sell', red),
+                    ])
+                      if (((t[k] as num?) ?? 0) > 0)
+                        ((t[k] as num).toDouble(), c, '$label ${t[k]}')
+                  ]),
+                ],
+              ],
+              if (hist.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Text('HITS & MISSES · EPS', style: monoLabel),
+                const SizedBox(height: 6),
+                StatGrid([
+                  StatTile('Beats', '${hm.beats}', color: green),
+                  StatTile('Misses', '${hm.misses}', color: red),
+                  StatTile('In line', '${hm.inline}'),
+                ]),
+                const SizedBox(height: 8),
+                LedgerTable(const [
+                  LtCol('Quarter', right: false),
+                  LtCol('Actual'),
+                  LtCol('Estimate'),
+                  LtCol('Surprise'),
+                ], [
+                  for (final h in hist)
+                    (
+                      cells: [
+                        dmy(h['q']),
+                        n2(h['actual']),
+                        n2(h['est']),
+                        h['surprise'] is num ? fmtPct((h['surprise'] as num).toDouble(), decimals: 1) : '—',
+                      ],
+                      tone: ((h['surprise'] as num?) ?? 0) > 2
+                          ? 1
+                          : ((h['surprise'] as num?) ?? 0) < -2
+                              ? -1
+                              : 0,
+                      onTap: null,
+                    ),
+                ]),
+              ],
+            ]);
+      });
+
+  /// RESEARCH: MC's broker cards. Yahoo's upgrade / downgrade history is empty
+  /// for NSE listings (probed 20 Sep) — "coming" until a source is found.
+  Widget _research() => LedgerSection('Research',
+          footnote: 'broker recommendations · source not wired yet',
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                  'Coming. No keyless feed of Indian broker reports has passed a terms check yet; the consensus above is the aggregate view.',
+                  style: mono.copyWith(fontSize: 12, height: 1.5, color: inkDim)),
+            ),
+          ]);
+
   /// FUNDAMENTALS: the full labelled table against sector medians, then the
   /// eight-quarter sales/profit bars.
   Widget _fundamentals() => _onTicks((meta) {
@@ -1439,11 +1585,17 @@ class _StockScreenState extends State<StockScreen> {
   /// profile parse (Phase 6) — not wired yet.
   Widget _info() => _onTicks((meta) {
         final rows = infoRows(meta, _sa);
-        if (rows.isEmpty) return const SizedBox.shrink();
-        return LedgerSection('Info',
-            footnote:
-                'Stock Analysis + Yahoo · management and registered address: source not wired yet',
+        final f = (meta['f'] as Map?)?.cast<String, dynamic>() ?? const {};
+        final pr = (f['profile'] as Map?)?.cast<String, dynamic>() ?? const {};
+        final officers = [for (final o in (pr['officers'] as List? ?? const [])) Map<String, dynamic>.from(o as Map)];
+        if (rows.isEmpty && pr.isEmpty) return const SizedBox.shrink();
+        return LedgerSection('Info & management',
+            footnote: 'Stock Analysis + Yahoo Finance profile',
             children: [
+              if (pr['summary'] != null) ...[
+                const SizedBox(height: 8),
+                Text('${pr['summary']}', style: serif.copyWith(fontSize: 13, height: 1.45)),
+              ],
               const SizedBox(height: 6),
               for (final (k, v) in rows)
                 k == 'Website'
@@ -1453,6 +1605,25 @@ class _StockScreenState extends State<StockScreen> {
                         child: LedgerRow(lead: k, main: '', trail: v, trailColor: green),
                       )
                     : LedgerRow(lead: k, main: '', trail: v),
+              if (officers.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text('MANAGEMENT', style: monoLabel),
+                const SizedBox(height: 4),
+                for (final o in officers)
+                  LedgerRow(
+                      lead: '${o['name']}',
+                      main: '${o['title'] ?? ''}',
+                      trail: o['age'] == null ? '' : '${o['age']}'),
+              ],
+              if (pr['address'] != null || pr['phone'] != null) ...[
+                const SizedBox(height: 12),
+                Text('REGISTERED OFFICE', style: monoLabel),
+                const SizedBox(height: 4),
+                if (pr['address'] != null)
+                  Text('${pr['address']}', style: mono.copyWith(fontSize: 12, height: 1.4)),
+                if (pr['phone'] != null)
+                  Text('${pr['phone']}', style: mono.copyWith(fontSize: 12, color: inkDim)),
+              ],
             ]);
       });
 
@@ -1542,6 +1713,8 @@ class _StockScreenState extends State<StockScreen> {
       (id: 'chart', label: 'CHART', child: col(_priceHeader())),
       (id: 'overview', label: 'OVERVIEW', child: _overview()),
       (id: 'insights', label: 'INSIGHTS', child: _insights()),
+      if ((_meta['f'] as Map?)?['street'] != null)
+        (id: 'forecast', label: 'FORECAST', child: _forecast()),
       (id: 'technicals', label: 'TECHNICALS', child: _technicals()),
       if (_sa['tape'] != null)
         (id: 'delivery', label: 'DELIVERY', child: _delivery()),
@@ -1552,6 +1725,7 @@ class _StockScreenState extends State<StockScreen> {
         (id: 'actions', label: 'ACTIONS', child: _actions()),
       (id: 'fundamentals', label: 'FUNDAMENTALS', child: _fundamentals()),
       if (_sa.isNotEmpty) (id: 'returns', label: 'STREET', child: _returns()),
+      (id: 'research', label: 'RESEARCH', child: _research()),
       if (_seasonQ != null)
         (id: 'seasonality', label: 'SEASONALITY', child: _seasonality()),
       if ((f.summary['pros'] as List?)?.isNotEmpty == true ||

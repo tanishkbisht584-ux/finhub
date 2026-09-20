@@ -556,7 +556,11 @@ def refresh_macro(sb, now):
 QS_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/"
 CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 QS_MODULES = ("summaryDetail,defaultKeyStatistics,financialData,"
-              "incomeStatementHistoryQuarterly,majorHoldersBreakdown,assetProfile")
+              "incomeStatementHistoryQuarterly,majorHoldersBreakdown,assetProfile,"
+              # Phase 6 (20 Sep): the street + the profile. Verified populated for
+              # .NS symbols (TCS/HDFCBANK/KPITTECH/IDEA); upgradeDowngradeHistory
+              # and the ownership lists come back EMPTY for NSE - not requested.
+              "recommendationTrend,earningsTrend,earningsHistory")
 ANALYSIS_MAX_AGE_H = 20  # a process restart must not redo the whole universe
 ANALYSIS_NEW_CAP = 10    # requested-symbol backfills per pass; bursts drain over a few 5-min passes
 
@@ -615,8 +619,64 @@ def parse_fundamentals(j):
                           .get("incomeStatementHistory") or [])[:4]]
     if quarters:
         f["quarters"] = quarters
+    street = parse_street(r)
+    if street:
+        f["street"] = street
+    profile = parse_profile(r.get("assetProfile") or {})
+    if profile:
+        f["profile"] = profile
     f = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in f.items() if v is not None}
     return f
+
+
+def _drop_none(d):
+    return {k: v for k, v in d.items() if v is not None}
+
+
+def parse_street(r):
+    """Analyst consensus trend (4 months x 5 grades), EPS / revenue estimates
+    (0q, +1q, 0y, +1y; revenue in Rs Cr), 4 quarters actual vs estimate with
+    the surprise %, and the target ladder. Empty dict when Yahoo has none."""
+    def rv(d, *keys):
+        for k in keys:
+            d = (d or {}).get(k) or {}
+        return d.get("raw") if isinstance(d, dict) else None
+
+    trend = [_drop_none({"period": t.get("period"), "sb": t.get("strongBuy"), "b": t.get("buy"),
+                         "h": t.get("hold"), "s": t.get("sell"), "ss": t.get("strongSell")})
+             for t in (r.get("recommendationTrend") or {}).get("trend") or []]
+    est = []
+    for t in (r.get("earningsTrend") or {}).get("trend") or []:
+        rev = rv(t, "revenueEstimate", "avg")
+        est.append(_drop_none({
+            "period": t.get("period"), "end": t.get("endDate"),
+            "eps": rv(t, "earningsEstimate", "avg"), "eps_lo": rv(t, "earningsEstimate", "low"),
+            "eps_hi": rv(t, "earningsEstimate", "high"), "eps_n": rv(t, "earningsEstimate", "numberOfAnalysts"),
+            "rev_cr": round(rev / 1e7, 1) if rev else None,
+            "rev_n": rv(t, "revenueEstimate", "numberOfAnalysts"),
+            "growth": rv(t, "growth")}))
+    hist = [_drop_none({"q": (h.get("quarter") or {}).get("fmt"), "actual": rv(h, "epsActual"),
+                        "est": rv(h, "epsEstimate"),
+                        "surprise": round(rv(h, "surprisePercent") * 100, 1) if rv(h, "surprisePercent") is not None else None})
+            for h in (r.get("earningsHistory") or {}).get("history") or []]
+    fd = r.get("financialData") or {}
+    target = _drop_none({"hi": rv(fd, "targetHighPrice"), "mean": rv(fd, "targetMeanPrice"),
+                         "lo": rv(fd, "targetLowPrice"), "n": rv(fd, "numberOfAnalystOpinions")})
+    out = _drop_none({"trend": trend or None, "est": est or None, "hist": hist or None,
+                      "target": target or None})
+    return out
+
+
+def parse_profile(ap):
+    """Management (top 8), registered address, phone, website, a 400-char
+    business summary - MC's Info & Mgmt tab."""
+    officers = [_drop_none({"name": o.get("name"), "title": o.get("title"), "age": o.get("age")})
+                for o in (ap.get("companyOfficers") or [])[:8] if o.get("name")]
+    address = ", ".join(str(ap[k]) for k in ("address1", "address2", "city", "zip") if ap.get(k))
+    summary = (ap.get("longBusinessSummary") or "")[:400]
+    return _drop_none({"officers": officers or None, "address": address or None,
+                       "phone": ap.get("phone"), "website": ap.get("website"),
+                       "summary": summary or None})
 
 
 def needs_refresh(symbols, existing_meta, stamp, now):

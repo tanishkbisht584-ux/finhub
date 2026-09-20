@@ -1396,3 +1396,34 @@ def test_refresh_monsoon_writes_blob_or_raises(monkeypatch):
     monkeypatch.setattr(market.requests, "get", lambda *a, **k: Empty())
     with pytest.raises(RuntimeError):
         market.refresh_monsoon(None, NOW)
+
+
+# ---------- Phase 6: street + profile from quoteSummary ----------
+
+def test_parse_street_and_profile():
+    r = {"recommendationTrend": {"trend": [{"period": "0m", "strongBuy": 9, "buy": 16, "hold": 10, "sell": 4, "strongSell": 2}]},
+         "earningsTrend": {"trend": [
+             {"period": "0q", "endDate": "2026-09-30", "growth": {"raw": 0.061},
+              "earningsEstimate": {"avg": {"raw": 37.93}, "low": {"raw": 36.1}, "high": {"raw": 39.5}, "numberOfAnalysts": {"raw": 7}},
+              "revenueEstimate": {"avg": {"raw": 722305431790}, "numberOfAnalysts": {"raw": 7}}},
+             {"period": "+1q", "endDate": "2026-12-31", "earningsEstimate": {}, "revenueEstimate": {"avg": {"raw": 727526693010}}}]},
+         "earningsHistory": {"history": [{"quarter": {"fmt": "2026-06-30"}, "epsActual": {"raw": 38.281}, "epsEstimate": {"raw": 37.33412}, "surprisePercent": {"raw": 0.0254}}]},
+         "financialData": {"targetHighPrice": {"raw": 3480.0}, "targetMeanPrice": {"raw": 2474.61}, "targetLowPrice": {"raw": 1800.0}, "numberOfAnalystOpinions": {"raw": 41}},
+         "assetProfile": {"companyOfficers": [{"name": "Mr. K. Krithivasan", "title": "MD & CEO", "age": 61}, {"title": "no name"}],
+                          "address1": "TCS House", "city": "Mumbai", "zip": "400001", "phone": "91 22 6778 9595",
+                          "website": "https://www.tcs.com", "longBusinessSummary": "x" * 500}}
+    st = market.parse_street(r)
+    assert st["trend"] == [{"period": "0m", "sb": 9, "b": 16, "h": 10, "s": 4, "ss": 2}]
+    assert st["est"][0] == {"period": "0q", "end": "2026-09-30", "eps": 37.93, "eps_lo": 36.1, "eps_hi": 39.5, "eps_n": 7,
+                            "rev_cr": 72230.5, "rev_n": 7, "growth": 0.061}
+    assert st["est"][1] == {"period": "+1q", "end": "2026-12-31", "rev_cr": 72752.7}   # blanks dropped
+    assert st["hist"] == [{"q": "2026-06-30", "actual": 38.281, "est": 37.33412, "surprise": 2.5}]
+    assert st["target"] == {"hi": 3480.0, "mean": 2474.61, "lo": 1800.0, "n": 41}
+    pr = market.parse_profile(r["assetProfile"])
+    assert pr["officers"] == [{"name": "Mr. K. Krithivasan", "title": "MD & CEO", "age": 61}]
+    assert pr["address"] == "TCS House, Mumbai, 400001" and pr["phone"] == "91 22 6778 9595"
+    assert len(pr["summary"]) == 400
+    assert market.parse_street({}) == {} and market.parse_profile({}) == {}
+    f = market.parse_fundamentals({"quoteSummary": {"result": [r]}})
+    assert f["street"]["target"]["n"] == 41 and f["profile"]["website"] == "https://www.tcs.com"
+    assert "street" not in market.parse_fundamentals({"quoteSummary": {"result": [{"summaryDetail": {}}]}})
