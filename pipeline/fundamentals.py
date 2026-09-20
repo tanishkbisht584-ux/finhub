@@ -240,10 +240,10 @@ def parse_timeseries(j):
     """timeseries payload -> {"annual": {end: {legacyKey: raw}}, "quarterly":
     {...}, "trailing": {...}}. Each result carries one type; entries with only
     meta+timestamp (no value list) are skipped, as are types we don't map."""
-    out = {"annual": {}, "quarterly": {}, "trailing": {}}
+    out = {"annual": {}, "quarterly": {}, "trailing": {}, "currency": None}
     for res in ((j.get("timeseries") or {}).get("result") or []):
         t = ((res.get("meta") or {}).get("type") or [""])[0] or ""
-        prefix = next((p for p in out if t.startswith(p)), None)
+        prefix = next((p for p in ("annual", "quarterly", "trailing") if t.startswith(p)), None)
         legacy = TS_TO_LEGACY.get(t[len(prefix):]) if prefix else None
         if not legacy:
             continue
@@ -252,6 +252,10 @@ def parse_timeseries(j):
             raw = ((x or {}).get("reportedValue") or {}).get("raw")
             if end and raw is not None:
                 out[prefix].setdefault(end, {})[legacy] = raw
+                # 20 Sep 2026: INFY's statements come in USD (its 20-F) — every
+                # point carries currencyCode; anything but INR must be dropped
+                # (deep_fetch treats it as a basis mismatch, NSE XBRL fills).
+                out["currency"] = out["currency"] or (x or {}).get("currencyCode")
     return out
 
 
@@ -823,6 +827,7 @@ def fetch_statements(sym, now=None):
         if avg:
             stats["shares"] = avg
     annuals, quarters = shape_statements(ts, stats)
+    stats["currency"] = ts.get("currency")
     return annuals, quarters, stats
 
 
@@ -939,12 +944,15 @@ def deep_fetch(sb, symbols, now, nse=True, q_cap=2, yahoo=True):
                     del rows[p]
                     counters["junk_deleted"] += 1
             basis_drop = False
-            if annuals and not basis_ok(annuals, prior):
-                # standalone/mis-defined Yahoo statements: never written; the
-                # NSE consolidated XBRL below is the only statement source.
+            foreign = stats.get("currency") not in (None, "INR")
+            if (annuals or quarters) and (foreign or (annuals and not basis_ok(annuals, prior))):
+                # standalone/mis-defined Yahoo statements, or statements in a
+                # foreign currency (INFY: USD): never written; the NSE
+                # consolidated XBRL below is the only statement source.
                 counters["basis_drop"] += 1
                 basis_drop = True
-                print(f"FUND basis mismatch {sym}: yahoo statements dropped")
+                print(f"FUND basis mismatch {sym}: yahoo statements dropped"
+                      f"{' (' + str(stats.get('currency')) + ')' if foreign else ''}")
                 annuals, quarters = {}, {}
             annuals, quarters = _overwritable(annuals, prior), _overwritable(quarters, prior_q)
             shareholding, docs = {}, None

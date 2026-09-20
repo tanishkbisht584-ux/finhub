@@ -754,3 +754,15 @@ def test_is_lender_by_interest_share_not_by_sign():
                   "incomeBeforeTax": 660e9, "incomeTaxExpense": 165e9, "netIncome": 495e9,
                   "interestExpense": -8e9, "depreciation": 50e9, "totalOtherIncomeExpenseNet": 0.8e9}, None)
     assert row["sales"] == 267000 and row["other_income"] == 3930 and row["op_profit"] > 0
+
+
+def test_parse_timeseries_records_currency():
+    import fundamentals as f
+    j = {"timeseries": {"result": [
+        {"meta": {"type": ["annualTotalRevenue"]},
+         "annualTotalRevenue": [{"asOfDate": "2026-03-31", "currencyCode": "USD", "reportedValue": {"raw": 2.03e10}}]},
+        {"meta": {"type": ["annualNetIncome"]},
+         "annualNetIncome": [{"asOfDate": "2026-03-31", "currencyCode": "USD", "reportedValue": {"raw": 3.2e9}}]}]}}
+    ts = f.parse_timeseries(j)
+    assert ts["currency"] == "USD" and ts["annual"]["2026-03-31"]["totalRevenue"] == 2.03e10
+    assert f.parse_timeseries({"timeseries": {"result": []}})["currency"] is None
