@@ -89,9 +89,21 @@ def test_young_listing_short_history_is_unfixable():
     a = audit(annuals, young_q, shp)
     assert a["missing"] == ["annual.short", "q.short"] and a["unfixable"] == ["annual.short", "q.short"]
     assert fa.deficit(a, NOW)[0] == 0
-    # the same 5 quarters on a 10-FY stock: NSE filings hold the rest
+    # the same 5 quarters on a 10-FY stock, NSE never asked: filings may hold the rest
+    a = audit(complete_stock()[0], young_q, shp, docs_at=None)
+    assert a["missing"] == ["q.short", "docs.missing"] and a["unfixable"] == []
+    # NSE asked and added nothing older than Yahoo's window: exhausted for now
     a = audit(complete_stock()[0], young_q, shp)
+    assert a["unfixable"] == ["q.short"]
+    # NSE did add an older quarter: the legacy feed has more, keep draining
+    a = audit(complete_stock()[0], {**young_q, "2024-12": q(250, src="nse")}, shp)
     assert a["missing"] == ["q.short"] and a["unfixable"] == []
+
+
+def test_shareholding_absent_after_an_nse_pass_is_unfixable():
+    annuals, quarters, _ = complete_stock()
+    assert audit(annuals, quarters, {}, docs_at=None)["unfixable"] == []
+    assert audit(annuals, quarters, {})["unfixable"] == ["shp.missing"]
 
 
 def test_lender_identity_passes_and_needs_no_roce():

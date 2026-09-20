@@ -139,8 +139,14 @@ def audit_symbol(annuals, quarters, shareholding, docs_at, basis_drop, now, comp
                if not _no_net_worth(annuals[p])):
             gap("ratios.missing", fixable=not nse_only)
     qs = sorted(quarters, reverse=True)
+    nse_ran = bool(docs_at)  # the NSE pieces ran for this symbol at least once
     if len(qs) < MIN_Q:
-        gap("q.short", fixable=not young)
+        # NSE was asked and added nothing older than Yahoo's own window: the
+        # legacy results feed (ends Dec-2024) carries nothing for this symbol,
+        # so the history is what exists until new quarters accrue (measured
+        # 20 Sep 2026: ~300 stocks sat at exactly 5 quarters for 3 days)
+        exhausted = nse_ran and len(qs) >= 5 and qs[-1] >= "2025-01"
+        gap("q.short", fixable=not (young or exhausted))
     for p in qs[:NEWEST_Q]:
         d = quarters[p]
         if p not in complete_q or any(d.get(k) is None for k in QUARTER_FIELDS):
@@ -148,7 +154,10 @@ def audit_symbol(annuals, quarters, shareholding, docs_at, basis_drop, now, comp
             break
     shp = sorted(shareholding, reverse=True)
     if not shp:
-        gap("shp.missing")
+        # NSE's shareholding master answered with no rows: not an NSE-carried
+        # security (or not under this symbol); re-asked whenever q.stale brings
+        # the symbol back
+        gap("shp.missing", fixable=not nse_ran)
     elif any(shareholding[p].get(k) is None for p in shp[:NEWEST_SHP] for k in SHP_SPLIT):
         gap("shp.split")
     if not docs_at:

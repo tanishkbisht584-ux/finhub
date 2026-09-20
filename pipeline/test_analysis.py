@@ -163,10 +163,10 @@ def test_analysis_groups_are_slotted_daily(monkeypatch):
     market._last_run["technicals"] = ist(2026, 8, 21, 16, 16)
     assert not market.due("technicals", ist(2026, 8, 22, 9, 0))         # same slot (yesterday's close)
     assert market.due("technicals", ist(2026, 8, 22, 16, 16))
-    assert [g for g, _ in market.GROUPS][-12:] == ["fundamentals", "technicals", "macro", "nse",
-                                                   "bonds", "sentiment", "deep_new", "deep_warm",
-                                                   "deep_drain", "screener", "screener_px",
-                                                   "stockanalysis"]
+    order = [g for g, _ in market.GROUPS]
+    tail = ["fundamentals", "technicals", "macro", "nse", "bonds", "sentiment", "deep_new",
+            "deep_warm", "deep_drain", "screener", "screener_px", "stockanalysis"]
+    assert [g for g in order if g in tail] == tail  # relative order; later groups may follow
     assert market.INTERVAL["deep_drain"] == 5 and "deep_drain" not in market.DAILY_SLOT
     assert market.INTERVAL["screener_px"] == 60  # hourly; off-hours no-op inside
     assert market.INTERVAL["stockanalysis"] == 60  # hourly 200-byte probe; full pull when priceDate moves
