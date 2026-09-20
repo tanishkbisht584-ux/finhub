@@ -95,13 +95,13 @@ def test_fy_label_after_march_rolls_into_next_fy():
 
 def test_parse_timeseries_routes_prefixes_and_skips_empty_or_unmapped():
     ts = fu.parse_timeseries(industrial_ts())
-    assert set(ts) == {"annual", "quarterly", "trailing"}
+    assert set(ts) == {"annual", "quarterly", "trailing", "currency"} and ts["currency"] is None
     assert ts["annual"]["2026-03-31"]["totalRevenue"] == 1000 * CR
     assert ts["annual"]["2026-03-31"]["cwip"] == 50 * CR
     assert ts["quarterly"]["2026-06-30"]["netIncome"] == 43 * CR
     assert ts["trailing"]["2026-06-30"] == {"totalRevenue": 1020 * CR}
     assert "unmappedThing" not in str(ts)
-    assert fu.parse_timeseries({}) == {"annual": {}, "quarterly": {}, "trailing": {}}
+    assert fu.parse_timeseries({}) == {"annual": {}, "quarterly": {}, "trailing": {}, "currency": None}
 
 
 def test_parse_stats_reported_shares_and_book_value():
