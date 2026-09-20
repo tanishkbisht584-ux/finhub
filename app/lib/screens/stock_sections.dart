@@ -272,9 +272,13 @@ class DocsSection extends StatelessWidget {
 /// numeric columns share one right edge; the bar under each name is market
 /// cap against the largest row.
 class PeersTable extends StatelessWidget {
-  const PeersTable(this.peers, {super.key, required this.self});
+  const PeersTable(this.peers,
+      {super.key, required this.self, this.metric = ('pe', 'P/E', CellFmt.num2)});
   final List<Map<String, dynamic>> peers;
   final String self;
+
+  /// (column key, label, format) — the column shown between price and ROE.
+  final (String, String, CellFmt) metric;
 
   @override
   Widget build(BuildContext context) {
@@ -319,7 +323,11 @@ class PeersTable extends StatelessWidget {
             ]),
           ),
           col(r['price'] == null ? '—' : fmtNum((r['price'] as num).toDouble()), 70),
-          col(fmtCell(r['pe'] as num?, CellFmt.num2), 54),
+          col(
+              metric.$1 == 'mcap_cr' && r['mcap_cr'] is num
+                  ? fmtNum((r['mcap_cr'] as num).toDouble(), decimals: 0)
+                  : fmtCell(r[metric.$1] as num?, metric.$3),
+              64),
           col(fmtCell(r['roe'] as num?, CellFmt.pct), 60),
         ]),
       );
@@ -331,7 +339,7 @@ class PeersTable extends StatelessWidget {
         child: Row(children: [
           Expanded(child: Text('COMPANY', style: mono.copyWith(fontSize: 10))),
           col('PRICE', 70, head: true),
-          col('P/E', 54, head: true),
+          col(metric.$2, 64, head: true),
           col('ROE', 60, head: true),
         ]),
       ),
@@ -339,6 +347,17 @@ class PeersTable extends StatelessWidget {
     ]);
   }
 }
+
+/// PEERS metric pills (MC's P/B · TTM PE · ROE · ROA · 1Y return selector).
+const peerMetrics = <(String, String, CellFmt)>[
+  ('mcap_cr', 'MCAP ₹Cr', CellFmt.cr),
+  ('pe', 'P/E', CellFmt.num2),
+  ('pb', 'P/B', CellFmt.num2),
+  ('roe', 'ROE', CellFmt.pct),
+  ('roce', 'ROCE', CellFmt.pct),
+  ('de', 'D/E', CellFmt.num2),
+  ('div_yield', 'DIV %', CellFmt.pct),
+];
 
 /// Rule-generated bullets from the pipeline's summary row.
 class ProsCons extends StatelessWidget {

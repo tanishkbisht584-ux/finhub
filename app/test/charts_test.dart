@@ -46,6 +46,22 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('Donut and Radar paint; Radar needs three spokes', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+        home: Center(
+            child: Donut([(0.7177, Color(0xFFE8E6E3), 'Promoters 71.8%'), (0.0906, Color(0xFF9BA09C), 'FIIs 9.1%')],
+                center: 'Jun 26'))));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Jun 26'), findsOneWidget);
+    await tester.pumpWidget(const MaterialApp(
+        home: Center(
+            child: Radar([('TCS', 761607.0), ('INFY', 426683.0), ('HCLTECH', 339018.0), ('WIPRO', null)],
+                highlight: 0))));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const MaterialApp(home: Center(child: Radar([('A', 1.0), ('B', 2.0)]))));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('StackedBar skips zero segments and lists the rest',
       (tester) async {
     await tester.pumpWidget(_box(const StackedBar([

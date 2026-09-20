@@ -761,3 +761,64 @@ List<DeliveryRow> deliveryRows(Map<String, dynamic>? tape) {
     if (d.length > 5) avg('1 month avg', d.take(22)),
   ];
 }
+
+/// EARNINGS (MC's Earnings tab): the latest quarter's sales / operating
+/// profit / net profit / EPS with YoY (vs the same quarter a year ago) and
+/// QoQ (vs the previous quarter) changes. `quarter` is period -> row,
+/// periods 'YYYY-MM' ascending. Null when there is no quarter at all.
+typedef EarningsLine = ({String label, double value, double? yoy, double? qoq, bool money});
+typedef Earnings = ({String period, String? prevPeriod, String? yearAgo, List<EarningsLine> lines});
+
+Earnings? earningsRows(Map<String, Map<String, dynamic>> quarter) {
+  if (quarter.isEmpty) return null;
+  final periods = quarter.keys.toList()..sort();
+  final latest = periods.last;
+  final prev = periods.length > 1 ? periods[periods.length - 2] : null;
+  String? yearAgoOf(String p) {
+    final d = DateTime.tryParse('$p-01');
+    if (d == null) return null;
+    final key = '${d.year - 1}-${d.month.toString().padLeft(2, '0')}';
+    return quarter.containsKey(key) ? key : null;
+  }
+
+  final ya = yearAgoOf(latest);
+  double? n(String? p, String k) => p == null ? null : (quarter[p]?[k] as num?)?.toDouble();
+  double? chg(double cur, double? base) =>
+      base == null || base == 0 ? null : (cur / base.abs() - 1) * 100;
+  final lines = <EarningsLine>[
+    for (final (label, k, money) in const [
+      ('Revenue', 'sales', true),
+      ('Operating profit', 'op_profit', true),
+      ('Net profit', 'net_profit', true),
+      ('EPS', 'eps', false),
+    ])
+      if (n(latest, k) != null)
+        (
+          label: label,
+          value: n(latest, k)!,
+          yoy: chg(n(latest, k)!, n(ya, k)),
+          qoq: chg(n(latest, k)!, n(prev, k)),
+          money: money,
+        ),
+  ];
+  return (period: latest, prevPeriod: prev, yearAgo: ya, lines: lines);
+}
+
+/// Company facts for INFO from the screener row + quotes.meta.
+List<(String, String)> infoRows(Map<String, dynamic> meta, Map<String, dynamic> sa) {
+  final f = _sub(meta, 'f') ?? const {};
+  final j = (sa['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
+  String? s(Object? v) => v == null || '$v'.isEmpty ? null : '$v';
+  final emp = (j['employees'] as num?)?.toDouble();
+  return [
+    if (s(f['sector']) != null) ('Sector', s(f['sector'])!),
+    if (s(f['industry']) != null || s(sa['industry']) != null)
+      ('Industry', s(f['industry']) ?? s(sa['industry'])!),
+    if (s(j['isin']) != null) ('ISIN', s(j['isin'])!),
+    if (s(j['founded']) != null) ('Founded', s(j['founded'])!),
+    if (emp != null) ('Employees', fmtNum(emp, decimals: 0)),
+    if (s(j['website']) != null) ('Website', s(j['website'])!),
+    if (s(j['nextEarningsDate']) != null) ('Next results', dmy(j['nextEarningsDate'])),
+    if (s(j['lastReportDate']) != null) ('Last report', dmy(j['lastReportDate'])),
+  ];
+}

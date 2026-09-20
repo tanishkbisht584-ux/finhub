@@ -61,6 +61,11 @@ class _StockScreenState extends State<StockScreen> {
   bool _candles = false;
   Quote? _seasonQ; // Yahoo max/1mo, fetched once: SEASONALITY
   String _swotTab = 's';
+  int? _span; // statement tables: null = every period, else the last N
+  bool _yoy = true; // EARNINGS: YoY vs QoQ
+  String _holderKey = 'promoters'; // SHAREHOLDING trend category
+  int _peerMetric = 1; // index into peerMetrics
+  bool _peerRadar = true;
   bool _showPe = false;
   bool _heat = false; // statement tables: tint cells by change vs prior period
   final _tracker = SectionTracker();
@@ -1331,12 +1336,27 @@ class _StockScreenState extends State<StockScreen> {
         for (final s in _stories)
           ListTile(
             contentPadding: EdgeInsets.zero,
+            leading: s.imageUrl == null
+                ? null
+                : ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: SizedBox(
+                      width: 64,
+                      height: 48,
+                      child: Image.network(s.imageUrl!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) =>
+                              const ColoredBox(color: surface)),
+                    ),
+                  ),
             title: Text(s.hook ?? s.headline,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style:
                     const TextStyle(color: ink, fontWeight: FontWeight.w600)),
-            subtitle: Text(s.sourceName, style: mono.copyWith(fontSize: 11)),
+            subtitle: Text(
+                [s.sourceName, if (s.publishedAt != null) fmtDay(s.publishedAt!.toIso8601String())].join(' · '),
+                style: mono.copyWith(fontSize: 11)),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => StoryDetailScreen(storyId: s.id))),
           ),
@@ -1350,30 +1370,105 @@ class _StockScreenState extends State<StockScreen> {
           Map<String, Map<String, dynamic>> byPeriod,
           {List<Widget> lead = const []}) =>
       LedgerSection(title,
-          action: filterPill(
-              'HEAT', _heat, amber, () => setState(() => _heat = !_heat),
-              fontSize: 10),
+          action: Row(mainAxisSize: MainAxisSize.min, children: [
+            for (final (n, label) in const [(null, 'ALL'), (4, '4'), (2, '2')])
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: filterPill(label, _span == n, green,
+                    () => setState(() => _span = n),
+                    fontSize: 9),
+              ),
+            const SizedBox(width: 4),
+            filterPill(
+                'HEAT', _heat, amber, () => setState(() => _heat = !_heat),
+                fontSize: 9),
+          ]),
           footnote:
               '₹ Cr · consolidated · ${_heat ? 'tint = change vs previous period · ' : ''}Yahoo Finance + NSE filings + backfill',
           children: [
             ...lead,
             const SizedBox(height: 4),
             StatementTable(
-                periods: periods, rows: rows, byPeriod: byPeriod, heat: _heat),
+                periods: _span == null || periods.length <= _span!
+                    ? periods
+                    : periods.sublist(periods.length - _span!),
+                rows: rows,
+                byPeriod: byPeriod,
+                heat: _heat),
           ]);
 
-  /// Latest quarter's holders as one 100% bar, ink alphas only (no
-  /// direction to colour).
+  /// EARNINGS (Phase 5, MC's Earnings tab): the latest quarter with YoY / QoQ.
+  Widget _earnings() {
+    final e = earningsRows(_fund.quarter);
+    if (e == null || e.lines.isEmpty) return const SizedBox.shrink();
+    final base = _yoy ? e.yearAgo : e.prevPeriod;
+    return LedgerSection('Earnings',
+        action: Row(mainAxisSize: MainAxisSize.min, children: [
+          for (final (v, label) in const [(true, 'YOY'), (false, 'QOQ')])
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: filterPill(label, _yoy == v, green,
+                  () => setState(() => _yoy = v),
+                  fontSize: 9),
+            ),
+        ]),
+        footnote:
+            '₹ Cr, EPS in ₹ · ${_yoy ? 'YoY = vs the same quarter last year' : 'QoQ = vs the previous quarter'} · NSE filings + Yahoo',
+        children: [
+          const SizedBox(height: 8),
+          LedgerRow(
+              lead: 'LAST RESULTS',
+              main: base == null
+                  ? 'quarter ended ${periodLabel(e.period)}'
+                  : 'quarter ended ${periodLabel(e.period)} · vs ${periodLabel(base)}',
+              trail: periodLabel(e.period)),
+          for (final l in e.lines)
+            LedgerRow(
+                lead: l.label,
+                main: l.money
+                    ? '₹${fmtNum(l.value, decimals: 0)} Cr'
+                    : '₹${l.value.toStringAsFixed(2)}',
+                trail: fmtPct(_yoy ? l.yoy : l.qoq, decimals: 1).isEmpty
+                    ? '—'
+                    : fmtPct(_yoy ? l.yoy : l.qoq, decimals: 1),
+                trailColor: ((_yoy ? l.yoy : l.qoq) ?? 0) >= 0 ? green : red),
+        ]);
+  }
+
+  /// INFO (Phase 5): company facts. Directors and address need the Yahoo
+  /// profile parse (Phase 6) — not wired yet.
+  Widget _info() => _onTicks((meta) {
+        final rows = infoRows(meta, _sa);
+        if (rows.isEmpty) return const SizedBox.shrink();
+        return LedgerSection('Info',
+            footnote:
+                'Stock Analysis + Yahoo · management and registered address: source not wired yet',
+            children: [
+              const SizedBox(height: 6),
+              for (final (k, v) in rows)
+                k == 'Website'
+                    ? InkWell(
+                        onTap: () => openExternal(
+                            context, v.startsWith('http') ? v : 'https://$v'),
+                        child: LedgerRow(lead: k, main: '', trail: v, trailColor: green),
+                      )
+                    : LedgerRow(lead: k, main: '', trail: v),
+            ]);
+      });
+
+  /// Latest quarter's holders as a donut with legend (MC's pie), then the
+  /// quarterly trend of one category as bars (Phase 5).
   List<Widget> _holdersBar() {
     final f = _fund;
     if (f.shareholding.isEmpty) return const [];
-    final latest = f.shareholding[f.shareholding.keys.last]!;
+    final periods = f.shareholding.keys.toList();
+    final latest = f.shareholding[periods.last]!;
     const parts = [
-      ('promoters', 'Promoters', 0.8),
-      ('fiis', 'FIIs', 0.6),
-      ('diis', 'DIIs', 0.45),
-      ('govt', 'Govt', 0.3),
-      ('public', 'Public', 0.2),
+      ('promoters', 'Promoters', 0.85),
+      ('fiis', 'FIIs', 0.65),
+      ('diis', 'DIIs', 0.48),
+      ('govt', 'Govt', 0.34),
+      ('public', 'Public', 0.22),
       ('employee_trusts', 'Trusts', 0.12),
     ];
     final segs = [
@@ -1386,13 +1481,53 @@ class _StockScreenState extends State<StockScreen> {
           )
     ];
     if (segs.isEmpty) return const [];
+    final trend = [
+      for (final p in periods)
+        (f.shareholding[p]?[_holderKey] as num?)?.toDouble()
+    ];
+    final hasTrend = trend.where((v) => v != null).length >= 2;
     return [
       const SizedBox(height: 12),
-      Row(children: [
-        Expanded(child: StackedBar(segs)),
+      Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Donut(segs, center: periodLabel(periods.last)),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            for (final s in segs)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(children: [
+                  SizedBox(width: 8, height: 8, child: ColoredBox(color: s.$2)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                      child: Text(s.$3,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: mono.copyWith(fontSize: 11))),
+                ]),
+              ),
+          ]),
+        ),
       ]),
-      const SizedBox(height: 4),
-      _stamp(periodLabel(f.shareholding.keys.last)),
+      if (hasTrend) ...[
+        const SizedBox(height: 14),
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          for (final (k, label, _) in parts)
+            if (periods.any((p) => f.shareholding[p]?[k] is num))
+              filterPill(label.toUpperCase(), _holderKey == k, green,
+                  () => setState(() => _holderKey = k),
+                  fontSize: 9),
+        ]),
+        const SizedBox(height: 8),
+        SizedBox(
+            height: 72,
+            child: BarChart(trend,
+                labels: [for (final p in periods) periodLabel(p)])),
+        const SizedBox(height: 4),
+        Text(
+            'holding % by quarter · ${trend.whereType<double>().isEmpty ? '' : 'latest ${fmtCell(trend.last, CellFmt.pct)}'}',
+            style: mono.copyWith(fontSize: 10)),
+      ],
       const SizedBox(height: 8),
     ];
   }
@@ -1443,10 +1578,39 @@ class _StockScreenState extends State<StockScreen> {
           id: 'peers',
           label: 'PEERS',
           child: LedgerSection('Peers',
-              action: _stamp('same $_peerKey · by mkt cap'),
-              footnote: 'bar = market cap vs largest · screener_metrics',
-              children: [PeersTable(_peers, self: widget.company.nseSymbol)])
+              action: Row(mainAxisSize: MainAxisSize.min, children: [
+                for (final (radar, label) in const [(true, 'CHART'), (false, 'LIST')])
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: filterPill(label, _peerRadar == radar, green,
+                        () => setState(() => _peerRadar = radar),
+                        fontSize: 9),
+                  ),
+              ]),
+              footnote:
+                  'same $_peerKey · by market cap · radar spoke = ${peerMetrics[_peerMetric].$2} vs the largest · bar = market cap vs largest',
+              children: [
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, children: [
+                  for (var i = 0; i < peerMetrics.length; i++)
+                    filterPill(peerMetrics[i].$2, _peerMetric == i, amber,
+                        () => setState(() => _peerMetric = i),
+                        fontSize: 9),
+                ]),
+                if (_peerRadar) ...[
+                  const SizedBox(height: 8),
+                  Center(child: Radar([
+                    for (final p in _peers.take(8))
+                      ('${p['symbol']}', (p[peerMetrics[_peerMetric].$1] as num?)?.toDouble())
+                  ], highlight: _peers.take(8).toList().indexWhere((p) => p['symbol'] == widget.company.nseSymbol))),
+                ],
+                PeersTable(_peers,
+                    self: widget.company.nseSymbol,
+                    metric: peerMetrics[_peerMetric]),
+              ])
         ),
+      if (f.quarter.isNotEmpty)
+        (id: 'earnings', label: 'EARNINGS', child: _earnings()),
       if (f.quarter.isNotEmpty)
         (
           id: 'quarters',
@@ -1496,6 +1660,7 @@ class _StockScreenState extends State<StockScreen> {
           ])
         ),
       if (_events.isNotEmpty) (id: 'tape', label: 'TAPE', child: _tape()),
+      (id: 'info', label: 'INFO', child: _info()),
       (id: 'stories', label: 'NEWS', child: _storyList()),
     ];
   }

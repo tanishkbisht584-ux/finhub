@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
@@ -457,4 +459,137 @@ class PairedBar extends StatelessWidget {
       bar(b, colorB),
     ]);
   }
+}
+
+/// Donut (MC's shareholding pie): segments as fractions of 1, a hole with
+/// [center] text. Legend is the caller's (StackedBar's legend row fits).
+class Donut extends StatelessWidget {
+  const Donut(this.segments, {super.key, this.center, this.size = 132});
+  final List<(double fraction, Color color, String label)> segments;
+  final String? center;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: size,
+        height: size,
+        child: CustomPaint(
+          painter: _DonutPainter(segments),
+          child: Center(
+            child: Text(center ?? '',
+                textAlign: TextAlign.center,
+                style: mono.copyWith(fontSize: 11, color: inkDim)),
+          ),
+        ),
+      );
+}
+
+class _DonutPainter extends CustomPainter {
+  _DonutPainter(this.segments);
+  final List<(double, Color, String)> segments;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = size.shortestSide / 2;
+    final rect = Rect.fromCircle(center: Offset(size.width / 2, size.height / 2), radius: r - 9);
+    var start = -1.5707963; // 12 o'clock
+    final total = segments.fold(0.0, (a, s) => a + (s.$1 > 0 ? s.$1 : 0));
+    if (total <= 0) return;
+    for (final s in segments) {
+      if (s.$1 <= 0) continue;
+      final sweep = s.$1 / total * 6.2831853;
+      canvas.drawArc(
+          rect,
+          start,
+          sweep - 0.02,
+          false,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 18
+            ..color = s.$2);
+      start += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DonutPainter old) => old.segments != segments;
+}
+
+/// Radar (MC's peer chart): one spoke per [points] entry, length = value /
+/// max, labels at the rim, [highlight] index drawn in green (self).
+class Radar extends StatelessWidget {
+  const Radar(this.points, {super.key, this.highlight, this.size = 220});
+  final List<(String label, double? value)> points;
+  final int? highlight;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(painter: _RadarPainter(points, highlight)));
+}
+
+class _RadarPainter extends CustomPainter {
+  _RadarPainter(this.points, this.highlight);
+  final List<(String, double?)> points;
+  final int? highlight;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.length < 3) return;
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = size.shortestSide / 2 - 26;
+    final grid = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = border;
+    for (final f in const [0.33, 0.66, 1.0]) {
+      canvas.drawCircle(c, r * f, grid);
+    }
+    final vals = [for (final p in points) if (p.$2 != null && p.$2! > 0) p.$2!];
+    final max = vals.isEmpty ? 1.0 : vals.reduce((a, b) => a > b ? a : b);
+    final n = points.length;
+    final poly = Path();
+    var pen = false;
+    for (var i = 0; i < n; i++) {
+      final a = -1.5707963 + i * 6.2831853 / n;
+      final tip = Offset(c.dx + r * cos(a), c.dy + r * sin(a));
+      canvas.drawLine(c, tip, grid);
+      final v = points[i].$2;
+      final f = v == null || v <= 0 ? 0.0 : (v / max).clamp(0.0, 1.0);
+      final p = Offset(c.dx + r * f * cos(a), c.dy + r * f * sin(a));
+      pen ? poly.lineTo(p.dx, p.dy) : poly.moveTo(p.dx, p.dy);
+      pen = true;
+      canvas.drawCircle(
+          p, i == highlight ? 4 : 2.5, Paint()..color = i == highlight ? green : amber);
+      final tp = TextPainter(
+          text: TextSpan(
+              text: points[i].$1,
+              style: mono.copyWith(fontSize: 9, color: i == highlight ? green : inkDim)),
+          textDirection: TextDirection.ltr,
+          maxLines: 1,
+          ellipsis: '…')
+        ..layout(maxWidth: 70);
+      final lx = c.dx + (r + 10) * cos(a), ly = c.dy + (r + 10) * sin(a);
+      tp.paint(
+          canvas,
+          Offset(
+              (lx - (cos(a) < -0.1 ? tp.width : cos(a) > 0.1 ? 0 : tp.width / 2))
+                  .clamp(0, size.width - tp.width),
+              (ly - tp.height / 2).clamp(0, size.height - tp.height)));
+    }
+    poly.close();
+    canvas.drawPath(poly, Paint()..color = amber.withValues(alpha: 0.18));
+    canvas.drawPath(
+        poly,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..color = amber);
+  }
+
+  @override
+  bool shouldRepaint(_RadarPainter old) =>
+      old.points != points || old.highlight != highlight;
 }

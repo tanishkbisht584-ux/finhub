@@ -96,6 +96,36 @@ void main() {
     expect(deliveryRows({'d': [{'date': 'x', 'vol': 10, 'deliv_qty': 4}]}).single.pct, 40);
   });
 
+  test('earningsRows: latest quarter with YoY and QoQ against the right bases', () {
+    final e = earningsRows({
+      '2025-06': {'sales': 62000, 'net_profit': 12000, 'eps': 33.0},
+      '2026-03': {'sales': 70698, 'op_profit': 18000, 'net_profit': 13784, 'eps': 38.1},
+      '2026-06': {'sales': 72275, 'op_profit': 18217, 'net_profit': 13420, 'eps': 37.1},
+    })!;
+    expect((e.period, e.prevPeriod, e.yearAgo), ('2026-06', '2026-03', '2025-06'));
+    final by = {for (final l in e.lines) l.label: l};
+    expect(by.keys, ['Revenue', 'Operating profit', 'Net profit', 'EPS']);
+    expect(by['Revenue']!.yoy!.toStringAsFixed(2), '16.57');
+    expect(by['Revenue']!.qoq!.toStringAsFixed(2), '2.23');
+    expect(by['Operating profit']!.yoy, isNull); // no op_profit a year ago
+    expect(by['Net profit']!.qoq!.toStringAsFixed(2), '-2.64');
+    expect(by['EPS']!.money, isFalse);
+    expect(earningsRows(const {}), isNull);
+    expect(earningsRows({'2026-06': {'sales': 1}})!.lines.single.qoq, isNull);
+  });
+
+  test('infoRows: facts from meta + sa, website kept, blanks dropped', () {
+    final rows = infoRows(meta, const {
+      'industry': 'IT Services', 'sa': {'isin': 'INE467B01029', 'founded': 1968, 'employees': 601546,
+        'website': 'https://www.tcs.com', 'nextEarningsDate': '2026-10-09', 'lastReportDate': ''}
+    });
+    expect([for (final r in rows) r.$1],
+        ['Sector', 'Industry', 'ISIN', 'Founded', 'Employees', 'Website', 'Next results']);
+    expect(rows.firstWhere((r) => r.$1 == 'Employees').$2, '6,01,546');
+    expect(rows.firstWhere((r) => r.$1 == 'Next results').$2, '9 Oct');
+    expect(infoRows(const {}, const {}), isEmpty);
+  });
+
   test('techStats: trend / RSI / MACD tiles with tone', () {
     final tiles = techStats(meta);
     expect([for (final t in tiles) t.label], ['Trend', 'RSI-14', 'MACD']);
