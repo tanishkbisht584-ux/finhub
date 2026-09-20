@@ -574,3 +574,15 @@ class _HintBarState extends State<HintBar> {
     );
   }
 }
+
+/// Review 20 Sep: every pill row scrolls sideways in ONE line instead of
+/// wrapping (MARKET MOVERS' LOSERS / 52W HIGH dropped to a second line).
+Widget pillRow(List<Widget> pills, {double gap = 6}) => SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: [
+        for (var i = 0; i < pills.length; i++) ...[
+          if (i > 0) SizedBox(width: gap),
+          pills[i],
+        ],
+      ]),
+    );

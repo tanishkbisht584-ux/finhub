@@ -73,8 +73,26 @@ const shareholdingRows = [
   ('Government %', 'govt', CellFmt.pct),
   ('Public %', 'public', CellFmt.pct),
   ('Employee Trusts %', 'employee_trusts', CellFmt.pct),
+  ('Others %', 'others', CellFmt.pct),
   ('No. of Shareholders', 'n_holders', CellFmt.cr),
 ];
+
+/// MC's "Others" bucket: whatever the filed split leaves over (> 0.05%).
+/// Only for quarters that carry the FII / DII split — a master-only quarter
+/// (promoters + public = 100) has no remainder to show.
+Map<String, Map<String, dynamic>> withOthers(Map<String, Map<String, dynamic>> sh) => {
+      for (final e in sh.entries)
+        e.key: () {
+          final d = e.value;
+          if (d['fiis'] is! num && d['diis'] is! num) return d;
+          final known = [
+            for (final k in const ['promoters', 'fiis', 'diis', 'govt', 'public', 'employee_trusts'])
+              if (d[k] is num) (d[k] as num).toDouble()
+          ].fold(0.0, (a, b) => a + b);
+          final rest = 100 - known;
+          return rest > 0.05 ? {...d, 'others': double.parse(rest.toStringAsFixed(2))} : d;
+        }(),
+    };
 
 /// Sticky label column + horizontally scrollable period columns. reverse:true
 /// starts the scroll at the newest period (Screener keeps oldest on the left).
@@ -93,9 +111,15 @@ class StatementTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Review 20 Sep: a row that is null OR zero in every shown period says
+    // nothing (Employee Trusts 0% for TCS) — drop it, not dash it.
     final visible = [
       for (final r in rows)
-        if (periods.any((p) => byPeriod[p]?[r.$2] != null)) r
+        if (periods.any((p) {
+          final v = byPeriod[p]?[r.$2];
+          return v is num && v != 0;
+        }))
+          r
     ];
     if (visible.isEmpty) return const SizedBox.shrink();
     Widget cell(String s, {bool head = false, bool label = false, Color? bg}) =>

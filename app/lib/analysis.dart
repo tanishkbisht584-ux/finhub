@@ -36,7 +36,7 @@ String _signed(double v, {int decimals = 1}) =>
 /// tile carries MC's verdict ("below sector 22.8") and a tone; [ath] /
 /// [athPct] (Stock Analysis) add the all-time-high tile.
 List<Stat> snapshotStats(Map<String, dynamic> meta,
-    {double? sectorPe, double? ath, double? athPct}) {
+    {double? sectorPe, double? ath, double? athPct, double? ttmDivYield}) {
   final f = _sub(meta, 'f');
   if (f == null || f.isEmpty) return const [];
   double? n(String k) => (f[k] as num?)?.toDouble();
@@ -66,11 +66,14 @@ List<Stat> snapshotStats(Map<String, dynamic> meta,
   add('ROE', roe, _pct1,
       sub: roe == null ? null : roe >= 15 ? 'strong' : roe < 8 ? 'weak' : null,
       tone: roe == null ? 0 : roe >= 15 ? 1 : roe < 8 ? -1 : 0);
-  add('Div yield', n('div_yield'), _pct1);
+  add('Div yield', ttmDivYield ?? n('div_yield'), _pct1,
+      sub: ttmDivYield != null ? 'last 12 months' : null);
   add('Debt/Equity', n('de'), _n2,
       tone: n('de') == null ? 0 : n('de')! > 2 ? -1 : 0);
   add('Beta', n('beta'), _n2,
-      sub: n('beta') == null ? null : n('beta')! > 1 ? 'swings more than market' : 'calmer than market');
+      sub: n('beta') == null
+          ? null
+          : '${n('beta')! > 1 ? 'swings more than market' : 'calmer than market'} · 5y monthly');
   if (ath != null) {
     add('All-time high', ath, (v) => '₹${fmtNum(v)}',
         sub: athPct == null ? null : '${_signed(athPct)} from high',
@@ -283,10 +286,16 @@ List<KvRow> fundamentalRows(Map<String, dynamic> meta,
 
 /// TECHNICALS table: every meta.t level, each against the close. The SMA
 /// levels were computed by the pipeline all along and never shown.
-List<KvRow> technicalRows(Map<String, dynamic> meta) {
+List<KvRow> technicalRows(Map<String, dynamic> meta, {double? hi52, double? lo52}) {
   final t = _sub(meta, 't');
   if (t == null || t.isEmpty) return const [];
-  double? n(String k) => (t[k] as num?)?.toDouble();
+  // Review 20 Sep: OVERVIEW shows the exchange's intraday 52-wk range (Yahoo
+  // meta); this table used close-based levels — the caller passes the same.
+  double? n(String k) => k == 'hi52' && hi52 != null
+      ? hi52
+      : k == 'lo52' && lo52 != null
+          ? lo52
+          : (t[k] as num?)?.toDouble();
   final out = <KvRow>[];
   void row(String metric, String value, String third, String read, int tone) =>
       out.add((metric: metric, value: value, third: third, read: read, tone: tone));
@@ -695,8 +704,11 @@ Seasonality? seasonality(List<double> closes, List<DateTime> times) {
   final table = <int, Map<int, double>>{};
   for (var i = 1; i < closes.length; i++) {
     final prev = closes[i - 1];
-    if (prev == 0) continue;
-    final d = times[i];
+    final d = times[i], p = times[i - 1];
+    // Review 20 Sep: Yahoo's max/1mo ends with a second bar for the running
+    // month (stamped on the last session) — it would overwrite the month
+    // with 0%. One bar per (year, month): the first wins.
+    if (prev == 0 || (d.year == p.year && d.month == p.month)) continue;
     (table[d.year] ??= {})[d.month] = (closes[i] / prev - 1) * 100;
   }
   final years = table.keys.toList()..sort((a, b) => b - a);
@@ -782,7 +794,19 @@ Earnings? earningsRows(Map<String, Map<String, dynamic>> quarter) {
   }
 
   final ya = yearAgoOf(latest);
-  double? n(String? p, String k) => p == null ? null : (quarter[p]?[k] as num?)?.toDouble();
+  double? n(String? p, String k) {
+    if (p == null) return null;
+    final r = quarter[p] ?? const {};
+    final v = (r[k] as num?)?.toDouble();
+    if (v != null || k != 'op_profit') return v;
+    // Review 20 Sep: an NSE-filed quarter may lack op_profit — derive it the
+    // Screener way so YoY against a filed quarter is not blank.
+    final pbt = (r['pbt'] as num?)?.toDouble();
+    final dep = (r['depreciation'] as num?)?.toDouble();
+    if (pbt == null || dep == null) return null;
+    return pbt + ((r['interest'] as num?)?.toDouble() ?? 0) + dep - ((r['other_income'] as num?)?.toDouble() ?? 0);
+  }
+
   double? chg(double cur, double? base) =>
       base == null || base == 0 ? null : (cur / base.abs() - 1) * 100;
   final lines = <EarningsLine>[

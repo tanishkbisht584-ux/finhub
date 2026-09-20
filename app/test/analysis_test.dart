@@ -42,7 +42,12 @@ void main() {
     expect([for (final t in snapshotStats(meta)) t.label],
         ['Mkt cap', 'P/E', 'EPS', 'P/B', 'ROE', 'Div yield', 'Debt/Equity', 'Beta']);
     expect(snapshotStats(meta).firstWhere((t) => t.label == 'EPS').value, '₹137.66');
-    expect(snapshotStats(meta).firstWhere((t) => t.label == 'Beta').sub, 'calmer than market');
+    expect(snapshotStats(meta).firstWhere((t) => t.label == 'Beta').sub, 'calmer than market · 5y monthly');
+    expect(snapshotStats(meta, ttmDivYield: 5.23).firstWhere((t) => t.label == 'Div yield').value, '5.2%');
+    expect(snapshotStats(meta, ttmDivYield: 5.23).firstWhere((t) => t.label == 'Div yield').sub, 'last 12 months');
+    final tr = technicalRows(meta, hi52: 3350, lo52: 1976.8);
+    expect(tr.firstWhere((r) => r.metric == '52-wk high').value, '₹3,350');
+    expect(tr.firstWhere((r) => r.metric == '52-wk low').value, '₹1,977');
     final tiles = snapshotStats(meta, sectorPe: 22.76, ath: 4592.25, athPct: -54.2);
     final by = {for (final t in tiles) t.label: t};
     expect(by['P/E']!.sub, 'fwd 14.17 · below sector 22.76');
@@ -107,7 +112,12 @@ void main() {
     expect(by.keys, ['Revenue', 'Operating profit', 'Net profit', 'EPS']);
     expect(by['Revenue']!.yoy!.toStringAsFixed(2), '16.57');
     expect(by['Revenue']!.qoq!.toStringAsFixed(2), '2.23');
-    expect(by['Operating profit']!.yoy, isNull); // no op_profit a year ago
+    expect(by['Operating profit']!.yoy, isNull); // no op_profit a year ago and nothing to derive it from
+    final derived = earningsRows({
+      '2025-06': {'sales': 100, 'pbt': 20, 'interest': 1, 'depreciation': 4, 'other_income': 5},
+      '2026-06': {'sales': 110, 'op_profit': 24},
+    })!;
+    expect(derived.lines.firstWhere((l) => l.label == 'Operating profit').yoy!.toStringAsFixed(1), '20.0');
     expect(by['Net profit']!.qoq!.toStringAsFixed(2), '-2.64');
     expect(by['EPS']!.money, isFalse);
     expect(earningsRows(const {}), isNull);
@@ -403,6 +413,9 @@ void main() {
     expect(s.avg[8]!, closeTo(-3.0, 1e-9)); // September column
     expect(s.posPct[8], 0);
     expect(s.posPct[1], 100);
+    // a second bar for the running month (Yahoo's max/1mo tail) is ignored
+    final dup = seasonality([...closes, closes.last], [...times, DateTime(2026, 1, 18)])!;
+    expect(dup.table[2026]![1], closeTo(s.table[2026]![1]!, 1e-9));
     final sep = monthStats(s, 9);
     expect((sep.years, sep.negative), (2, 2));
     expect(sep.worst!.$2, closeTo(-3.0, 1e-9));

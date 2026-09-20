@@ -661,7 +661,7 @@ class _MarketsBodyState extends State<MarketsBody> {
                 const SizedBox(height: 10),
                 Builder(
                   builder: (context) =>
-                      Wrap(spacing: 8, runSpacing: 8, children: [
+                      pillRow([
                     for (final p in screenPresets)
                       filterPill(p.name, false, green, () {
                         Navigator.of(context).push(MaterialPageRoute(
@@ -829,7 +829,7 @@ class _MarketsBodyState extends State<MarketsBody> {
                   'price vs 50 & 200-day averages · turning = flipped within 7 days · tap a row for the stock · Stock Analysis · as of ${dmy(trends['asof'])}',
               children: [
                 const SizedBox(height: 8),
-                Wrap(spacing: 6, runSpacing: 6, children: [
+                pillRow([
                   for (final (key, label) in _buckets)
                     filterPill(
                         label,
@@ -1115,7 +1115,7 @@ class _MarketsBodyState extends State<MarketsBody> {
                   'Dow 30 + Nasdaq heavyweights · trend = price vs 50 & 200-day averages · Yahoo · delayed',
               children: [
                 const SizedBox(height: 8),
-                Wrap(spacing: 6, runSpacing: 6, children: [
+                pillRow([
                   for (final i in _usIdx)
                     filterPill(i, _usIndex == i, amber,
                         () => setState(() => _usIndex = i),

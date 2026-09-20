@@ -572,10 +572,17 @@ class _StockScreenState extends State<StockScreen> {
                       '₹${fmtNum((tapeD!['turnover_cr'] as num).toDouble(), decimals: 0)} Cr',
                       sub: '${fmtNum(((tapeD['trades'] as num?) ?? 0).toDouble(), decimals: 0)} trades'),
               ];
+        final divs = _seasonQ?.dividends ?? const [];
+        final ttmDiv = divs
+            .where((d) => d.date.isAfter(DateTime.now().subtract(const Duration(days: 365))))
+            .fold(0.0, (a, d) => a + d.amount);
         final stats = snapshotStats(meta,
             sectorPe: (_sa['sector_pe'] as num?)?.toDouble(),
             ath: (sa['allTimeHigh'] as num?)?.toDouble(),
-            athPct: (_sa['ath_pct'] as num?)?.toDouble());
+            athPct: (_sa['ath_pct'] as num?)?.toDouble(),
+            // 20 Sep review: Yahoo's yield read 3.1% for TCS vs MC's 5.23 — the
+            // trailing-12-month dividends we already hold give MC's number.
+            ttmDivYield: divs.isEmpty || q == null || q.price == 0 ? null : ttmDiv / q.price * 100);
         final returns = returnsGrid(_sa);
         final hasReturns = returns.any((r) => r.$2 != null);
         final street = streetStats(_sa);
@@ -704,7 +711,7 @@ class _StockScreenState extends State<StockScreen> {
               const SizedBox(height: 14),
               Text('SWOT', style: monoLabel),
               const SizedBox(height: 6),
-              Wrap(spacing: 6, runSpacing: 6, children: [
+              pillRow([
                 for (final (k, label, n, tint) in [
                   ('s', 'STRENGTHS', sw.s.length, green),
                   ('w', 'WEAKNESSES', sw.w.length, red),
@@ -1363,9 +1370,11 @@ class _StockScreenState extends State<StockScreen> {
   /// close, then pivot levels from the last session (Phase 3).
   Widget _technicals() => _onTicks((meta) {
         final tiles = techStats(meta);
-        final rows = technicalRows(meta);
-        final ma = maSignals(meta);
         final q = _quote;
+        final rows = technicalRows(meta,
+            hi52: q != null && q.high52 > 0 ? q.high52 : null,
+            lo52: q != null && q.low52 > 0 ? q.low52 : null);
+        final ma = maSignals(meta);
         final pv = q != null && q.highs.isNotEmpty && q.lows.isNotEmpty
             ? pivots(q.highs.last, q.lows.last, q.closes.last)
             : null;
@@ -1514,7 +1523,7 @@ class _StockScreenState extends State<StockScreen> {
           List<String> periods,
           List<(String, String, CellFmt)> rows,
           Map<String, Map<String, dynamic>> byPeriod,
-          {List<Widget> lead = const []}) =>
+          {List<Widget> lead = const [], String? note}) =>
       LedgerSection(title,
           action: Row(mainAxisSize: MainAxisSize.min, children: [
             for (final (n, label) in const [(null, 'ALL'), (4, '4'), (2, '2')])
@@ -1530,7 +1539,7 @@ class _StockScreenState extends State<StockScreen> {
                 fontSize: 9),
           ]),
           footnote:
-              '₹ Cr · consolidated · ${_heat ? 'tint = change vs previous period · ' : ''}Yahoo Finance + NSE filings + backfill',
+              '${note == null ? '' : '$note · '}₹ Cr · consolidated · ${_heat ? 'tint = change vs previous period · ' : ''}Yahoo Finance + NSE filings + backfill',
           children: [
             ...lead,
             const SizedBox(height: 4),
@@ -1682,7 +1691,7 @@ class _StockScreenState extends State<StockScreen> {
       ]),
       if (hasTrend) ...[
         const SizedBox(height: 14),
-        Wrap(spacing: 6, runSpacing: 6, children: [
+        pillRow([
           for (final (k, label, _) in parts)
             if (periods.any((p) => f.shareholding[p]?[k] is num))
               filterPill(label.toUpperCase(), _holderKey == k, green,
@@ -1765,7 +1774,7 @@ class _StockScreenState extends State<StockScreen> {
                   'same $_peerKey · by market cap · radar spoke = ${peerMetrics[_peerMetric].$2} vs the largest · bar = market cap vs largest',
               children: [
                 const SizedBox(height: 8),
-                Wrap(spacing: 6, runSpacing: 6, children: [
+                pillRow([
                   for (var i = 0; i < peerMetrics.length; i++)
                     filterPill(peerMetrics[i].$2, _peerMetric == i, amber,
                         () => setState(() => _peerMetric = i),
@@ -1821,8 +1830,9 @@ class _StockScreenState extends State<StockScreen> {
           id: 'holders',
           label: 'SHAREHOLDING',
           child: _table('Shareholding pattern', f.shareholding.keys.toList(),
-              shareholdingRows, f.shareholding,
-              lead: _holdersBar())
+              shareholdingRows, withOthers(f.shareholding),
+              lead: _holdersBar(),
+              note: 'a dash = that quarter\'s FII / DII split is not filed in our copy yet; it back-fills quarter by quarter')
         ),
       if (f.docs.isNotEmpty)
         (
