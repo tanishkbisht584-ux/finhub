@@ -289,7 +289,7 @@ def test_all_groups_registered():
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm", "deep_drain",
-                                             "screener", "screener_px", "stockanalysis", "bhav", "unlisted"]
+                                             "screener", "screener_px", "stockanalysis", "bhav", "unlisted", "analysis_all"]
 
 
 def test_refresh_mf_new_fetches_only_unquoted_follows(monkeypatch):
@@ -1455,3 +1455,29 @@ def test_shape_unlisted_and_refresh(monkeypatch):
     blob = posts[0][0]
     assert blob["key"] == "unlisted" and blob["payload"]["source"] == "UnlistedZone" and len(blob["payload"]["rows"]) == 3
     assert market.DAILY_SLOT["unlisted"] == (20, 30)
+
+
+def test_refresh_analysis_all_creates_rows_then_refreshes_oldest(monkeypatch):
+    fresh = (NOW - timedelta(hours=1)).isoformat()
+    stale = (NOW - timedelta(hours=30)).isoformat()
+
+    def sb(method, path, **kw):
+        if path.startswith("screener_metrics"):
+            return [{"symbol": "NEW", "name": "New Co"}, {"symbol": "OLD", "name": "Old"},
+                    {"symbol": "HOT", "name": "Hot"}, {"symbol": "GONE", "name": "No quote"}]
+        if path.startswith("quotes?select=symbol,meta"):
+            return [{"symbol": "OLD", "meta": {"f": {}, "f_at": stale}}, {"symbol": "HOT", "meta": {"f": {}, "f_at": fresh}}]
+        if path.startswith("quotes?select=symbol,kind,name,price,meta"):
+            return [{"symbol": s, "kind": "equity", "name": s, "price": 1.0, "meta": {}} for s in ("NEW", "OLD", "HOT")]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(market, "fetch_spark",
+                        lambda syms, rng="5d": {"NEW.NS": {"close": [9.0, 10.0], "timestamp": [1, 2]}})  # GONE.NS: no data
+    fetched = []
+    monkeypatch.setattr(market, "fetch_fundamentals_for", lambda syms: fetched.extend(syms) or {s: {"pe": 1} for s in syms})
+    writes = []
+    monkeypatch.setattr(market, "upsert", lambda sb_, rows, **k: writes.append(rows) or len(rows))
+    assert market.refresh_analysis_all(sb, NOW) == 2
+    assert [r["symbol"] for r in writes[0]] == ["NEW"]              # price row for the quote-less one
+    assert fetched == ["NEW", "OLD"]                               # never-fetched, then stale; HOT (fresh) skipped
+    assert {r["symbol"] for r in writes[1]} == {"OLD", "NEW"} and writes[1][0]["meta"]["f"] == {"pe": 1}

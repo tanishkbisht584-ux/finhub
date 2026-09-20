@@ -124,7 +124,7 @@ _status = {}    # group -> last attempt outcome; mirrored to app_config `market_
 
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "global": 15, "polymarket": 60, "nse": 60, "bonds": 60, "macro": 24 * 60,
-            "mf_new": 5, "analysis_new": 5, "deep_new": 5, "deep_drain": 5, "screener_px": 60,
+            "mf_new": 5, "analysis_new": 5, "analysis_all": 5, "deep_new": 5, "deep_drain": 5, "screener_px": 60,
             "sentiment": 60, "hazards": 60, "stockanalysis": 60}
 
 
@@ -709,6 +709,35 @@ def merge_meta(sb, updates, key, now):
         meta = {**(base.get("meta") or {}), key: d, f"{key}_at": now.isoformat()}
         rows.append({**{k: base[k] for k in ("symbol", "kind", "name", "price")}, "meta": meta})
     return upsert(sb, rows)
+
+
+ANALYSIS_ALL_CAP = 120  # quoteSummary calls per 5-min lap: the ~2.5k quoted universe in ~2 h a day
+
+
+def refresh_analysis_all(sb, now):
+    """Every 5 min (20 Sep 2026, Tanis: "data is missing from multiple stocks"):
+    the quoted universe beyond the hot 200 gets — and keeps — quotes.meta.f, so
+    OVERVIEW / INSIGHTS / FORECAST / INFO are there on FIRST open, not five
+    minutes after an analysis_request. Quote-less symbols get a price row
+    first (one spark batch); then the oldest f_at rows are refreshed, capped
+    per lap. The daily merge keeps updated_at fresh, so the 7-day age-out
+    never touches these rows."""
+    universe = {r["symbol"]: r.get("name") for r in
+                sb("GET", "screener_metrics?select=symbol,name&price=not.is.null")}
+    existing = {r["symbol"]: (r.get("meta") or {}) for r in
+                sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
+    missing = [s for s in universe if s not in existing][:ANALYSIS_ALL_CAP]
+    if missing:
+        data = fetch_spark([f"{s}.NS" for s in missing], rng="5d")
+        rows = [row(s, "equity", universe[s] or s, p, now)
+                for s in missing if (p := parse_spark(data.get(f"{s}.NS", {})))]
+        if rows:
+            upsert(sb, rows)
+            existing.update({r["symbol"]: {} for r in rows})
+    todo = needs_refresh([s for s in universe if s in existing], existing, "f_at", now)
+    todo.sort(key=lambda s: existing[s].get("f_at") or "")
+    updates = fetch_fundamentals_for(todo[:ANALYSIS_ALL_CAP])
+    return merge_meta(sb, updates, "f", now) if updates else 0
 
 
 def fetch_fundamentals_for(symbols):
@@ -2321,7 +2350,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("deep_drain", refresh_deep_drain),
           ("screener", refresh_screener), ("screener_px", refresh_screener_px),
           ("stockanalysis", refresh_stockanalysis), ("bhav", refresh_bhav),
-          ("unlisted", refresh_unlisted))
+          ("unlisted", refresh_unlisted), ("analysis_all", refresh_analysis_all))
 
 
 def refresh(sb, now=None):
