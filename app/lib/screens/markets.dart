@@ -1622,6 +1622,12 @@ class _MarketsBodyState extends State<MarketsBody> {
           for (final s in pinned)
             KeyedSubtree(key: _tracker.key(s.id), child: s.child),
           regionRow,
+          const HintBar('markets_hints_v1', [
+            ('INDIA · MF · … · US', 'pick a market; sessions and sectors stay on top'),
+            ('TRENDS', 'bullish / bearish by the 50 & 200-day stack; turning = flipped this week'),
+            ('any table row', 'tap to open the stock'),
+            ('chips up top', 'jump to a section'),
+          ]),
           for (final s in regional)
             KeyedSubtree(key: _tracker.key(s.id), child: s.child),
           const SizedBox(height: 20),

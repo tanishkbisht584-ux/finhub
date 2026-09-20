@@ -1900,6 +1900,13 @@ class _StockScreenState extends State<StockScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  const HintBar('stock_hints_v1', [
+                    ('chips up top', 'jump to any section · 🔍 filters them'),
+                    ('1D · 5D', 'intraday · CANDLE flips the chart'),
+                    ('SCORE pill', 'opens INSIGHTS with the working shown'),
+                    ('dotted words', 'tap for a plain-English definition'),
+                    ('every number', 'says where it came from in the footnote'),
+                  ]),
                   for (final s in secs)
                     KeyedSubtree(key: _tracker.key(s.id), child: s.child),
                 ],

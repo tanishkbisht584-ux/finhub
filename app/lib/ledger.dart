@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'glossary.dart';
 import 'heat.dart';
@@ -502,4 +503,74 @@ class KvTable extends StatelessWidget {
             onTap: null
           ),
       ]);
+}
+
+/// One-time coach strip (Phase 8): shown until dismissed, remembered under
+/// [prefKey]. Hidden whenever preferences are unavailable (tests, previews)
+/// so it can never block a page.
+class HintBar extends StatefulWidget {
+  const HintBar(this.prefKey, this.lines, {super.key, this.title = 'HOW TO READ THIS'});
+  final String prefKey;
+  final List<(String, String)> lines; // (gesture / thing, what it does)
+  final String title;
+
+  @override
+  State<HintBar> createState() => _HintBarState();
+}
+
+class _HintBarState extends State<HintBar> {
+  bool _show = false;
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((p) {
+      if (mounted && !(p.getBool(widget.prefKey) ?? false)) {
+        setState(() => _show = true);
+      }
+    }).catchError((_) {});
+  }
+
+  void _dismiss() {
+    setState(() => _show = false);
+    SharedPreferences.getInstance()
+        .then((p) => p.setBool(widget.prefKey, true))
+        .catchError((_) => false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_show) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(0, 8, 0, 4),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+          color: surface, border: Border.all(color: green.withValues(alpha: 0.5))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+              child: Text(widget.title,
+                  style: mono.copyWith(
+                      fontSize: 10, fontWeight: FontWeight.w700, color: green))),
+          GestureDetector(
+            onTap: _dismiss,
+            child: Text('GOT IT',
+                style: mono.copyWith(fontSize: 10, color: inkDim)),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        for (final (a, b) in widget.lines)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text.rich(TextSpan(children: [
+              TextSpan(
+                  text: a,
+                  style: mono.copyWith(
+                      fontSize: 11, color: ink, fontWeight: FontWeight.w700)),
+              TextSpan(text: '  $b', style: mono.copyWith(fontSize: 11, color: inkDim)),
+            ])),
+          ),
+      ]),
+    );
+  }
 }
