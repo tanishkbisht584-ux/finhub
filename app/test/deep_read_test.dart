@@ -1,6 +1,6 @@
 // Deep read contract (spec 2026-08-16): pages of {heading, body}; a refusal
 // or truncated payload degrades to zero pages, never a crash.
-import 'package:finswipe/models.dart';
+import 'package:finflick/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -2,9 +2,9 @@
 // published first, with the rest behind "+N more". The pipeline files them
 // under a shared cluster and keeps every outlet's link; this is the render
 // side of that.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/publishers.dart';
-import 'package:finswipe/screens/feed.dart' show StoryCard;
+import 'package:finflick/models.dart';
+import 'package:finflick/publishers.dart';
+import 'package:finflick/screens/feed.dart' show StoryCard;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

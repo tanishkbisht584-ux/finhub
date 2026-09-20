@@ -655,7 +655,7 @@ class _StockScreenState extends State<StockScreen> {
             ]);
       });
 
-  /// INSIGHTS (Phase 3): the FinSwipe score with its parts, SWOT, essentials.
+  /// INSIGHTS (Phase 3): the FinFlick score with its parts, SWOT, essentials.
   Widget _insights() => _onTicks((meta) {
         final card = finScore(meta, sa: _sa, summary: _fund.summary);
         final sw = swot(meta, sa: _sa, summary: _fund.summary);
@@ -673,7 +673,7 @@ class _StockScreenState extends State<StockScreen> {
         }
         return LedgerSection('Insights',
             footnote:
-                'FinSwipe score = strength 30 · growth 25 · valuation 25 · trend 20, scaled to what is measurable · not advice',
+                'FinFlick score = strength 30 · growth 25 · valuation 25 · trend 20, scaled to what is measurable · not advice',
             children: [
               if (card != null) ...[
                 const SizedBox(height: 10),

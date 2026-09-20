@@ -525,7 +525,7 @@ def main():
         call(gh + "/issues", "POST", json={"title": "Watchdog: pipeline needs attention", "body": body,
                                            "labels": ["watchdog"], "assignees": [repo.split("/")[0]]})
         try:  # only on issue creation, so a long incident pings once, not hourly
-            ops_push("FinSwipe pipeline needs attention", needs_you[0])
+            ops_push("FinFlick pipeline needs attention", needs_you[0])
         except Exception as e:  # noqa: BLE001
             print("ops push failed (issue+email still raised):", e)
     print("NEEDS ATTENTION:", " | ".join(needs_you))
@@ -534,6 +534,6 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "push":  # manual test: python pipeline/ops.py push "body"
-        print(ops_push("FinSwipe ops test", sys.argv[2] if len(sys.argv) > 2 else "ops pushes work"))
+        print(ops_push("FinFlick ops test", sys.argv[2] if len(sys.argv) > 2 else "ops pushes work"))
     else:
         sys.exit(main())

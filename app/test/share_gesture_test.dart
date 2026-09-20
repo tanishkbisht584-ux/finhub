@@ -1,4 +1,4 @@
-import 'package:finswipe/share_palette.dart';
+import 'package:finflick/share_palette.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Mirrors _StoryCardState._trackThumb. The gesture maths is the part that

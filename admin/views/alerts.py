@@ -89,7 +89,7 @@ with tab_o:
         refresh()
     if o3.button("Test push", disabled=not ops_ids, icon=":material/notifications:"):
         import ops
-        st.info(f"sent to {ops.ops_push('FinSwipe ops test', 'If you can read this, ops pushes work.')} device(s)")
+        st.info(f"sent to {ops.ops_push('FinFlick ops test', 'If you can read this, ops pushes work.')} device(s)")
 
 with tab_h:
     hist = sb("GET", "stories?select=id,hook,headline,impact_score,source_name,alerted_at"

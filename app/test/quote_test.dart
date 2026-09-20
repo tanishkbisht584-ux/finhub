@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:finswipe/models.dart';
+import 'package:finflick/models.dart';
 
 // The exact envelope Yahoo's keyless chart endpoint returns:
 // GET query1.finance.yahoo.com/v8/finance/chart/RELIANCE.NS?range=1mo&interval=1d

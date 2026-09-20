@@ -1,8 +1,8 @@
 // Tapping an alert must land you *in* the feed on that card, so the next
 // swipe carries on into the rest of the news. The jump is the logic; the
 // PageView tree around it is the same one FeedScreen builds.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart'
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart'
     show StoryCard, feedEntries, jumpToStory;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

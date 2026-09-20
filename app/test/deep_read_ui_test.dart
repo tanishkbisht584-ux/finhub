@@ -1,8 +1,8 @@
 // Deep read UI (spec 2026-08-16): page 0 is the card; swiping left reveals
 // the writing state, then newspaper pages. Vertical feed must keep working
 // (horizontal child, vertical parent — orthogonal axes never fight).
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show DeepReadPages;
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart' show DeepReadPages;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

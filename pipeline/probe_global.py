@@ -9,7 +9,7 @@ import re
 
 import requests
 
-UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinSwipe-probe/1.0"}
+UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinFlick-probe/1.0"}
 
 
 def show(tag, url, params=None):

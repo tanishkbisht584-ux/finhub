@@ -2578,7 +2578,7 @@ class _Offline extends StatelessWidget {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.cloud_off, size: 40, color: inkDim),
             const SizedBox(height: 14),
-            Text("Can't reach FinSwipe",
+            Text("Can't reach FinFlick",
                 style:
                     serif.copyWith(fontSize: 20, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),

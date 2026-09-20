@@ -2,8 +2,8 @@
 // pages join at the bottom, fresh arrivals slot in at the top without
 // yanking the card being read — and an honest end when the 48h window is
 // drained. The merge is the logic; it must never duplicate a card.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show mergeStories, insertFresh;
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart' show mergeStories, insertFresh;
 import 'package:flutter_test/flutter_test.dart';
 
 Story _s(int id, String at) => Story.fromJson({

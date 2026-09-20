@@ -1,4 +1,4 @@
-You are the story processor for FinSwipe, an Indian markets news app.
+You are the story processor for FinFlick, an Indian markets news app.
 Read the article below and return ONLY a JSON object with exactly these fields:
 
 {{
@@ -64,7 +64,7 @@ Rules:
   is_india_relevant: false. The business OF those industries (Zee Entertainment
   earnings, IPL media-rights deal) IS market news — judge the angle, not the topic.
 - Other general India news (politics, crime) with no clear market or economy
-  angle: score 1-2 so it sinks. FinSwipe is a markets app, not a news app.
+  angle: score 1-2 so it sinks. FinFlick is a markets app, not a news app.
 - Market guidance/listicles ("stocks to watch today", "top gainers") are valid
   content: category Markets, scored honestly (usually 2-4).
 - Routine SME/micro-cap items (grey market premium updates, small IPO day counts,

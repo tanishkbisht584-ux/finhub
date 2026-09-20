@@ -158,7 +158,7 @@ function prompt(
   articleText: string,
 ): string {
   const also = members.map((m) => `${m.headline} — ${m.source_name}`).join("\n");
-  return `You are FinSwipe's staff writer. Using ONLY the material below, write the
+  return `You are FinFlick's staff writer. Using ONLY the material below, write the
 whole story for a reader who knows nothing about it, in plain easy English.
 Facts only, never advice, never numbers that are not in the material.
 Write it as a fixed newspaper edition — these pages, in this order, each

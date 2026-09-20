@@ -1,4 +1,4 @@
-"""Integrations: the registry of every external secret FinSwipe depends on and
+"""Integrations: the registry of every external secret FinFlick depends on and
 the adapters for the stores that hold them. Pure Python (no Streamlit) so it
 is unit-testable — admin/views/integrations.py is the UI on top.
 

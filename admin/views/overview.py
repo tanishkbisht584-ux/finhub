@@ -55,7 +55,7 @@ pills.append(pill(f"run #{active[0]['id']} active" if active else "idle", True, 
 pills += [pill(f"{s} OFF", False) for s in off]
 if versions:
     pills.append(pill("app " + " · ".join(f"{v}×{n}" for v, n in versions.most_common(3)), True, DIM))
-header("Overview", "Everything that matters about FinSwipe right now — fix anything from the page it links to.", pills)
+header("Overview", "Everything that matters about FinFlick right now — fix anything from the page it links to.", pills)
 
 # ---------- needs attention ----------
 issues = []

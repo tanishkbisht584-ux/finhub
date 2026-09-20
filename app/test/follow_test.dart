@@ -1,7 +1,7 @@
 // Phase 3 (2026-08-28): follow-a-story rail bell (cluster follows).
-import 'package:finswipe/follows.dart';
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart';
+import 'package:finflick/follows.dart';
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

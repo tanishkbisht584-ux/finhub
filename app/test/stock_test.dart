@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:finswipe/screens/stock.dart';
+import 'package:finflick/screens/stock.dart';
 
 void main() {
   testWidgets('Sparkline paints without error for flat and normal series',

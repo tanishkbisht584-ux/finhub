@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:finswipe/screens/feed.dart'
+import 'package:finflick/screens/feed.dart'
     show enabledCategories, feedCategories, setInitialCategories;
-import 'package:finswipe/screens/interests.dart';
+import 'package:finflick/screens/interests.dart';
 
 void main() {
   test('categories match the pipeline enum exactly', () {

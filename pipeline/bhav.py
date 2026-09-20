@@ -22,13 +22,13 @@ from datetime import date, timedelta
 import requests
 
 ARCH = "https://nsearchives.nseindia.com/"
-UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinSwipe/1.0"}
+UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinFlick/1.0"}
 # BSE (20 Sep review, Tanis: "what about BSE"): the same two shapes live on
 # bseindia.com — the CM bhavcopy (NSE's column layout, ISIN per row) and a
 # pipe-delimited gross-delivery file keyed by scrip code. Joined to our NSE
 # symbols by ISIN (screener_metrics.sa.isin, 2,170 of 2,467 quoted names).
 BSE = "https://www.bseindia.com/"
-BSE_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0) FinSwipe/1.0", "Referer": "https://www.bseindia.com/"}
+BSE_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0) FinFlick/1.0", "Referer": "https://www.bseindia.com/"}
 TAPE_DAYS = 22      # ~one trading month, the longest MC average
 FNO_STRIKES = 6     # strikes each side of the underlying kept in the chain
 NEAR = 0.15         # max-OI strikes must sit within ±15% of the underlying

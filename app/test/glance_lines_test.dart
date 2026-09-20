@@ -3,9 +3,9 @@
 // scored before 014, and weak-lane stories — must render NOTHING, and a card
 // carrying every field must clamp the summary instead of tipping into
 // _FitScroll's inner-scroll mode.
-import 'package:finswipe/follows.dart';
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart';
+import 'package:finflick/follows.dart';
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

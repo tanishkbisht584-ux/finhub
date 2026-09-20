@@ -10,7 +10,7 @@ import 'theme.dart';
 class RemoteConfig {
   const RemoteConfig({
     this.minVersion = '0.0.0',
-    this.forceUpdateMessage = 'Please update FinSwipe to keep reading.',
+    this.forceUpdateMessage = 'Please update FinFlick to keep reading.',
     this.updateUrl = '',
     this.maintenance = '',
     this.deepReadEnabled = true,

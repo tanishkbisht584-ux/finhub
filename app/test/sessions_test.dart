@@ -1,4 +1,4 @@
-import 'package:finswipe/sessions.dart';
+import 'package:finflick/sessions.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Map<String, SessionState> _at(DateTime utc) =>

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:finswipe/share_palette.dart';
+import 'package:finflick/share_palette.dart';
 
 void main() {
   test('ribbon holds cancel/watchlist/saved and still opens on Saved', () {

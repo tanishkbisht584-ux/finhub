@@ -1,8 +1,8 @@
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show homeTabLabels, marketsTab;
-import 'package:finswipe/screens/markets.dart';
-import 'package:finswipe/screens/stock.dart';
-import 'package:finswipe/ticks.dart';
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart' show homeTabLabels, marketsTab;
+import 'package:finflick/screens/markets.dart';
+import 'package:finflick/screens/stock.dart';
+import 'package:finflick/ticks.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

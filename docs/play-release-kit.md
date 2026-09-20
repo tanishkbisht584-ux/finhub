@@ -14,7 +14,7 @@ Internal testing is what opens that gate.
 1. **play.google.com/console** → sign in with the account you want to own the
    app → pay the one-time **US$25** developer fee (the single non-₹0 item in
    the whole MVP; budgeted in the spec §12).
-2. **Create app** → name `FinSwipe` → App/Game: App → Free → declarations: not
+2. **Create app** → name `FinFlick` → App/Game: App → Free → declarations: not
    primarily child-directed.
 3. **Internal testing** → Create new release → upload
    `app-release.aab` → release name auto-fills (0.24.0+42).
@@ -26,12 +26,12 @@ Internal testing is what opens that gate.
 
 ## Store listing (paste-ready)
 
-- **App name**: FinSwipe
+- **App name**: FinFlick
 - **Short description** (max 80 chars):
   `Indian market news that explains itself — swipe, understand, move on.`
 - **Full description**:
 
-  FinSwipe turns Indian market news into cards you can actually understand.
+  FinFlick turns Indian market news into cards you can actually understand.
 
   • One story per swipe — a bold "why it matters" line, who gains and who's
     hit, and whether it's confirmed or just a rumour, all at a glance.

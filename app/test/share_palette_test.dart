@@ -1,5 +1,5 @@
-import 'package:finswipe/models.dart';
-import 'package:finswipe/share_palette.dart';
+import 'package:finflick/models.dart';
+import 'package:finflick/share_palette.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -17,7 +17,7 @@ void main() {
     final t = shareText(_story());
     expect(t, contains('RBI stands still'));
     expect(t, contains('https://rbi.org.in/x'));
-    expect(t, contains('FinSwipe'));
+    expect(t, contains('FinFlick'));
   });
 
   test('falls back to the headline when the AI produced no hook', () {

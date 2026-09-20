@@ -31,7 +31,7 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('FinSwipe')),
+      appBar: AppBar(title: const Text('FinFlick')),
       body: FutureBuilder<Story?>(
         future: _story,
         builder: (context, snap) {

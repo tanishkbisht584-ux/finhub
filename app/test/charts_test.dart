@@ -1,5 +1,5 @@
-import 'package:finswipe/charts.dart';
-import 'package:finswipe/theme.dart';
+import 'package:finflick/charts.dart';
+import 'package:finflick/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

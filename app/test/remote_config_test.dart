@@ -1,4 +1,4 @@
-import 'package:finswipe/remote_config.dart';
+import 'package:finflick/remote_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -57,13 +57,13 @@ class _SignInScreenState extends State<SignInScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Image.asset('assets/brand/mark.png',
-                width: 96, height: 96, semanticLabel: 'FinSwipe mark'),
+                width: 96, height: 96, semanticLabel: 'FinFlick mark'),
             const SizedBox(height: 16),
-            // Text.rich keeps find.text('FinSwipe') working (plain text of the span).
+            // Text.rich keeps find.text('FinFlick') working (plain text of the span).
             Text.rich(
                 const TextSpan(children: [
                   TextSpan(text: 'Fin', style: TextStyle(color: green)),
-                  TextSpan(text: 'Swipe'),
+                  TextSpan(text: 'Flick'),
                 ]),
                 textAlign: TextAlign.center,
                 style:

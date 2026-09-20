@@ -18,7 +18,7 @@ from itertools import product
 import requests
 
 URL = "https://stockanalysis.com/_api/endpoints/screener/table"
-UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinSwipe/1.0"}
+UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FinFlick/1.0"}
 
 # site id -> screener_metrics column (all real numeric columns: filter/sort-able)
 NUM = {"ch1w": "ret_1w", "ch1m": "ret_1m", "ch3m": "ret_3m", "ch6m": "ret_6m", "chYTD": "ret_ytd",

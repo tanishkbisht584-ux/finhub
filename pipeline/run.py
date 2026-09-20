@@ -1,4 +1,4 @@
-"""FinSwipe M1 pipeline: fetch feeds -> normalize -> dedupe -> cluster ->
+"""FinFlick M1 pipeline: fetch feeds -> normalize -> dedupe -> cluster ->
 Gemini card -> insert 'pending' into Supabase. Idempotent: url_hash re-checked
 every run, so re-processing is a no-op."""
 import contextlib
@@ -48,7 +48,7 @@ QUIET_END_IST = 7
 QUIET_PIERCE_SCORE = 9      # ... unless it's this big ("wake me if the market is crashing")
 IST = timezone(timedelta(hours=5, minutes=30))
 FETCH_TIMEOUT = 20
-UA = {"User-Agent": "Mozilla/5.0 (FinSwipe pipeline; +private)"}
+UA = {"User-Agent": "Mozilla/5.0 (FinFlick pipeline; +private)"}
 
 # ---------- remote config (admin cockpit) ----------
 # Every constant above (and the few defined further down) can be overridden

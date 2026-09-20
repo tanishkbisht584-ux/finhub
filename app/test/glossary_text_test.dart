@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:finswipe/glossary.dart';
+import 'package:finflick/glossary.dart';
 
 void main() {
   testWidgets('terms get a dotted underline; tap opens the define sheet',

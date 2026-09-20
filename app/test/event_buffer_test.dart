@@ -1,7 +1,7 @@
 // EventBuffer: view rows leave in one insert per 20 cards / 30 s / flush,
 // never one per swipe.
 import 'package:fake_async/fake_async.dart';
-import 'package:finswipe/analytics.dart';
+import 'package:finflick/analytics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -39,7 +39,7 @@ const shareTargets = <ShareTarget>[
 final int defaultShareTarget = shareTargets.indexWhere((t) => t.id == 'card');
 
 String shareText(Story s) =>
-    '${s.hook ?? s.headline}\n\nvia FinSwipe · ${s.sourceUrl}';
+    '${s.hook ?? s.headline}\n\nvia FinFlick · ${s.sourceUrl}';
 
 /// Runs a target. Returns the toast line to show, or null when the app itself
 /// took over the screen.
@@ -103,7 +103,7 @@ Future<String?> runShareTarget(
             ? const []
             : [
                 XFile.fromData(png,
-                    mimeType: 'image/png', name: 'finswipe_${story.id}.png')
+                    mimeType: 'image/png', name: 'finflick_${story.id}.png')
               ],
         text: text,
       ));

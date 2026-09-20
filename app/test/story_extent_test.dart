@@ -2,8 +2,8 @@
 // story-so-far timeline (zero AI, cluster data), and the deep read's optional
 // structured extras (glossary page, key-stat callout) — old cached
 // {pages}-only payloads must render exactly as before.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart'
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart'
     show DeepReadPages, FeedScreen, storiesProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

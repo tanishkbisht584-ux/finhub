@@ -1,5 +1,5 @@
-import 'package:finswipe/models.dart';
-import 'package:finswipe/ticks.dart';
+import 'package:finflick/models.dart';
+import 'package:finflick/ticks.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

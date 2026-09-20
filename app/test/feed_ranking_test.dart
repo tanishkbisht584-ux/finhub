@@ -1,8 +1,8 @@
 // Watchlist ranking floats followed-company stories within 6h bands only —
 // chronology stays sacred at macro scale. orderSeed keeps the page newest
 // first (SQL order), split at the last-visit boundary.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show orderSeed, rankStories;
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart' show orderSeed, rankStories;
 import 'package:flutter_test/flutter_test.dart';
 
 // Fixed base keeps every story inside deterministic 6h epoch bands.

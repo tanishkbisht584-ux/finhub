@@ -2,8 +2,8 @@
 // round tune tile opens a categories-only panel; min impact and horizon live
 // behind the card's ledger line (tap IMPACT / tap SHORT+LONG); choices persist
 // on-device; a notification tap must never land behind any filter.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart'
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart'
     show FeedFilterButton, LiveButton, StoryCard, liveMode, visibleStories,
          feedCategories, enabledCategories, minImpact, setMinImpact,
          horizonFilter, setHorizonFilter, pendingStory, toggleCategory,

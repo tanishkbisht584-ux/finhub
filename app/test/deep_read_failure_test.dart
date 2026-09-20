@@ -2,8 +2,8 @@
 // fetch must offer a retry, never the refusal copy ("Full story unavailable"),
 // and the retry storm (_onScroll re-firing _ensureRead per pixel) must stay
 // dead: one failure = one error page until the button is pressed.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show StoryPager;
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart' show StoryPager;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

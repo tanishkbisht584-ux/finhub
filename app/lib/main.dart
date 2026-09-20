@@ -125,7 +125,7 @@ Future<void> main() async {
             body: Center(
                 child: Padding(
           padding: EdgeInsets.all(32),
-          child: Text('FinSwipe could not start — check for an update.',
+          child: Text('FinFlick could not start — check for an update.',
               textAlign: TextAlign.center),
         )))));
     return;
@@ -154,7 +154,7 @@ Future<void> main() async {
     // no google-services / Play Services: app works, alerts don't arrive
   }
   track('app_open');
-  runApp(const ProviderScope(child: FinSwipeApp()));
+  runApp(const ProviderScope(child: FinFlickApp()));
   // App killed, opened via notification tap: navigatorKey has no live
   // NavigatorState until the first frame is up, so the push has to wait.
   if (initial != null) {
@@ -162,14 +162,14 @@ Future<void> main() async {
   }
 }
 
-class FinSwipeApp extends StatelessWidget {
-  const FinSwipeApp({super.key});
+class FinFlickApp extends StatelessWidget {
+  const FinFlickApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: navigatorKey,
-      title: 'FinSwipe',
+      title: 'FinFlick',
       theme: appTheme,
       debugShowCheckedModeBanner: false,
       // Below the admin's minimum version: the update wall, nothing else.

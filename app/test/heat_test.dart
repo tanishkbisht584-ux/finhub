@@ -1,5 +1,5 @@
-import 'package:finswipe/heat.dart';
-import 'package:finswipe/theme.dart';
+import 'package:finflick/heat.dart';
+import 'package:finflick/theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

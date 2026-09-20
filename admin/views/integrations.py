@@ -160,7 +160,7 @@ rows_state = {s["name"]: store_state(s) for s in REG}
 missing_gh = [n for n, s in rows_state.items() if s["gh"][0] is False]
 missing_edge = [n for n, s in rows_state.items() if s["edge"][0] is False]
 missing_local = [n for n, s in rows_state.items() if s["env"][0] is False]
-header("Integrations", "Every outside service FinSwipe depends on — keys by account, where each one lives, "
+header("Integrations", "Every outside service FinFlick depends on — keys by account, where each one lives, "
        "whether it works, and one place to add, rotate or push them.",
        [pill(f"GitHub {gh_login or 'no token'}" + (f" · {scopes}" if scopes else ""), bool(GH) and not str(gh_login).startswith("error"),
              None if GH else DIM),

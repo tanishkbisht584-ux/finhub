@@ -1,8 +1,8 @@
 // The caught-up divider: feedEntries decides where (pure), FeedScreen shows
 // the page and persists the stamp. The divider must vanish entirely for a
 // first install, a nothing-new session, and an everything-new session.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart';
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

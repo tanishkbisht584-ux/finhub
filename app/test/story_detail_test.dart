@@ -1,7 +1,7 @@
 // StoryCard renders from a Story without network; the detail screen's fetch
 // needs Supabase, so test the render path that both feed and deep-link share.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show StoryCard;
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart' show StoryCard;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

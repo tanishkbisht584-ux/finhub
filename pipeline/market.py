@@ -29,7 +29,7 @@ import requests
 
 IST = timezone(timedelta(hours=5, minutes=30))
 TIMEOUT = 20
-# A browser UA, not run.py's "FinSwipe pipeline" one: Yahoo answers the former.
+# A browser UA, not run.py's "FinFlick pipeline" one: Yahoo answers the former.
 BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                             "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
               "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
@@ -1599,7 +1599,7 @@ WHERE { ?item p:P414 ?ex . ?ex ps:P414 wd:Q638740 . ?ex pq:P249 ?ticker .
   OPTIONAL { ?item skos:altLabel ?alt . FILTER(LANG(?alt)="en") }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } }
 GROUP BY ?ticker ?itemLabel"""
-WIKIDATA_UA = {"User-Agent": "FinSwipe/1.0 (news pipeline; single daily query)"}
+WIKIDATA_UA = {"User-Agent": "FinFlick/1.0 (news pipeline; single daily query)"}
 
 
 def parse_wikidata_aliases(payload):

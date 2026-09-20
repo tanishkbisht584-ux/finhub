@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:finswipe/screens/feed.dart' show GestureHints;
+import 'package:finflick/screens/feed.dart' show GestureHints;
 
 void main() {
   testWidgets('coach marks list the hidden gestures and dismiss on tap',

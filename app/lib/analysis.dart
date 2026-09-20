@@ -473,7 +473,7 @@ bool needsAnalysisRequest(Map<String, dynamic> meta) =>
 /// One scored dimension: label, points earned, points possible, one-line read.
 typedef ScorePart = ({String label, int points, int max, String read});
 
-/// FinSwipe score: 0–100, normalised over the dimensions we can actually
+/// FinFlick score: 0–100, normalised over the dimensions we can actually
 /// measure for this stock (a missing dimension shrinks the denominator rather
 /// than dragging the score). Transparent on purpose — the section prints
 /// every part. Weights: strength 30 · growth 25 · valuation 25 · trend 20.

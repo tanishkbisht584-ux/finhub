@@ -1,5 +1,5 @@
 // Ask history: newest first, one entry per question, capped.
-import 'package:finswipe/screens/ask.dart';
+import 'package:finflick/screens/ask.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

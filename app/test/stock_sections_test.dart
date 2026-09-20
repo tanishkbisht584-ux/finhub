@@ -1,5 +1,5 @@
-import 'package:finswipe/screens/stock_sections.dart';
-import 'package:finswipe/fundamentals.dart';
+import 'package:finflick/screens/stock_sections.dart';
+import 'package:finflick/fundamentals.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

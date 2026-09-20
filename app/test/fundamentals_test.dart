@@ -1,8 +1,8 @@
-import 'package:finswipe/fundamentals.dart';
-import 'package:finswipe/heat.dart';
-import 'package:finswipe/ledger.dart';
-import 'package:finswipe/theme.dart';
-import 'package:finswipe/screens/stock_sections.dart';
+import 'package:finflick/fundamentals.dart';
+import 'package:finflick/heat.dart';
+import 'package:finflick/ledger.dart';
+import 'package:finflick/theme.dart';
+import 'package:finflick/screens/stock_sections.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

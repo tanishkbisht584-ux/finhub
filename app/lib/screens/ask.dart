@@ -253,7 +253,7 @@ class _AskScreenState extends State<AskScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(
-          () => _error = 'Could not reach FinSwipe — check your connection.');
+          () => _error = 'Could not reach FinFlick — check your connection.');
     } finally {
       _t3?.cancel();
       _t8?.cancel();

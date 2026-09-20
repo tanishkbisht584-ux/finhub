@@ -1,6 +1,6 @@
 {
-    "name": "FinSwipe",
-    "short_name": "FinSwipe",
+    "name": "FinFlick",
+    "short_name": "FinFlick",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0E100F",

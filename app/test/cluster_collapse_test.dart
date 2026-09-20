@@ -1,8 +1,8 @@
 // One card per event: the pipeline's cluster collapse is best-effort, so
 // approved siblings can ship. collapseClusters keeps the first occurrence
 // (pages are newest-first) and outlet credits already carry the rest.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show collapseClusters;
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart' show collapseClusters;
 import 'package:flutter_test/flutter_test.dart';
 
 Story _s(int id, {String? cluster}) => Story.fromJson({

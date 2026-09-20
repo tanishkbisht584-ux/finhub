@@ -1,8 +1,8 @@
 // The session recap page follows every 25th story, never sits at the list
 // end, and never lands adjacent to the caught-up divider (sentinels must
 // always follow a story). Content helpers are pure.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart'
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart'
     show
         FeedEntry,
         biggestMover,

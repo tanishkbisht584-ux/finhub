@@ -1,6 +1,6 @@
-import 'package:finswipe/intro.dart';
-import 'package:finswipe/screens/sign_in.dart';
-import 'package:finswipe/theme.dart';
+import 'package:finflick/intro.dart';
+import 'package:finflick/screens/sign_in.dart';
+import 'package:finflick/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -47,7 +47,7 @@ void main() {
     await tester.pumpWidget(_app(child: const SignInScreen()));
     await tester.pump(const Duration(milliseconds: 1500));
     await tester.pump();
-    expect(find.text('FinSwipe'), findsOneWidget);
+    expect(find.text('FinFlick'), findsOneWidget);
     expect(find.text('Continue with Google'), findsOneWidget);
   });
 }

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:finswipe/screens/ask.dart';
+import 'package:finflick/screens/ask.dart';
 
 void main() {
   test('questions never route to a stock page', () {

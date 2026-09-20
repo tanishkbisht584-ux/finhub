@@ -1,6 +1,6 @@
 // PostHog capture payloads (M10): the shape is the contract — a wrong field
 // name silently drops the event server-side.
-import 'package:finswipe/analytics.dart' show buildCapture;
+import 'package:finflick/analytics.dart' show buildCapture;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

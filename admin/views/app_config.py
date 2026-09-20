@@ -1,7 +1,7 @@
 """App Config: what the installed app and the edge functions read at runtime."""
 from common import *  # noqa: F401,F403
 
-APP_DEFAULTS = {"min_version": "0.0.0", "force_update_message": "Please update FinSwipe to keep reading.",
+APP_DEFAULTS = {"min_version": "0.0.0", "force_update_message": "Please update FinFlick to keep reading.",
                 "update_url": "", "maintenance": "",
                 "flags": {"deep_read_enabled": True, "qa_enabled": True, "live_default": True,
                           "live_poll_seconds": 15, "ambient_poll_seconds": 90}}

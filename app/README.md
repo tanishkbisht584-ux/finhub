@@ -1,3 +1,3 @@
-# finswipe
+# finflick
 
 A new Flutter project.

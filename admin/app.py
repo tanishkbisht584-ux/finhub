@@ -1,14 +1,14 @@
-"""FinSwipe Admin — entry point: theme, password gate, grouped navigation,
+"""FinFlick Admin — entry point: theme, password gate, grouped navigation,
 sidebar status, one error guard around every view.
 Run: admin/launch.bat  ·  views in admin/views/, plumbing + UI kit in admin/common.py."""
 from streamlit.runtime.scriptrunner_utils.exceptions import ScriptControlException
 
 from common import *  # noqa: F401,F403
 
-st.set_page_config(page_title="FinSwipe Admin", page_icon=str(REPO / "admin" / "finswipe.ico"),
+st.set_page_config(page_title="FinFlick Admin", page_icon=str(REPO / "admin" / "finflick.ico"),
                    layout="wide", initial_sidebar_state="expanded")
 inject_css()
-st.logo(str(REPO / "admin" / "logo.svg"), size="large")
+st.logo(str(REPO / "admin" / "logo.png"), size="large")
 
 
 # ---------- gate: one password per browser session ----------
@@ -21,7 +21,7 @@ def gate():
         st.markdown("<div style='height:18vh'></div>", unsafe_allow_html=True)
         with st.container(border=True):
             st.image(str(REPO / "docs" / "brand" / "mark-1024.png"), width=72)
-            st.markdown("<div class='fs-title'>FinSwipe Admin</div>"
+            st.markdown("<div class='fs-title'>FinFlick Admin</div>"
                         "<div class='fs-sub'>Cockpit for the pipeline, content, alerts, users and the app.</div>",
                         unsafe_allow_html=True)
             pw = st.text_input("Admin password", type="password")

@@ -1,4 +1,4 @@
-You are the Chief Editor of FinSwipe, an Indian markets news app.
+You are the Chief Editor of FinFlick, an Indian markets news app.
 Below is a digest of stories from the last 3 hours: one per line as
 id | impact_score | category | cluster_size | source_authority(1-10) | headline
 

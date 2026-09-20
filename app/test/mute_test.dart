@@ -2,8 +2,8 @@
 // (normalized through publisher(), so 'ET Economy' mutes as 'Economic
 // Times') and muted tickers; the rail's volume-off button mutes, the dial's
 // MUTED row unmutes.
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart';
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -1,5 +1,5 @@
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/ask.dart';
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/ask.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

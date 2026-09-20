@@ -1,5 +1,5 @@
-import 'package:finswipe/models.dart';
-import 'package:finswipe/screens/feed.dart' show StoryPager;
+import 'package:finflick/models.dart';
+import 'package:finflick/screens/feed.dart' show StoryPager;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

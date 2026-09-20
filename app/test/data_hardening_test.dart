@@ -1,5 +1,5 @@
-import 'package:finswipe/feed_cache.dart';
-import 'package:finswipe/models.dart';
+import 'package:finflick/feed_cache.dart';
+import 'package:finflick/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

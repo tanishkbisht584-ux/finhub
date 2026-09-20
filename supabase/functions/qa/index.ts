@@ -441,8 +441,8 @@ async function screenerSource(symbol: string): Promise<Source | null> {
     return {
       title: `Screener: ${m.name ?? symbol} (${symbol})`,
       body: `${m.name ?? symbol}${m.sector ? `, ${m.sector} sector` : ""}: ${bits.join("; ")}. ` +
-        "Source: FinSwipe screener (Stock Analysis, NSE filings).",
-      source_name: "FinSwipe screener",
+        "Source: FinFlick screener (Stock Analysis, NSE filings).",
+      source_name: "FinFlick screener",
       url: `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}.NS`,
     };
   } catch {
