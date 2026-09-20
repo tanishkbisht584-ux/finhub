@@ -289,7 +289,7 @@ def test_all_groups_registered():
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm", "deep_drain",
-                                             "screener", "screener_px", "stockanalysis", "bhav"]
+                                             "screener", "screener_px", "stockanalysis", "bhav", "unlisted"]
 
 
 def test_refresh_mf_new_fetches_only_unquoted_follows(monkeypatch):
@@ -1427,3 +1427,31 @@ def test_parse_street_and_profile():
     f = market.parse_fundamentals({"quoteSummary": {"result": [r]}})
     assert f["street"]["target"]["n"] == 41 and f["profile"]["website"] == "https://www.tcs.com"
     assert "street" not in market.parse_fundamentals({"quoteSummary": {"result": [{"summaryDetail": {}}]}})
+
+
+def test_shape_unlisted_and_refresh(monkeypatch):
+    pages = [{"data": {"last_page": 2, "data": [
+        {"company_name": "Zepto", "current_price": 100.0, "old_price": 80.0, "sector": "Retail", "lot_size": 50, "link": "https://unlistedzone.com/zepto"},
+        {"company_name": "NoPrice", "current_price": None, "old_price": 1},
+        {"company_name": "Abans", "current_price": 2500.0, "old_price": 2500.0, "sector": "Financial Services", "lot_size": 100, "link": "x"}]}},
+             {"data": {"last_page": 2, "data": [{"company_name": "Bira", "current_price": 5.0, "old_price": None, "sector": None, "lot_size": None, "link": None}]}}]
+    rows = market.shape_unlisted(pages)
+    assert [r["name"] for r in rows] == ["Abans", "Bira", "Zepto"]                 # sorted, NoPrice dropped
+    assert rows[2] == {"name": "Zepto", "price": 100.0, "prev": 80.0, "chg_pct": 25.0, "sector": "Retail", "lot": 50, "link": "https://unlistedzone.com/zepto"}
+    assert rows[1]["chg_pct"] is None and rows[0]["chg_pct"] == 0.0
+
+    class Rsp:
+        def __init__(self, body): self.body = body
+        def raise_for_status(self): pass
+        def json(self): return self.body
+
+    calls = []
+    monkeypatch.setattr(market.requests, "get", lambda url, params=None, **k: calls.append(params["page"]) or Rsp(pages[params["page"] - 1]))
+    monkeypatch.setattr(market.time, "sleep", lambda s: None)
+    monkeypatch.setattr(market, "_blob_sent", {})
+    posts = []
+    monkeypatch.setattr(market, "upsert", lambda sb, rows, table, key: posts.append(rows) or len(rows))
+    assert market.refresh_unlisted(None, NOW) == 1 and calls == [1, 2]
+    blob = posts[0][0]
+    assert blob["key"] == "unlisted" and blob["payload"]["source"] == "UnlistedZone" and len(blob["payload"]["rows"]) == 3
+    assert market.DAILY_SLOT["unlisted"] == (20, 30)

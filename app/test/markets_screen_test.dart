@@ -85,6 +85,14 @@ final _blobs = <String, dynamic>{
       'NIFTY 500': {'adv': 217, 'dec': 276}
     },
   },
+  'unlisted': {
+    'asof': '2026-09-20',
+    'source': 'UnlistedZone',
+    'rows': [
+      {'name': 'Zepto', 'price': 100.0, 'prev': 80.0, 'chg_pct': 25.0, 'sector': 'Retail', 'lot': 50, 'link': 'https://unlistedzone.com/zepto'},
+      {'name': 'Abans Investment Managers Limited', 'price': 2500.0, 'prev': 2500.0, 'chg_pct': 0.0, 'sector': 'Financial Services', 'lot': 100, 'link': 'x'},
+    ],
+  },
   'trends': {
     'asof': '2026-09-18',
     'bullish': [
@@ -515,7 +523,7 @@ void main() {
     expect(find.text('SECTIONS'), findsNothing);
     expect(find.text('SESSIONS'), findsNWidgets(2)); // pinned above the pills
     await _region(tester, 'UNLISTED');
-    expect(find.textContaining('source not wired yet'), findsOneWidget);
+    expect(find.textContaining('No list yet'), findsOneWidget); // no blob in _data
     await _region(tester, 'INDIA');
     expect(find.text('INDICES'), findsNWidgets(2));
   });
@@ -645,6 +653,21 @@ void main() {
     expect(find.text('INDIA ADRS (NYSE)'), findsOneWidget);
     expect(find.text('ODDS'), findsNWidgets(2));
     expect(find.textContaining('Fed cut 25 bps'), findsOneWidget);
+    // UNLISTED: the blob renders as a searchable table.
+    await _region(tester, 'UNLISTED');
+    expect(find.text('Zepto'), findsOneWidget);
+    expect(find.text('▲25.00%'), findsOneWidget);
+    expect(find.text('Retail'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, 'abans');
+    await tester.pump();
+    expect(find.text('Zepto'), findsNothing);
+    expect(find.text('Abans Investment Managers Limited'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, 'zzz');
+    await tester.pump();
+    expect(find.text('no match'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, '');
+    await tester.pump();
+    await _region(tester, 'US');
     // US stocks are their own MARKET MOVERS table, not GLOBAL rows.
     expect(find.text('MARKET MOVERS'), findsNWidgets(2));
     expect(find.text('Nvidia'), findsOneWidget);

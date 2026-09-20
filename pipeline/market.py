@@ -154,7 +154,7 @@ DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
               "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30),
               "participant_oi": (19, 0), "shipping": (7, 30),
-              "monsoon": (9, 0), "bhav": (19, 30)}
+              "monsoon": (9, 0), "bhav": (19, 30), "unlisted": (20, 30)}
 
 
 def due(group, now):
@@ -2263,6 +2263,47 @@ def refresh_bhav(sb, now):
     return bhav.refresh_bhav(sb, now)
 
 
+# Unlisted / pre-IPO indicative prices (20 Sep 2026, Tanis's call: their terms
+# ask for authorization for automated pulls; he chose to proceed). One paged
+# JSON list a day, ~271 names; every row carries their page link so the app
+# attributes and sends the tap to them.
+UNLISTED_URL = "https://www.unlistedzone.com/api/v1/shares"
+
+
+def shape_unlisted(pages):
+    rows = []
+    for page in pages:
+        for r in ((page.get("data") or {}).get("data") or []):
+            name, price = r.get("company_name"), r.get("current_price")
+            if not name or price is None:
+                continue
+            old = r.get("old_price")
+            rows.append({"name": name, "price": price, "prev": old,
+                         "chg_pct": round((price / old - 1) * 100, 2) if old else None,
+                         "sector": r.get("sector"), "lot": r.get("lot_size"), "link": r.get("link")})
+    rows.sort(key=lambda r: r["name"].lower())
+    return rows
+
+
+def refresh_unlisted(sb, now):
+    pages, page = [], 1
+    while True:
+        r = requests.get(UNLISTED_URL, params={"page": page, "per_page": 100}, headers=BROWSER_UA, timeout=TIMEOUT)
+        r.raise_for_status()
+        j = r.json()
+        pages.append(j)
+        if page >= int(((j.get("data") or {}).get("last_page") or 1)) or page >= 10:
+            break
+        page += 1
+        time.sleep(1)
+    rows = shape_unlisted(pages)
+    if not rows:
+        raise RuntimeError("unlisted: empty list")
+    return write_blobs(sb, [{"key": "unlisted", "payload": {"asof": now.astimezone(IST).date().isoformat(),
+                                                             "source": "UnlistedZone", "rows": rows},
+                             "updated_at": now.isoformat()}])
+
+
 GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("fxcom", refresh_fxcom), ("crypto", refresh_crypto),
           ("global", refresh_global),
@@ -2279,7 +2320,8 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm),
           ("deep_drain", refresh_deep_drain),
           ("screener", refresh_screener), ("screener_px", refresh_screener_px),
-          ("stockanalysis", refresh_stockanalysis), ("bhav", refresh_bhav))
+          ("stockanalysis", refresh_stockanalysis), ("bhav", refresh_bhav),
+          ("unlisted", refresh_unlisted))
 
 
 def refresh(sb, now=None):

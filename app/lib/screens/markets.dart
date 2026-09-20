@@ -395,6 +395,9 @@ class _MarketsBodyState extends State<MarketsBody> {
   /// CRYPTO quote currency (MC's USD ⇄ INR switch). Session-only.
   bool _cryptoUsd = false;
 
+  /// UNLISTED search (client-side filter over the blob).
+  String _unlistedQ = '';
+
   /// A symbol from a blob row -> its stock page (same lookup as SCREENS).
   Future<void> _openSymbol(String symbol) async {
     try {
@@ -522,6 +525,16 @@ class _MarketsBodyState extends State<MarketsBody> {
         (data.blobs['flows'] as Map?)?.cast<String, dynamic>() ?? const {};
     final fno =
         (data.blobs['fno'] as Map?)?.cast<String, dynamic>() ?? const {};
+    // Unlisted / pre-IPO indicative prices (market.refresh_unlisted).
+    final unlisted =
+        (data.blobs['unlisted'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final uq = _unlistedQ.trim().toLowerCase();
+    final unlistedRows = [
+      for (final r in _l(unlisted['rows']))
+        if (uq.isEmpty || '${r['name']}'.toLowerCase().contains(uq) ||
+            '${r['sector'] ?? ''}'.toLowerCase().contains(uq))
+          r
+    ];
     // 024: universe trend state from stockanalysis.py (bullish / turning …).
     final trends =
         (data.blobs['trends'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -981,21 +994,63 @@ class _MarketsBodyState extends State<MarketsBody> {
             for (final t in data.kind('fx')) _TickRow(t, spark: true),
           ]),
         ),
-      // "coming" rule: MC section title, one honest line, no fake numbers.
       (
         id: 'unlisted',
         label: 'UNLISTED',
-        child: LedgerSection('Unlisted shares',
-            footnote: 'pre-IPO names · source not wired yet',
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Text(
-                    'Coming. No keyless price feed for unlisted shares has passed a terms check yet; this tab fills the day one does.',
-                    style: mono.copyWith(
-                        fontSize: 12, height: 1.5, color: inkDim)),
-              ),
-            ]),
+        child: unlistedRows.isEmpty && _unlistedQ.isEmpty
+            ? LedgerSection('Unlisted shares',
+                footnote: 'pre-IPO names · fills after the first daily pull',
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Text('No list yet — the pipeline pulls it once a day at 20:30 IST.',
+                        style: mono.copyWith(fontSize: 12, height: 1.5, color: inkDim)),
+                  ),
+                ])
+            : LedgerSection('Unlisted shares',
+                stamp: data.blobUpdated['unlisted'],
+                stampPrefix: 'UnlistedZone',
+                footnote:
+                    'indicative dealer prices, not exchange quotes · ₹ per share · tap a row for the UnlistedZone page · as of ${dmy(unlisted['asof'])}',
+                children: [
+                  const SizedBox(height: 8),
+                  TextField(
+                    onChanged: (v) => setState(() => _unlistedQ = v),
+                    style: mono.copyWith(fontSize: 12),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'search ${unlisted['rows'] is List ? (unlisted['rows'] as List).length : ''} names…',
+                      hintStyle: mono.copyWith(fontSize: 12, color: inkDim),
+                      prefixIcon: const Icon(Icons.search, size: 16, color: inkDim),
+                      enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: border)),
+                      focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: green)),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (unlistedRows.isEmpty)
+                    Text('no match', style: mono.copyWith(fontSize: 12, color: inkDim))
+                  else
+                    LedgerTable(const [
+                      LtCol('Company', right: false, text: true),
+                      LtCol('LTP ₹'),
+                      LtCol('Chg'),
+                      LtCol('Sector', right: false, text: true),
+                      LtCol('Lot'),
+                    ], [
+                      for (final r in unlistedRows)
+                        (
+                          cells: [
+                            '${r['name']}',
+                            _rs(r['price']),
+                            fmtPct((r['chg_pct'] as num?)?.toDouble()),
+                            '${r['sector'] ?? '—'}',
+                            r['lot'] is num ? fmtNum((r['lot'] as num).toDouble(), decimals: 0) : '—',
+                          ],
+                          tone: r['chg_pct'] == null ? 0 : ((r['chg_pct'] as num) >= 0 ? 1 : -1),
+                          onTap: r['link'] == null ? null : () => openExternal(context, '${r['link']}'),
+                        ),
+                    ], wrap: 150, toneCol: 2, initial: 25),
+                ]),
       ),
       if (data.kind('crypto').isNotEmpty)
         (
