@@ -738,3 +738,19 @@ def test_fundamentals_rows_without_nse_pieces():
 def test_warm_universe_unseen_symbols_come_first():
     ages = {"OLD": "2026-08-01T00:00:00", "NEVER": "", "FRESH": "2026-08-29T11:00:00"}
     assert fu.warm_universe(ages, priority=[], now=NOW, cap=5) == ["NEVER", "OLD"]
+
+
+def test_is_lender_by_interest_share_not_by_sign():
+    import fundamentals as f
+    tcs = {"totalRevenue": 2670e9, "interestIncome": 38.5e9, "netInterestIncome": 26.3e9}
+    icici = {"totalRevenue": 1000e9, "interestIncome": 850e9, "netInterestIncome": 400e9}
+    assert f._is_lender(tcs) is False           # 1.4% of revenue is treasury income, not a bank
+    assert f._is_lender(icici) is True
+    assert f._is_lender({"totalRevenue": 100, "interestIncome": 50}) is True   # exactly half counts
+    assert f._is_lender({"interestIncome": 10, "netInterestIncome": 5}) is True  # no revenue: old signal
+    assert f._is_lender({"totalRevenue": 100}) is False
+    # the full P&L for the TCS shape lands revenue in sales, interest earned in other income
+    row = f._pnl({"totalRevenue": 2670e9, "interestIncome": 38.5e9, "netInterestIncome": 26.3e9,
+                  "incomeBeforeTax": 660e9, "incomeTaxExpense": 165e9, "netIncome": 495e9,
+                  "interestExpense": -8e9, "depreciation": 50e9, "totalOtherIncomeExpenseNet": 0.8e9}, None)
+    assert row["sales"] == 267000 and row["other_income"] == 3930 and row["op_profit"] > 0

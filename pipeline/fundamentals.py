@@ -102,10 +102,22 @@ def _stmt_map(module, list_key, j):
     return out
 
 
+LENDER_SHARE = 0.5  # interest earned must be at least half of revenue to be a lender
+
+
 def _is_lender(s):
-    """Banks/NBFCs: a positive net interest income (Yahoo derives it only for
-    lenders — IRFC's lease book comes back negative and stays industrial)."""
-    return (s.get("netInterestIncome") or 0) > 0 and s.get("interestIncome") is not None
+    """Banks/NBFCs: interest earned is the business, i.e. at least
+    LENDER_SHARE of total revenue. 20 Sep 2026: the old test (any positive
+    net interest income) turned 431 cash-rich industrials into banks — TCS
+    FY2026 came out as sales 3,854 (its treasury interest) with the real
+    2,64,394 revenue filed under other income. When Yahoo gives no total
+    revenue, fall back to the old signal."""
+    earned, rev = s.get("interestIncome"), s.get("totalRevenue")
+    if earned is None:
+        return False
+    if rev:
+        return earned / rev >= LENDER_SHARE
+    return (s.get("netInterestIncome") or 0) > 0
 
 
 def _pnl(s, shares):
