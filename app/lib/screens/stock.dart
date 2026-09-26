@@ -195,7 +195,7 @@ class _StockScreenState extends State<StockScreen> {
         .from('screener_metrics')
         .select(
             'industry,sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
-            'ath_pct,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
+            'ath_pct,from_atl_pct,days_since_hi52,days_since_lo52,hi52,lo52,mcap_bucket,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
             'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno,tape_bse,roe,mcap_cr')
         .eq('symbol', widget.company.nseSymbol)
@@ -918,7 +918,14 @@ class _StockScreenState extends State<StockScreen> {
         final dp = annual == null ? null : dupont(annual);
         final peerRoe =
             sectorMedians(_peers, self: widget.company.nseSymbol)['roe'];
+        final records = recordRows(_sa);
         final children = <Widget>[
+          if (records.isNotEmpty) ...[
+            Text('RECORDS', style: monoLabel),
+            const SizedBox(height: 4),
+            ...records,
+            const SizedBox(height: 14),
+          ],
           if (z != null)
             ..._gauge('ALTMAN Z-SCORE', z,
                 min: 0,

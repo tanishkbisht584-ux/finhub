@@ -25,6 +25,7 @@ SQL_MARKERS = {
            " and pg_get_constraintdef(oid) like '%[A-Z0-9][A-Z0-9&-]%'",
     "021": "select 1 from pg_indexes where indexname='stories_alerted_at_idx'",
     "031": "select 1 from pg_proc where proname='storage_stats'",
+    "033": "select 1 from information_schema.columns where table_name='screener_metrics' and column_name='quick_ratio'",
     # data-only: applied once no fillable kaggle FY row still lacks roe
     "023": "select 1 where not exists (select 1 from fundamentals where kind='annual'"
            " and data->>'src'='kaggle' and data->'roe' is null and data->'net_profit' is not null"

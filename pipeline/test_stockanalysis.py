@@ -153,7 +153,7 @@ def test_sa_rows_carries_trend_state_from_existing_dict():
     assert rows["A"]["trend"] == "bearish" and rows["A"]["trend_prev"] == "bullish"
     assert rows["A"]["trend_since"] == "2026-09-18" and rows["A"]["trend_price"] == 90
     assert rows["B"]["trend"] == "bullish" and rows["B"]["trend_prev"] is None and "name" in rows["B"]
-    assert rows["A"]["ma50"] == 95 and rows["A"]["altman_z"] is None and "price" not in rows["A"]
+    assert rows["A"]["ma50"] == 95 and "altman_z" not in rows["A"] and "price" not in rows["A"]  # 033: Z is ours
 
 
 def test_trends_blob_buckets_turning_window_and_perf():

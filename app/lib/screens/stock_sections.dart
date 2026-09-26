@@ -222,6 +222,48 @@ Widget growthGrid(Map<String, dynamic> cagr) {
 }
 
 /// Annual-report links + recent NSE announcements from the docs row.
+/// 033: all-time / 52-week records from the screener row (+ its `sa` jsonb).
+List<Widget> recordRows(Map<String, dynamic> row) {
+  final sa = (row['sa'] as Map?)?.cast<String, dynamic>() ?? const {};
+  double? n(dynamic v) => (v as num?)?.toDouble();
+  String pct(double? v, {String rise = 'above', String fall = 'below'}) => v == null
+      ? ''
+      : v >= 0
+          ? '${v.toStringAsFixed(1)}% $rise'
+          : '${(-v).toStringAsFixed(1)}% $fall';
+  String ago(dynamic d) => (d as num?) == null ? '' : ' · ${(d as num).round()} d ago';
+  final ath = n(sa['allTimeHigh']), atl = n(sa['allTimeLow']);
+  final hi = n(row['hi52']), lo = n(row['lo52']);
+  return [
+    if (ath != null)
+      LedgerRow(
+          lead: 'ATH',
+          main: 'all-time high · ${sa['allTimeHighDate'] ?? ''}',
+          trail: '₹${fmtNum(ath)}',
+          sub: pct(n(row['ath_pct']), rise: 'above it', fall: 'below it'),
+          trailColor: ink),
+    if (atl != null)
+      LedgerRow(
+          lead: 'ATL',
+          main: 'all-time low · ${sa['allTimeLowDate'] ?? ''}',
+          trail: '₹${fmtNum(atl)}',
+          sub: pct(n(row['from_atl_pct']), rise: 'above it', fall: 'below it'),
+          trailColor: ink),
+    if (hi != null)
+      LedgerRow(
+          lead: '52W HI',
+          main: '${sa['high52Date'] ?? ''}${ago(row['days_since_hi52'])}',
+          trail: '₹${fmtNum(hi)}',
+          trailColor: green),
+    if (lo != null)
+      LedgerRow(
+          lead: '52W LO',
+          main: '${sa['low52Date'] ?? ''}${ago(row['days_since_lo52'])}',
+          trail: '₹${fmtNum(lo)}',
+          trailColor: red),
+  ];
+}
+
 class DocsSection extends StatelessWidget {
   const DocsSection(this.docs, {super.key});
   final Map<String, dynamic> docs;

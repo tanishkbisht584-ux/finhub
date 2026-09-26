@@ -58,6 +58,7 @@ TS_BS_CF = {
     "CurrentAssets": "totalCurrentAssets", "CurrentLiabilities": "totalCurrentLiabilities",
     "AccountsReceivable": "netReceivables", "Inventory": "inventory",
     "AccountsPayable": "accountsPayable",
+    "CashAndCashEquivalents": "cash", "RetainedEarnings": "retainedEarnings",  # 033: quick ratio, Altman Z
     "OperatingCashFlow": "totalCashFromOperatingActivities",
     "InvestingCashFlow": "totalCashflowsFromInvestingActivities",
     "FinancingCashFlow": "totalCashFromFinancingActivities",
@@ -182,7 +183,14 @@ def _bs(s):
             "borrowings": _cr(debt), "other_liab": _cr(other_liab),
             "fixed_assets": _cr(ppe), "cwip": _cr(cwip), "investments": _cr(inv),
             "other_assets": _cr(total - (ppe or 0) - (cwip or 0) - (inv or 0)) if total is not None else None,
-            "total_assets": _cr(total)}
+            "total_assets": _cr(total),
+            # 033: stored so the screener can do current/quick ratio and Altman Z
+            # without a second Yahoo pass; None where Yahoo has no line
+            "current_assets": _cr(s.get("totalCurrentAssets")),
+            "current_liabilities": _cr(s.get("totalCurrentLiabilities")),
+            "cash": _cr(s.get("cash")), "inventory": _cr(s.get("inventory")),
+            "receivables": _cr(s.get("netReceivables")),
+            "retained_earnings": _cr(s.get("retainedEarnings"))}
 
 
 def _cf(s):
@@ -1019,7 +1027,108 @@ def deep_fetch(sb, symbols, now, nse=True, q_cap=2, yahoo=True):
 SCREENER_COLS = ("symbol", "name", "price", "mcap_cr", "pe", "pb",
                  "div_yield", "roe", "roce", "de", "opm",
                  "sales_cagr_3y", "profit_cagr_3y", "sales_cagr_5y",
-                 "profit_cagr_5y", "promoter_pct", "updated_at")
+                 "profit_cagr_5y", "promoter_pct", "updated_at",
+                 # 033 (26 Sep): ratios from the statements we already hold
+                 "sales_cr", "pat_cr", "op_profit_cr", "sales_1y", "profit_1y", "sales_cagr_10y", "profit_cagr_10y", "sales_ttm_cr", "pat_ttm_cr", "sales_ttm_growth", "profit_ttm_growth", "sales_yoy_q", "profit_yoy_q", "sales_qoq", "profit_qoq", "opm_q", "opm_trend", "eps_ttm", "eps_cagr_3y", "bvps", "tax_pct", "int_cr", "dep_cr", "other_income_pct", "reserves_cr", "equity_cr", "debt_cr", "total_assets_cr", "current_ratio", "quick_ratio", "wc_days", "debtor_days", "inventory_days", "payable_days", "ccc_days", "roa", "roe_3y", "roce_3y", "asset_turnover", "cfo_cr", "fcf_cr", "capex_cr", "cash_conv", "div_payout", "fii_pct", "dii_pct", "public_pct", "promoter_chg_q", "fii_chg_q", "n_holders")
+# the annual-row fields refresh_screener projects (never select=data)
+SCREEN_FIELDS = ("sales", "net_profit", "eps", "opm", "roe", "roce", "borrowings",
+                 "reserves", "equity_cap", "div_payout", "book_value", "op_profit",
+                 "other_income", "interest", "depreciation", "pbt", "tax_pct",
+                 "total_assets", "cfo", "fcf", "current_assets", "current_liabilities",
+                 "inventory", "retained_earnings", "wc_days", "debtor_days",
+                 "inventory_days", "payable_days")
+
+
+def altman_z(a, mcap_cr):
+    """Altman (1968) Z for a non-lender from one annual row (₹ Cr) + market cap:
+    1.2·WC/TA + 1.4·RE/TA + 3.3·EBIT/TA + 0.6·MCap/TL + Sales/TA. Retained
+    earnings fall back to reserves (Yahoo omits the line for some filers);
+    lenders have no current assets/liabilities, so they get None."""
+    ta, ca, cl = a.get("total_assets"), a.get("current_assets"), a.get("current_liabilities")
+    eq = ((a.get("reserves") or 0) + (a.get("equity_cap") or 0)
+          if a.get("reserves") is not None or a.get("equity_cap") is not None else None)
+    re_ = a.get("retained_earnings", a.get("reserves"))
+    ebit = (a["pbt"] + (a.get("interest") or 0)) if a.get("pbt") is not None else None
+    sales = a.get("sales")
+    if not ta or ta <= 0 or None in (ca, cl, eq, re_, ebit, sales, mcap_cr):
+        return None
+    tl = ta - eq
+    if tl <= 0:
+        return None
+    return round(1.2 * (ca - cl) / ta + 1.4 * re_ / ta + 3.3 * ebit / ta + 0.6 * mcap_cr / tl + sales / ta, 2)
+
+
+def _div(a, b, nd=2):
+    return round(a / b, nd) if a is not None and b else None
+
+
+def _q_growth(quarters, field, back):
+    """Latest quarter vs `back` quarters earlier (1 = QoQ, 4 = YoY), % or None."""
+    keys = sorted(quarters, reverse=True)
+    if len(keys) <= back:
+        return None
+    cur, prev = quarters[keys[0]].get(field), quarters[keys[back]].get(field)
+    return _pct(cur - prev, prev) if cur is not None and prev else None
+
+
+def _ttm_sum(quarters, field):
+    vals = [quarters[k].get(field) for k in sorted(quarters, reverse=True)[:4]]
+    return round(sum(vals), 1) if len(vals) == 4 and None not in vals else None
+
+
+def breadth_cols(annuals, quarters, np_, equity, borrowings, bv, mcap_cr, shp=None):
+    """The 033 columns (every key present, None where uncomputable) so the row
+    stays in one PGRST102 bucket; altman_z is the one exception — omitted
+    when None so a stored value is never nulled by a sheet Yahoo left short."""
+    L = lambda f, back=0: _latest(annuals, f, back)  # noqa: E731
+    latest = annuals[sorted(annuals)[-1]] if annuals else {}
+    ta, ca, cl = L("total_assets"), L("current_assets"), L("current_liabilities")
+    cfo, fcf = L("cfo"), L("fcf")
+    days = {k: L(k) for k in ("debtor_days", "inventory_days", "payable_days")}
+    cur, prev = (shp or (None, None))[0] or {}, (shp or (None, None))[1] or {}
+    sales, sales_prev = L("sales"), L("sales", 1)
+    opm_avg = _avg3(annuals, "opm")
+    r = {
+        "sales_cr": sales, "pat_cr": np_, "op_profit_cr": L("op_profit"),
+        "sales_1y": _pct(sales - sales_prev, sales_prev) if sales is not None and sales_prev else None,
+        "profit_1y": _pct(np_ - L("net_profit", 1), L("net_profit", 1))
+                     if np_ is not None and L("net_profit", 1) else None,
+        "sales_cagr_10y": _cagr_block(annuals, "sales").get("y10"),
+        "profit_cagr_10y": _cagr_block(annuals, "net_profit").get("y10"),
+        "sales_ttm_cr": _ttm_sum(quarters, "sales"), "pat_ttm_cr": _ttm_sum(quarters, "net_profit"),
+        "sales_ttm_growth": _ttm_growth(quarters, "sales"),
+        "profit_ttm_growth": _ttm_growth(quarters, "net_profit"),
+        "sales_yoy_q": _q_growth(quarters, "sales", 4), "profit_yoy_q": _q_growth(quarters, "net_profit", 4),
+        "sales_qoq": _q_growth(quarters, "sales", 1), "profit_qoq": _q_growth(quarters, "net_profit", 1),
+        "opm_q": quarters[max(quarters)].get("opm") if quarters else None,
+        "opm_trend": round(L("opm") - opm_avg, 1) if L("opm") is not None and opm_avg is not None else None,
+        "eps_ttm": ttm_eps(quarters), "eps_cagr_3y": _cagr_block(annuals, "eps").get("y3"),
+        "bvps": round(bv, 1) if bv else None,
+        "tax_pct": L("tax_pct"), "int_cr": L("interest"), "dep_cr": L("depreciation"),
+        "other_income_pct": _pct(L("other_income"), L("pbt")),
+        "reserves_cr": L("reserves"), "equity_cr": equity, "debt_cr": borrowings, "total_assets_cr": ta,
+        "current_ratio": _div(ca, cl),
+        "quick_ratio": _div(ca - (L("inventory") or 0), cl) if ca is not None else None,
+        "wc_days": L("wc_days"), **days,
+        "ccc_days": (days["debtor_days"] + days["inventory_days"] - days["payable_days"]
+                     if None not in days.values() else None),
+        "roa": _pct(np_, ta), "roe_3y": round(_avg3(annuals, "roe"), 1) if _avg3(annuals, "roe") is not None else None,
+        "roce_3y": round(_avg3(annuals, "roce"), 1) if _avg3(annuals, "roce") is not None else None,
+        "asset_turnover": _div(sales, ta),
+        "cfo_cr": cfo, "fcf_cr": fcf, "capex_cr": round(cfo - fcf, 1) if cfo is not None and fcf is not None else None,
+        "cash_conv": _pct(cfo, np_) if np_ and np_ > 0 else None,
+        "div_payout": L("div_payout"),
+        "fii_pct": cur.get("fiis"), "dii_pct": cur.get("diis"), "public_pct": cur.get("public"),
+        "promoter_chg_q": round(cur["promoters"] - prev["promoters"], 2)
+                          if cur.get("promoters") is not None and prev.get("promoters") is not None else None,
+        "fii_chg_q": round(cur["fiis"] - prev["fiis"], 2)
+                     if cur.get("fiis") is not None and prev.get("fiis") is not None else None,
+        "n_holders": cur.get("n_holders"),
+    }
+    z = altman_z(latest, mcap_cr)
+    if z is not None:
+        r["altman_z"] = z
+    return r
 
 
 def ttm_eps(quarters):
@@ -1030,7 +1139,7 @@ def ttm_eps(quarters):
 
 
 def screener_metrics_row(sym, name, annuals, quarters, promoter_pct, price, now,
-                         shares=None, dps_ttm=None):
+                         shares=None, dps_ttm=None, shp=None):
     """One screener_metrics row; every SCREENER_COLS key always present (None
     where uncomputable) so upsert() lands in one PGRST102 bucket. `shares` is
     the REPORTED count (defaultKeyStatistics) and `dps_ttm` real trailing
@@ -1069,29 +1178,44 @@ def screener_metrics_row(sym, name, annuals, quarters, promoter_pct, price, now,
         block = _cagr_block(annuals, field)
         r[f"{col}_3y"] = block.get("y3")
         r[f"{col}_5y"] = block.get("y5")
+    r.update(breadth_cols(annuals, quarters, np_, equity, borrowings, bv, r["mcap_cr"], shp))
     return r
+
+
+def mcap_buckets(rows):
+    """SEBI/AMFI: rank 1-100 LARGE, 101-250 MID, rest SMALL (by mcap_cr desc)."""
+    ranked = sorted((r for r in rows if r.get("mcap_cr")), key=lambda r: -r["mcap_cr"])
+    for i, r in enumerate(ranked):
+        r["mcap_bucket"] = "LARGE" if i < 100 else "MID" if i < 250 else "SMALL"
+    for r in rows:
+        r.setdefault("mcap_bucket", None)
+    return rows
 
 
 def refresh_screener(sb, now):
     """Daily 18:00 IST: every symbol with >=1 annual row gets a metrics row.
     Projected jsonb selects (never select=data) keep egress small; a spark
     miss falls back to the previous stored price instead of nulling it."""
-    fields = ("sales", "net_profit", "eps", "opm", "roe", "roce", "borrowings",
-              "reserves", "equity_cap", "div_payout", "book_value")
-    sel = ",".join(f"{f}:data->{f}" for f in fields)
-    annuals, quarters, sh = {}, {}, {}
+    sel = ",".join(f"{f}:data->{f}" for f in SCREEN_FIELDS)
+    annuals, quarters, sh, shp = {}, {}, {}, {}
     for r in sb("GET", f"fundamentals?select=symbol,period,{sel}"
                        "&kind=eq.annual&order=symbol,period"):
         annuals.setdefault(r["symbol"], {})[r["period"]] = \
             {k: v for k, v in r.items() if k not in ("symbol", "period") and v is not None}
-    for r in sb("GET", "fundamentals?select=symbol,period,eps:data->eps"
+    for r in sb("GET", "fundamentals?select=symbol,period,eps:data->eps,sales:data->sales,"
+                       "net_profit:data->net_profit,opm:data->opm"
                        "&kind=eq.quarter&order=symbol,period"):
-        if r.get("eps") is not None:
-            quarters.setdefault(r["symbol"], {})[r["period"]] = {"eps": r["eps"]}
-    for r in sb("GET", "fundamentals?select=symbol,period,promoters:data->promoters"
+        q = {k: v for k, v in r.items() if k not in ("symbol", "period") and v is not None}
+        if q:
+            quarters.setdefault(r["symbol"], {})[r["period"]] = q
+    for r in sb("GET", "fundamentals?select=symbol,period,promoters:data->promoters,fiis:data->fiis,"
+                       "diis:data->diis,public:data->public,n_holders:data->n_holders"
                        "&kind=eq.shareholding&order=symbol,period"):
         if r.get("promoters") is not None:
             sh[r["symbol"]] = r["promoters"]  # ordered asc: last write = newest
+            hist = shp.setdefault(r["symbol"], [])
+            hist.append({k: v for k, v in r.items() if k not in ("symbol", "period")})
+            del hist[:-2]  # keep (prev, latest) only
     summ = {r["symbol"]: r for r in
             sb("GET", "fundamentals?select=symbol,shares:data->shares,"
                       "dps_ttm:data->dps_ttm&kind=eq.summary&order=symbol")}
@@ -1107,11 +1231,13 @@ def refresh_screener(sb, now):
     for s in syms:
         p = parse_spark(data.get(f"{s}.NS", {}) or {})
         price = p.price if p else prev.get(s)
+        hist = shp.get(s) or []
         rows.append(screener_metrics_row(s, names.get(s), annuals[s],
                                          quarters.get(s, {}), sh.get(s), price, now,
                                          shares=summ.get(s, {}).get("shares"),
-                                         dps_ttm=summ.get(s, {}).get("dps_ttm")))
-    return upsert(sb, rows, table="screener_metrics", key="symbol")
+                                         dps_ttm=summ.get(s, {}).get("dps_ttm"),
+                                         shp=(hist[-1] if hist else None, hist[-2] if len(hist) > 1 else None)))
+    return upsert(sb, mcap_buckets(rows), table="screener_metrics", key="symbol")
 
 
 def scale_px_rows(rows, prices, ts):

@@ -902,6 +902,7 @@ def fetch_technicals_for(symbols, sb=None):
         try:
             import history
             history.update(sb, series, IST, BROWSER_UA, TIMEOUT)
+            upsert(sb, history.metrics_rows(series, updates, IST, BROWSER_UA), table="screener_metrics")
         except Exception as e:  # noqa: BLE001 — history is a side channel, never blocks meta.t
             print(f"MARKET history: {e}")
     return updates

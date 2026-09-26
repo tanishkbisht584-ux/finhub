@@ -24,6 +24,28 @@ void main() {
     expect(small.filters.where((f) => f.metric == 'mcap_cr').length, 2);
   });
 
+  test('033: metric defs are broad, unique, categorised and defined', () {
+    expect(metricDefs.length, greaterThanOrEqualTo(150));
+    final cols = metricDefs.map((m) => m.col).toList();
+    expect(cols.toSet().length, cols.length, reason: 'duplicate col');
+    for (final m in metricDefs) {
+      expect(metricCats.contains(m.cat), isTrue, reason: '${m.col}: ${m.cat}');
+      expect(m.term, isNotEmpty, reason: m.col);
+      expect(m.label, isNotEmpty, reason: m.col);
+      for (final (label, gte, value) in m.choices) {
+        expect(label.startsWith(gte ? '≥' : '≤'), isTrue, reason: '${m.col} $label');
+        expect(label.contains(value == value.roundToDouble() ? '${value.round()}' : '$value'), isTrue,
+            reason: '${m.col} $label');
+      }
+    }
+    for (final c in metricCats) {
+      expect(metricDefs.any((m) => m.cat == c), isTrue, reason: 'empty category $c');
+    }
+    expect(lowIsGood, contains('pe'));
+    expect(lowIsGood, contains('nd_ebitda'));
+    expect(lowIsGood, isNot(contains('roe')));
+  });
+
   test('filterLabel renders operator and trims trailing zeros', () {
     expect(filterLabel((metric: 'pe', gte: false, value: 15.0)), 'PE ≤ 15');
     expect(filterLabel((metric: 'roe', gte: true, value: 17.5)), 'ROE ≥ 17.5%');

@@ -1,7 +1,7 @@
 name: finflick
 description: Understand what market news means in 15 seconds.
 publish_to: 'none'
-version: 0.57.0+79
+version: 0.58.0+80
 
 environment:
   sdk: ^3.6.0

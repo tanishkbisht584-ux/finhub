@@ -130,6 +130,66 @@ def update(sb, series, tz, headers, timeout=20):
     return len(merges) + len(rows)
 
 
+# ---------- 033: screener columns one 1y close series answers ----------
+_nifty = {"at": 0.0, "closes": {}}
+
+
+def nifty_closes(tz, headers, timeout=20):
+    """{date: close} for ^NSEI over 1y, refetched every 6 h (one call per lap at most)."""
+    if time.monotonic() - _nifty["at"] > 6 * 3600:
+        try:
+            r = requests.get(CHART.format("^NSEI"), params={"range": "1y", "interval": "1d"},
+                             headers=headers, timeout=timeout)
+            r.raise_for_status()
+            d, c, _ = series_of(r.json(), tz)
+            _nifty.update(at=time.monotonic(), closes={x: y for x, y in zip(d, c) if y is not None})
+        except Exception as e:  # noqa: BLE001
+            print(f"MARKET history nifty: {e}")
+            _nifty["at"] = time.monotonic() - 5 * 3600  # retry in an hour, not every lap
+    return _nifty["closes"]
+
+
+def metrics_row(sym, dates, closes, nifty, macd_hist=None):
+    """Volatility, drawdown, up-days, Nifty correlation, days since the 52w
+    extremes. Every key always present (one PGRST102 bucket)."""
+    import math
+    import statistics
+
+    pts = [(d, c) for d, c in zip(dates, closes) if c is not None]
+    out = {"symbol": sym, "vol_30d": None, "vol_1y": None, "max_dd_1y": None, "up_days_pct_1y": None,
+           "corr_nifty_1y": None, "days_since_hi52": None, "days_since_lo52": None, "macd_hist": macd_hist}
+    if len(pts) < 20:
+        return out
+    rets = [(b[1] / a[1] - 1) for a, b in zip(pts, pts[1:]) if a[1]]
+    ann = lambda xs: round(statistics.pstdev(xs) * math.sqrt(252) * 100, 1) if len(xs) > 2 else None  # noqa: E731
+    out["vol_30d"], out["vol_1y"] = ann(rets[-30:]), ann(rets)
+    peak, dd = pts[0][1], 0.0
+    for _, c in pts:
+        peak = max(peak, c)
+        dd = min(dd, c / peak - 1)
+    out["max_dd_1y"] = round(dd * 100, 1)
+    out["up_days_pct_1y"] = round(sum(1 for x in rets if x > 0) / len(rets) * 100, 1) if rets else None
+    hi = max(pts, key=lambda p: p[1])
+    lo = min(pts, key=lambda p: p[1])
+    out["days_since_hi52"], out["days_since_lo52"] = (pts[-1][0] - hi[0]).days, (pts[-1][0] - lo[0]).days
+    if nifty:
+        common = [(c, nifty[d]) for d, c in pts if d in nifty]
+        if len(common) > 30:
+            a = [b[0] / x[0] - 1 for x, b in zip(common, common[1:]) if x[0]]
+            b = [b[1] / x[1] - 1 for x, b in zip(common, common[1:]) if x[0]]
+            try:
+                out["corr_nifty_1y"] = round(statistics.correlation(a, b), 2)
+            except statistics.StatisticsError:
+                pass
+    return out
+
+
+def metrics_rows(series, tech, tz, headers):
+    nifty = nifty_closes(tz, headers)
+    return [metrics_row(s, d, c, nifty, (tech.get(s) or {}).get("macd_hist"))
+            for s, (d, c, _) in series.items()]
+
+
 def refresh_calendar(sb, tz, headers):
     """The ^NSEI row with `dates`: the trading calendar every equity row aligns
     to (and the backtests' benchmark). Called from the daily technicals pass."""

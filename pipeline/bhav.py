@@ -222,15 +222,30 @@ def fno_of(rows, day):
     return out
 
 
+def tape_metrics(tape):
+    """033: the screener columns one tape window answers (newest-first `d`)."""
+    d = (tape or {}).get("d") or []
+    deliv = [e["deliv_pct"] for e in d if e.get("deliv_pct") is not None]
+    turn = [e["turnover_cr"] for e in d if e.get("turnover_cr") is not None]
+    trades = [e["trades"] for e in d if e.get("trades") is not None]
+    avg = round(sum(deliv) / len(deliv), 1) if deliv else None
+    last = d[0].get("deliv_pct") if d else None
+    return {"deliv_pct_last": last, "deliv_pct_avg22": avg,
+            "deliv_vs_avg": round(last / avg, 2) if last is not None and avg else None,
+            "turnover_avg22_cr": round(sum(turn) / len(turn), 2) if turn else None,
+            "trades_avg22": round(sum(trades) / len(trades)) if trades else None}
+
+
 def tape_rows(full, existing):
-    """screener_metrics rows {symbol, tape} for EQ rows of symbols we know."""
+    """screener_metrics rows {symbol, tape, + tape metrics} for EQ rows of symbols we know."""
     out = []
     for r in full or []:
         if r.get("SERIES") != "EQ" or r.get("SYMBOL") not in existing:
             continue
         e = tape_entry(r)
         if e:
-            out.append({"symbol": r["SYMBOL"], "tape": merge_tape(existing[r["SYMBOL"]], e)})
+            t = merge_tape(existing[r["SYMBOL"]], e)
+            out.append({"symbol": r["SYMBOL"], "tape": t, **tape_metrics(t)})
     return out
 
 
