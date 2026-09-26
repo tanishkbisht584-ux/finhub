@@ -25,7 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 
 from fundamentals import compute_summary, fy_label
-from market import BROWSER_UA, TIMEOUT, upsert
+from market import yf, BROWSER_UA, TIMEOUT, upsert
 
 PER_SHARE = ("eps", "book_value")
 
@@ -93,7 +93,7 @@ def add_div_payout(rows, dps_by_fy):
 
 
 def fetch_chart_events(sym):
-    r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
+    r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{yf(sym)}",
                      params={"range": "10y", "interval": "1mo", "events": "div,splits"},
                      headers=BROWSER_UA, timeout=TIMEOUT)
     r.raise_for_status()

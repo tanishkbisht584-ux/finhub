@@ -65,7 +65,8 @@ BLOB_CONTENT_MAX_H = {"bonds": 120, "flows": 120,
                       "freight": 312,  # SCFI/CCFI weekly Friday + lag budget
                       "monsoon": 48,
                       "corp_actions": 30,  # hourly nse group stamps asof = today
-                      "scans": 30}         # nightly 20:00 IST, asof = that day
+                      "scans": 30,         # nightly 20:00 IST, asof = that day
+                      "us_universe": 72, "crypto_top": 3}  # 036: hourly in US hours / every 15 min
 GROUP_FAILS = 3      # interval group: consecutive failures before it's a problem
                      # (daily groups alert on a single failure — one miss = a lost day)
 # Storage (26 Sep 2026: the free plan's 500 MB cap was hit at 692 MB and the
@@ -126,9 +127,9 @@ def blob_content_age_h(key, payload, now):
     elif key in ("macro_context", "cb_rates", "calendar", "shipping", "monsoon",
                  "freight", "corp_actions", "scans"):
         dates = [_parse_obs_date((payload or {}).get("asof"))]
-    elif key in ("trending", "move_context"):  # our own build clock, full ISO
+    elif key in ("trending", "move_context", "us_universe", "crypto_top"):  # our own build clock, full ISO
         try:
-            dates = [datetime.fromisoformat(str((payload or {}).get("computed_at")))]
+            dates = [datetime.fromisoformat(str((payload or {}).get("computed_at") or (payload or {}).get("asof")))]
         except ValueError:
             dates = []
     else:

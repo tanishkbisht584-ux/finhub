@@ -78,7 +78,7 @@ def audit(sym):
         if s.get(k) is None:
             miss.append(f"shareholding.{k}")
     try:
-        r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
+        r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{yf(sym)}",
                          params={"range": "max", "interval": "1mo", "events": "div,splits"}, headers=UA, timeout=20).json()
         res = r["chart"]["result"][0]
         closes = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]

@@ -125,7 +125,8 @@ _status = {}    # group -> last attempt outcome; mirrored to app_config `market_
 MARKET_OPEN, MARKET_LAST_PASS = (9, 15), (15, 45)  # NSE 09:15-15:30 + one post-close pass
 INTERVAL = {"fxcom": 15, "crypto": 15, "global": 15, "polymarket": 60, "nse": 60, "bonds": 60, "macro": 24 * 60,
             "mf_new": 5, "analysis_new": 5, "analysis_all": 5, "deep_new": 5, "deep_drain": 5, "screener_px": 60,
-            "sentiment": 60, "hazards": 60, "stockanalysis": 60}
+            "sentiment": 60, "hazards": 60, "stockanalysis": 60,
+            "mf_universe": 7 * 24 * 60, "mf_drain": 5, "us_universe": 60}
 
 
 def market_hours(now):
@@ -168,6 +169,15 @@ def due(group, now):
 
 
 # ---------- Yahoo spark ----------
+
+def yf(sym):
+    """Yahoo ticker for one of our symbols: NSE names get .NS, the P4 BSE-only
+    namespace BSE:<scripcode> becomes <scripcode>.BO; index symbols (^NSEI)
+    pass through."""
+    if sym.startswith("^"):
+        return sym
+    return f"{sym[4:]}.BO" if sym.startswith("BSE:") else sym + ".NS"
+
 
 def fetch_spark(symbols, rng="5d"):
     """{SYMBOL: {timestamp[], close[], chartPreviousClose}} for up to any number
@@ -382,9 +392,9 @@ PRICE_ALERTS_OFF = False  # set by refresh() from app_config.pipeline.groups_off
 
 def refresh_equities(sb, now):
     universe = equity_universe(sb, now)
-    data = fetch_spark([f"{s}.NS" for s, _ in universe])
+    data = fetch_spark([yf(s) for s, _ in universe])
     rows = [row(s, "equity", n, p, now)
-            for s, n in universe if (p := parse_spark(data.get(f"{s}.NS", {})))]
+            for s, n in universe if (p := parse_spark(data.get(yf(s), {})))]
     n = upsert(sb, rows)
     # Phase B (26 Sep): user price alerts ride the lap on the rows in memory.
     # Never blocks quotes — an alerts failure is logged and the lap is a success.
@@ -445,7 +455,24 @@ def refresh_crypto(sb, now):
             meta["peg_pct"] = round((d["usd"] - 1) * 100, 3)   # drift from $1
             meta["usd_mcap"] = d.get("usd_market_cap")
         rows.append(row(cid, "crypto", name, p, now, meta=meta))
-    return upsert(sb, rows)
+    n = upsert(sb, rows)
+    try:  # 036: the top 100 by market cap as one blob (Markets CRYPTO › TOP 100)
+        t = requests.get("https://api.coingecko.com/api/v3/coins/markets",
+                         params={"vs_currency": "inr", "order": "market_cap_desc", "per_page": 100, "page": 1,
+                                 "price_change_percentage": "24h,7d"},
+                         headers=BROWSER_UA, timeout=TIMEOUT)
+        t.raise_for_status()
+        top = [[c.get("id"), (c.get("symbol") or "").upper(), c.get("name"), c.get("current_price"),
+                round(c.get("price_change_percentage_24h_in_currency") or 0, 2),
+                round(c.get("price_change_percentage_7d_in_currency") or 0, 2),
+                c.get("market_cap"), c.get("total_volume")]
+               for c in t.json() if isinstance(c, dict) and c.get("id")]
+        if top:
+            n += write_blobs(sb, [{"key": "crypto_top", "payload": {"asof": now.isoformat(), "rows": top},
+                                   "updated_at": now.isoformat()}])
+    except Exception as e:  # noqa: BLE001
+        print(f"MARKET crypto top100: {e}")
+    return n
 
 
 # ---------- phase 3: mutual funds (mfapi.in, keyless) ----------
@@ -755,14 +782,14 @@ def refresh_analysis_all(sb, now):
     per lap. The daily merge keeps updated_at fresh, so the 7-day age-out
     never touches these rows."""
     universe = {r["symbol"]: r.get("name") for r in
-                sb("GET", "screener_metrics?select=symbol,name&price=not.is.null")}
+                sb("GET", "screener_metrics?select=symbol,name&price=not.is.null&board=eq.MAIN")}
     existing = {r["symbol"]: (r.get("meta") or {}) for r in
                 sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
     missing = [s for s in universe if s not in existing][:ANALYSIS_ALL_CAP]
     if missing:
-        data = fetch_spark([f"{s}.NS" for s in missing], rng="5d")
+        data = fetch_spark([yf(s) for s in missing], rng="5d")
         rows = [row(s, "equity", universe[s] or s, p, now)
-                for s in missing if (p := parse_spark(data.get(f"{s}.NS", {})))]
+                for s in missing if (p := parse_spark(data.get(yf(s), {})))]
         if rows:
             upsert(sb, rows)
             existing.update({r["symbol"]: {} for r in rows})
@@ -787,11 +814,11 @@ def fetch_fundamentals_for(symbols):
     updates = {}
     for sym in symbols:
         try:
-            r = session.get(f"{QS_URL}{sym}.NS", params={"modules": QS_MODULES, "crumb": crumb},
+            r = session.get(f"{QS_URL}{yf(sym)}", params={"modules": QS_MODULES, "crumb": crumb},
                             timeout=TIMEOUT)
             if r.status_code == 401:  # crumb expired mid-run: one refresh, retry once
                 session, crumb = yahoo_session(force=True)
-                r = session.get(f"{QS_URL}{sym}.NS", params={"modules": QS_MODULES, "crumb": crumb},
+                r = session.get(f"{QS_URL}{yf(sym)}", params={"modules": QS_MODULES, "crumb": crumb},
                                 timeout=TIMEOUT)
             r.raise_for_status()
             f = parse_fundamentals(r.json())
@@ -883,7 +910,7 @@ def fetch_technicals_for(symbols, sb=None):
     updates, series, signals = {}, {}, {}
     for sym in symbols:
         try:
-            r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
+            r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{yf(sym)}",
                              params={"range": "1y", "interval": "1d"},
                              headers=BROWSER_UA, timeout=TIMEOUT)
             r.raise_for_status()
@@ -945,9 +972,9 @@ def refresh_analysis_new(sb, now):
     # row first (row() omits meta, so this write can never clobber analysis).
     missing = [s for s in todo if s not in existing]
     if missing:
-        data = fetch_spark([f"{s}.NS" for s in missing])
+        data = fetch_spark([yf(s) for s in missing])
         rows = [row(s, "equity", names[s], p, now)
-                for s in missing if (p := parse_spark(data.get(f"{s}.NS", {})))]
+                for s in missing if (p := parse_spark(data.get(yf(s), {})))]
         if rows:
             upsert(sb, rows)
             existing.update({r["symbol"]: {} for r in rows})
@@ -2355,6 +2382,41 @@ def refresh_stockanalysis(sb, now):
     return stockanalysis.refresh_stockanalysis(sb, now)
 
 
+def refresh_mf_universe(sb, now):
+    import mf
+    return mf.refresh_universe(sb, now)
+
+
+def refresh_mf_drain(sb, now):
+    import mf
+    import run
+    return mf.refresh_drain(sb, now, cap=getattr(run, "MF_DRAIN_CAP", None))
+
+
+def refresh_us_universe(sb, now):
+    """Hourly through the US session (19:00-02:00 IST): the S&P 500 as ONE
+    blob (never quotes rows — the Markets delta poll would re-read 500 rows
+    every 15 min). [sym, name, sector, px, chg%, ret_1y%, near_52w_high]."""
+    h = now.astimezone(IST).hour
+    if not (h >= 19 or h <= 2):
+        return 0
+    from seed.sp500 import SP500
+    data = fetch_spark([s for s, _, _ in SP500], rng="1y")
+    rows = []
+    for sym, name, sector in SP500:
+        p = parse_spark(data.get(sym, {}) or {})
+        if not p:
+            continue
+        first, hi = p.closes[0], max(p.closes)
+        rows.append([sym, name, sector, round(p.price, 2), p.change_pct,
+                     round((p.price / first - 1) * 100, 1) if first else None,
+                     p.price >= hi * 0.98])
+    if not rows:
+        raise RuntimeError("no spark rows")
+    return write_blobs(sb, [{"key": "us_universe", "payload": {"asof": now.isoformat(), "rows": rows},
+                             "updated_at": now.isoformat()}])
+
+
 def refresh_scans(sb, now):
     """Nightly after the technicals pass: SCANS blob + one grouped push per holder (035)."""
     import scans
@@ -2425,6 +2487,8 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("deep_drain", refresh_deep_drain),
           ("screener", refresh_screener), ("screener_px", refresh_screener_px),
           ("stockanalysis", refresh_stockanalysis), ("bhav", refresh_bhav), ("scans", refresh_scans),
+          ("mf_universe", refresh_mf_universe), ("mf_drain", refresh_mf_drain),
+          ("us_universe", refresh_us_universe),
           ("unlisted", refresh_unlisted), ("analysis_all", refresh_analysis_all))
 
 

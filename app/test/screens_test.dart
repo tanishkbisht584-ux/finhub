@@ -46,6 +46,23 @@ void main() {
     expect(lowIsGood, isNot(contains('roe')));
   });
 
+  test('036: MF defs, presets and pills are consistent', () {
+    final cols = {for (final m in mfMetricDefs) m.col};
+    expect(cols.length, mfMetricDefs.length);
+    for (final m in mfMetricDefs) {
+      expect(mfCats.contains(m.cat), isTrue, reason: m.col);
+    }
+    for (final p in mfPresets) {
+      expect(cols.contains(p.sortCol), isTrue, reason: p.name);
+      for (final f in p.filters) {
+        expect(cols.contains(f.metric), isTrue, reason: '${p.name}:${f.metric}');
+      }
+    }
+    expect(mfCategories.first, 'ALL');
+    expect(boards.first, 'MAIN');
+    expect(filterLabel((metric: 'cagr_5y', gte: true, value: 15.0)), 'CAGR 5Y ≥ 15%');
+  });
+
   test('filterLabel renders operator and trims trailing zeros', () {
     expect(filterLabel((metric: 'pe', gte: false, value: 15.0)), 'PE ≤ 15');
     expect(filterLabel((metric: 'roe', gte: true, value: 17.5)), 'ROE ≥ 17.5%');

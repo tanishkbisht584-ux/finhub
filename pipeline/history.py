@@ -23,7 +23,8 @@ _missing_table = False  # 032 not applied yet: say so once, then stay quiet
 
 
 def yahoo_symbol(sym):
-    return sym if sym.startswith("^") else f"{sym}.NS"
+    from market import yf
+    return yf(sym)
 
 
 def series_of(chart_json, tz):

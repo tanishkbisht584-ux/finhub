@@ -21,7 +21,7 @@ from urllib.parse import quote
 import requests
 
 import fund_audit
-from market import (BROWSER_UA, IST, NSE_API, QS_URL, TIMEOUT, fetch_spark,
+from market import (yf, BROWSER_UA, IST, NSE_API, QS_URL, TIMEOUT, fetch_spark,
                     nse_session, parse_nse_date, parse_spark, upsert,
                     yahoo_session)
 
@@ -826,9 +826,9 @@ def fetch_statements(sym, now=None):
         r.raise_for_status()
         return r.json()
 
-    ts = parse_timeseries(get(f"{TS_URL}{sym}.NS", {"type": TS_TYPES, "period1": p2 - 5 * 366 * 86400,
+    ts = parse_timeseries(get(f"{TS_URL}{yf(sym)}", {"type": TS_TYPES, "period1": p2 - 5 * 366 * 86400,
                                                     "period2": p2}))
-    stats = parse_stats(get(f"{QS_URL}{sym}.NS", {"modules": STMT_MODULES}))
+    stats = parse_stats(get(f"{QS_URL}{yf(sym)}", {"modules": STMT_MODULES}))
     if not stats.get("shares"):  # reported average shares beat no shares at all
         newest = next(iter(sorted(ts["annual"], reverse=True)), None)
         avg = ts["annual"].get(newest, {}).get("basicAverageShares") if newest else None
@@ -850,7 +850,7 @@ def ttm_dps(dividends, now):
 
 def fetch_chart_deep(sym, now):
     """(monthly closes 10y, trailing-12M dps) — one chart call."""
-    r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
+    r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{yf(sym)}",
                      params={"range": "10y", "interval": "1mo", "events": "div"},
                      headers=BROWSER_UA, timeout=TIMEOUT)
     r.raise_for_status()
@@ -1226,10 +1226,10 @@ def refresh_screener(sb, now):
     prev = {r["symbol"]: r["price"] for r in
             sb("GET", "screener_metrics?select=symbol,price")}
     syms = sorted(annuals)
-    data = fetch_spark([f"{s}.NS" for s in syms])
+    data = fetch_spark([yf(s) for s in syms])
     rows = []
     for s in syms:
-        p = parse_spark(data.get(f"{s}.NS", {}) or {})
+        p = parse_spark(data.get(yf(s), {}) or {})
         price = p.price if p else prev.get(s)
         hist = shp.get(s) or []
         rows.append(screener_metrics_row(s, names.get(s), annuals[s],
@@ -1267,10 +1267,10 @@ def refresh_screener_px(sb, now):
     rows = sb("GET", "screener_metrics?select=symbol,price,pe,pb,mcap_cr")
     if not rows:
         return 0
-    data = fetch_spark([f"{r['symbol']}.NS" for r in rows if r.get("price")])
+    data = fetch_spark([yf(r["symbol"]) for r in rows if r.get("price")])
     prices = {}
     for r in rows:
-        p = parse_spark(data.get(f"{r['symbol']}.NS", {}) or {})
+        p = parse_spark(data.get(yf(r["symbol"]), {}) or {})
         if p:
             prices[r["symbol"]] = p.price
     out = scale_px_rows(rows, prices, now.isoformat())
@@ -1311,10 +1311,10 @@ def load_audits(sb):
     stockanalysis lists) are outside the panel: Yahoo 404s and the NSE
     corporate APIs are empty for them, so they could never be complete."""
     audits = {r["symbol"]: None for r in
-              sb("GET", "screener_metrics?select=symbol&price=not.is.null&order=symbol")}
+              sb("GET", "screener_metrics?select=symbol&price=not.is.null&board=eq.MAIN&order=symbol")}
     lrd = {r["symbol"]: r.get("lrd") for r in
            sb("GET", "screener_metrics?select=symbol,lrd:sa->>lastReportDate"
-                     "&price=not.is.null&order=symbol")}
+                     "&price=not.is.null&board=eq.MAIN&order=symbol")}
     for r in sb("GET", "fundamentals?select=symbol,audit:data->audit&kind=eq.summary&order=symbol"):
         if r["symbol"] in audits:
             audits[r["symbol"]] = r.get("audit") or None

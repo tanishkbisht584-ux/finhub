@@ -3,9 +3,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../analytics.dart';
 
+import '../sip.dart';
 import '../theme.dart';
 import 'alerts.dart';
 import 'portfolio.dart';
+import 'screens.dart' show ScreensScreen;
 import 'saved.dart';
 import 'watchlist.dart';
 
@@ -100,6 +102,21 @@ class ProfileScreen extends StatelessWidget {
             trailing: const Icon(Icons.chevron_right, color: inkDim, size: 20),
             onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const PortfolioScreen())),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('MF screener', style: serif.copyWith(fontSize: 15)),
+            subtitle: Text('every Direct-Growth scheme by returns, risk and age', style: mono.copyWith(fontSize: 10)),
+            trailing: const Icon(Icons.chevron_right, color: inkDim, size: 20),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ScreensScreen(mf: true))),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('SIP calculator', style: serif.copyWith(fontSize: 15)),
+            subtitle: Text('SIP · lumpsum · step-up · goal', style: mono.copyWith(fontSize: 10)),
+            trailing: const Icon(Icons.chevron_right, color: inkDim, size: 20),
+            onTap: () => showSipSheet(context),
           ),
           if (kTermsUrl.isNotEmpty)
             ListTile(

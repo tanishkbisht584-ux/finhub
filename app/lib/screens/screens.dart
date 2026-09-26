@@ -6,10 +6,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../glossary.dart' show showDefineSheet;
-import '../ledger.dart' show pillRow;
+import '../ledger.dart' show StatGrid, StatTile, pillRow;
 import '../models.dart';
 import '../screen_query.dart';
+import '../sip.dart';
 import '../theme.dart';
+import '../ticks.dart' show companyOf;
 import 'feed.dart' show filterPill, showPillSheet;
 import 'stock.dart';
 
@@ -207,6 +209,37 @@ final List<MetricDef> metricDefs = [
   (col: 'deliv_vs_avg', label: 'DELIVERY VS AVG', unit: '×', cat: 'PRICE & VOLUME', term: 'delivery', choices: [('≥ 1', true, 1), ('≥ 1.5', true, 1.5), ('≥ 2', true, 2)]),
   (col: 'turnover_avg22_cr', label: 'TURNOVER AVG', unit: ' CR', cat: 'PRICE & VOLUME', term: 'turnover', choices: [('≥ 1', true, 1), ('≥ 10', true, 10), ('≥ 100', true, 100)]),
   (col: 'trades_avg22', label: 'TRADES AVG', unit: '', cat: 'PRICE & VOLUME', term: 'trades', choices: [('≥ 1000', true, 1000), ('≥ 10000', true, 10000), ('≥ 100000', true, 100000)]),
+];
+
+/// 036: the MF screener's metrics (mf_metrics columns), same MetricDef shape.
+const mfCats = ['RETURNS', 'RISK', 'BASICS'];
+final List<MetricDef> mfMetricDefs = [
+  (col: 'ret_1m', label: 'RET 1M', unit: '%', cat: 'RETURNS', term: 'return', choices: [('≥ 1', true, 1), ('≥ 3', true, 3), ('≤ 0', false, 0)]),
+  (col: 'ret_3m', label: 'RET 3M', unit: '%', cat: 'RETURNS', term: 'return', choices: [('≥ 3', true, 3), ('≥ 8', true, 8), ('≤ 0', false, 0)]),
+  (col: 'ret_6m', label: 'RET 6M', unit: '%', cat: 'RETURNS', term: 'return', choices: [('≥ 5', true, 5), ('≥ 12', true, 12), ('≤ 0', false, 0)]),
+  (col: 'ret_1y', label: 'RET 1Y', unit: '%', cat: 'RETURNS', term: 'return', choices: [('≥ 8', true, 8), ('≥ 15', true, 15), ('≥ 25', true, 25)]),
+  (col: 'ret_3y', label: 'RET 3Y', unit: '%', cat: 'RETURNS', term: 'return', choices: [('≥ 30', true, 30), ('≥ 50', true, 50), ('≥ 100', true, 100)]),
+  (col: 'ret_5y', label: 'RET 5Y', unit: '%', cat: 'RETURNS', term: 'return', choices: [('≥ 50', true, 50), ('≥ 100', true, 100), ('≥ 200', true, 200)]),
+  (col: 'cagr_3y', label: 'CAGR 3Y', unit: '%', cat: 'RETURNS', term: 'cagr', choices: [('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 20', true, 20)]),
+  (col: 'cagr_5y', label: 'CAGR 5Y', unit: '%', cat: 'RETURNS', term: 'cagr', choices: [('≥ 10', true, 10), ('≥ 15', true, 15), ('≥ 20', true, 20)]),
+  (col: 'vol_1y', label: 'VOLATILITY', unit: '%', cat: 'RISK', term: 'volatility', choices: [('≤ 5', false, 5), ('≤ 12', false, 12), ('≤ 20', false, 20)]),
+  (col: 'sharpe_1y', label: 'SHARPE', unit: '', cat: 'RISK', term: 'sharpe ratio', choices: [('≥ 0.5', true, 0.5), ('≥ 1', true, 1), ('≥ 2', true, 2)]),
+  (col: 'mdd_3y', label: 'MAX DRAWDOWN', unit: '%', cat: 'RISK', term: 'max drawdown', choices: [('≥ -5', true, -5), ('≥ -15', true, -15), ('≥ -30', true, -30)]),
+  (col: 'age_y', label: 'AGE', unit: ' yrs', cat: 'BASICS', term: 'fund age', choices: [('≥ 3', true, 3), ('≥ 5', true, 5), ('≥ 10', true, 10)]),
+  (col: 'nav', label: 'NAV', unit: '', cat: 'BASICS', term: 'nav', choices: [('≤ 20', false, 20), ('≥ 100', true, 100)]),
+];
+
+/// MF category pills (mf_metrics.category / sub_category ilike).
+const mfCategories = ['ALL', 'EQUITY', 'DEBT', 'HYBRID', 'INDEX', 'ELSS'];
+
+/// Equity board pills (screener_metrics.board): mainboard by default.
+const boards = ['MAIN', 'SME', 'BSE', 'ALL'];
+
+const List<ScreenPreset> mfPresets = [
+  (name: 'BEST 5Y', sortCol: 'cagr_5y', asc: false, filters: [(metric: 'age_y', gte: true, value: 5.0)]),
+  (name: 'LOW VOLATILITY', sortCol: 'sharpe_1y', asc: false, filters: [(metric: 'vol_1y', gte: false, value: 12.0), (metric: 'age_y', gte: true, value: 3.0)]),
+  (name: 'TOP 3Y', sortCol: 'cagr_3y', asc: false, filters: [(metric: 'age_y', gte: true, value: 3.0)]),
+  (name: 'CONSISTENT', sortCol: 'cagr_3y', asc: false, filters: [(metric: 'sharpe_1y', gte: true, value: 1.0), (metric: 'mdd_3y', gte: true, value: -15.0)]),
 ];
 
 /// ADD FILTER groups, in display order.
@@ -407,7 +440,8 @@ Future<void> cloudDeleteScreen(String name) async {
   await Supabase.instance.client.from('user_screens').delete().match({'user_id': uid, 'name': name});
 }
 
-MetricDef _def(String col) => metricDefs.firstWhere((m) => m.col == col);
+MetricDef _def(String col) => metricDefs.firstWhere((m) => m.col == col,
+    orElse: () => mfMetricDefs.firstWhere((m) => m.col == col));
 
 String _trim(double v) => v == v.roundToDouble() ? '${v.round()}' : '$v';
 
@@ -627,17 +661,25 @@ String fmtDayShort(DateTime t) {
 }
 
 class ScreensScreen extends StatefulWidget {
-  const ScreensScreen({super.key, this.preset});
+  const ScreensScreen({super.key, this.preset, this.mf = false});
   final ScreenPreset? preset;
+
+  /// 036: the same screen over mf_metrics (returns/risk of every Direct-Growth scheme).
+  final bool mf;
 
   @override
   State<ScreensScreen> createState() => _ScreensScreenState();
 }
 
 class _ScreensScreenState extends State<ScreensScreen> {
+  bool get _mf => widget.mf;
+  List<MetricDef> get _defs => _mf ? mfMetricDefs : metricDefs;
+  String get _table => _mf ? 'mf_metrics' : 'screener_metrics';
+  String _board = 'MAIN';      // equity: screener_metrics.board (036)
+  String _mfCat = 'ALL';       // MF: category pill
   late List<ScreenFilter> _filters =
       List.of(widget.preset?.filters ?? const <ScreenFilter>[]);
-  late String _sortCol = widget.preset?.sortCol ?? 'mcap_cr';
+  late String _sortCol = widget.preset?.sortCol ?? (widget.mf ? 'cagr_5y' : 'mcap_cr');
   late bool _asc = widget.preset?.asc ?? false;
   List<Map<String, dynamic>> _rows = const [];
   bool _loading = true;
@@ -655,7 +697,17 @@ class _ScreensScreenState extends State<ScreensScreen> {
     _run();
     if (widget.preset == null) {
       syncSavedScreens().then((s) {
-        if (mounted) setState(() => _saved = s);
+        // 036: MF screens are saved under an "MF:" prefix in the same table;
+        // the MF presets ride as chips next to them
+        final mine = [for (final x in s) if (x.name.startsWith('MF:') == _mf) x];
+        if (mounted) {
+          setState(() => _saved = [
+                if (_mf)
+                  for (final p in mfPresets)
+                    (name: p.name, filters: p.filters, sortCol: p.sortCol, asc: p.asc),
+                ...mine,
+              ]);
+        }
       });
     }
   }
@@ -729,8 +781,9 @@ class _ScreensScreenState extends State<ScreensScreen> {
         ],
       ),
     );
-    final trimmed = (name ?? '').trim().toUpperCase();
+    var trimmed = (name ?? '').trim().toUpperCase();
     if (trimmed.isEmpty) return;
+    if (_mf && !trimmed.startsWith('MF:')) trimmed = 'MF:$trimmed';
     final next = [
       ..._saved.where((s) => s.name != trimmed),
       (name: trimmed, filters: List.of(_filters), sortCol: _sortCol, asc: _asc),
@@ -761,17 +814,30 @@ class _ScreensScreenState extends State<ScreensScreen> {
       // explicit projection: only what the row renders (sort + filter
       // metrics) — 170 columns x 50 rows would be a 60 KB page (033)
       final cols = {_sortCol, for (final f in _filters) f.metric};
-      var q = Supabase.instance.client.from('screener_metrics').select(
-          'symbol,name,price,updated_at,${cols.join(',')}');
+      var q = Supabase.instance.client.from(_table).select(_mf
+          ? 'code,name,house,category,sub_category,nav,updated_at,${cols.join(',')}'
+          : 'symbol,name,price,updated_at,${cols.join(',')}');
       for (final f in _filters) {
         q = f.gte ? q.gte(f.metric, f.value) : q.lte(f.metric, f.value);
       }
+      if (_mf) {
+        if (_mfCat == 'INDEX') q = q.ilike('sub_category', '%index%');
+        else if (_mfCat == 'ELSS') q = q.ilike('sub_category', '%elss%');
+        else if (_mfCat != 'ALL') q = q.ilike('category', '$_mfCat%');
+      } else if (_board != 'ALL') {
+        q = q.eq('board', _board);
+      }
       final rows = await q
-          .order(_sortCol, ascending: _asc)
+          .order(_sortCol, ascending: _asc, nullsFirst: false)
           .range(start, start + _page - 1)
           .timeout(const Duration(seconds: 10));
       if (!mounted) return;
-      final fresh = [for (final r in rows) Map<String, dynamic>.from(r)];
+      final fresh = [
+        for (final r in rows)
+          _mf
+              ? {'symbol': '${r['code']}', 'price': r['nav'], ...Map<String, dynamic>.from(r)}
+              : Map<String, dynamic>.from(r)
+      ];
       setState(() {
         _rows = more ? [..._rows, ...fresh] : fresh;
         _hasMore = fresh.length == _page;
@@ -789,7 +855,9 @@ class _ScreensScreenState extends State<ScreensScreen> {
 
   /// 033: ~170 metrics read as 12 category pills, one category open at a time.
   void _addFilter() {
-    var cat = _lastCat;
+    var cat = _mf ? (mfCats.contains(_lastCat) ? _lastCat : mfCats.first) : _lastCat;
+    final cats = _mf ? mfCats : metricCats;
+    final defs = _defs;
     showPillSheet(
       context,
       'ADD FILTER',
@@ -799,7 +867,7 @@ class _ScreensScreenState extends State<ScreensScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             pillRow([
-              for (final c in metricCats)
+              for (final c in cats)
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: filterPill(c, c == cat, amber, () {
@@ -810,7 +878,7 @@ class _ScreensScreenState extends State<ScreensScreen> {
             ]),
             const SizedBox(height: 10),
             Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final m in metricDefs)
+              for (final m in defs)
                 if (m.cat == cat)
                   filterPill(m.label, false, green, () {
                     Navigator.of(ctx).pop();
@@ -892,7 +960,7 @@ class _ScreensScreenState extends State<ScreensScreen> {
       context,
       'SORT BY',
       (ctx) => Wrap(spacing: 8, runSpacing: 8, children: [
-        for (final m in metricDefs)
+        for (final m in _defs)
           filterPill(m.label, m.col == _sortCol, amber, () {
             Navigator.of(ctx).pop();
             setState(() {
@@ -907,17 +975,47 @@ class _ScreensScreenState extends State<ScreensScreen> {
   }
 
   Future<void> _openStock(String symbol) async {
-    try {
-      final row = await Supabase.instance.client
-          .from('companies')
-          .select('id,name,nse_symbol')
-          .eq('nse_symbol', symbol)
-          .maybeSingle();
-      if (row == null || !mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => StockScreen(
-              company: Company.fromJson(Map<String, dynamic>.from(row)))));
-    } catch (_) {}
+    if (_mf) return _openFund(symbol);
+    final c = await companyOf(symbol);
+    if (c == null || !mounted) return;
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => StockScreen(company: c)));
+  }
+
+  /// 036: a fund row -> its metrics + the SIP calculator prefilled with its 5y CAGR.
+  void _openFund(String code) {
+    final r = _rows.firstWhere((x) => '${x['code']}' == code, orElse: () => const {});
+    if (r.isEmpty) return;
+    String pct(Object? v) => v is num ? '${v.toStringAsFixed(1)}%' : '—';
+    final cagr5 = (r['cagr_5y'] as num?)?.toDouble();
+    showPillSheet(
+      context,
+      '${r['name'] ?? code}',
+      (ctx) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('${r['house'] ?? ''} · ${r['category'] ?? ''}${r['sub_category'] == null ? '' : ' · ${r['sub_category']}'}',
+            style: mono.copyWith(fontSize: 11, color: inkDim)),
+        const SizedBox(height: 10),
+        StatGrid([
+          StatTile('NAV', r['nav'] is num ? '₹${(r['nav'] as num).toStringAsFixed(2)}' : '—'),
+          StatTile('1Y', pct(r['ret_1y']), color: ((r['ret_1y'] as num?) ?? 0) >= 0 ? green : red),
+          StatTile('3Y CAGR', pct(r['cagr_3y'])),
+          StatTile('5Y CAGR', pct(r['cagr_5y'])),
+          StatTile('Volatility', pct(r['vol_1y']), sub: '1y annualised'),
+          StatTile('Sharpe', r['sharpe_1y'] is num ? (r['sharpe_1y'] as num).toStringAsFixed(2) : '—'),
+          StatTile('Max drawdown', pct(r['mdd_3y']), sub: '3y'),
+          StatTile('Age', r['age_y'] is num ? '${(r['age_y'] as num).toStringAsFixed(1)} yrs' : '—'),
+        ]),
+        const SizedBox(height: 12),
+        Wrap(spacing: 8, children: [
+          filterPill('SIP CALCULATOR', false, green, () {
+            Navigator.of(ctx).pop();
+            showSipSheet(context, ratePct: cagr5 ?? 12, fundName: '${r['name'] ?? code}');
+          }),
+        ]),
+        const SizedBox(height: 6),
+        Text('expense ratio and AUM have no free per-scheme source · NAV history via mfapi.in',
+            style: mono.copyWith(fontSize: 10, color: inkDim)),
+      ]),
+    );
   }
 
   @override
@@ -929,8 +1027,24 @@ class _ScreensScreenState extends State<ScreensScreen> {
       backgroundColor: bg,
       appBar: AppBar(
         leading: const BackButton(),
-        title: Text(widget.preset?.name ?? 'SCREENS',
+        title: Text(widget.preset?.name ?? (_mf ? 'MF SCREENER' : 'SCREENS'),
             style: serif.copyWith(fontSize: 18)),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(34),
+          child: Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 6),
+            child: pillRow([
+              for (final v in _mf ? mfCategories : boards)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: filterPill(v, v == (_mf ? _mfCat : _board), amber, () {
+                    setState(() => _mf ? _mfCat = v : _board = v);
+                    _run();
+                  }, fontSize: 10),
+                ),
+            ]),
+          ),
+        ),
       ),
       body: _loading
           ? Center(child: appSpinner())
@@ -956,9 +1070,9 @@ class _ScreensScreenState extends State<ScreensScreen> {
                   onSort: _pickSort,
                   onSave: widget.preset == null ? _save : null,
                   onTapRow: _openStock,
-                  queryController: _query,
+                  queryController: _mf ? null : _query,   // aliases are equity-only
                   queryError: _queryError,
-                  onRunQuery: _runQuery,
+                  onRunQuery: _mf ? null : _runQuery,
                   onCopyQuery: _copyQuery,
                   onMore: _hasMore ? () => _run(more: true) : null),
     );

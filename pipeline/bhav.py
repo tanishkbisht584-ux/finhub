@@ -132,7 +132,18 @@ def refresh_bse(sb, day):
     from market import upsert
     cm, deliv = bse
     existing = {r["symbol"]: r.get("tape_bse") for r in sb("GET", "screener_metrics?select=symbol,tape_bse")}
-    return upsert(sb, tape_bse_rows(cm, deliv, day, _isin_map(sb), existing), table="screener_metrics", key="symbol")
+    isin_to_sym = _isin_map(sb)
+    n = upsert(sb, tape_bse_rows(cm, deliv, day, isin_to_sym, existing), table="screener_metrics", key="symbol")
+    try:  # 036: BSE-only listings; a missing column (migration) never costs the join above
+        known = {c["nse_symbol"] for c in sb("GET", "companies?select=nse_symbol&board=eq.BSE")}
+        rows, comps = bse_only_rows(cm, deliv, day, isin_to_sym, existing, known)
+        if comps:
+            upsert(sb, comps, table="companies", key="nse_symbol")
+        if rows:
+            n += upsert(sb, rows, table="screener_metrics", key="symbol")
+    except Exception as e:  # noqa: BLE001
+        print(f"BHAV bse-only {day}: {e}")
+    return n
 
 
 def tape_entry(row):
@@ -304,17 +315,56 @@ def chain_rows(fo, day, known):
     return out
 
 
+TAPE_SERIES = ("EQ", "SM", "ST")   # 036: SME boards ride along, tagged board='SME'
+SME_SERIES = ("SM", "ST")
+
+
 def tape_rows(full, existing):
-    """screener_metrics rows {symbol, tape, + tape metrics} for EQ rows of symbols we know."""
+    """screener_metrics rows {symbol, tape, + tape metrics} for mainboard and
+    SME rows of symbols we know. SME rows also carry board='SME' and their
+    close as `price` (no Yahoo feed exists for them; fundamentals.py never
+    writes price for a symbol without statements, so the two never fight)."""
     out = []
     for r in full or []:
-        if r.get("SERIES") != "EQ" or r.get("SYMBOL") not in existing:
+        if r.get("SERIES") not in TAPE_SERIES or r.get("SYMBOL") not in existing:
             continue
         e = tape_entry(r)
         if e:
             t = merge_tape(existing[r["SYMBOL"]], e)
-            out.append({"symbol": r["SYMBOL"], "tape": t, **tape_metrics(t)})
+            row = {"symbol": r["SYMBOL"], "tape": t, **tape_metrics(t)}
+            if r.get("SERIES") in SME_SERIES:
+                row.update({"board": "SME", "price": e["close"]})
+            out.append(row)
     return out
+
+
+BSE_ONLY_MIN_TURNOVER = 1e6   # ₹10 L a day: below that a BSE-only scrip is noise
+BSE_ONLY_CAP = 1500           # ponytail: newest-turnover cap; raise if the tail matters
+
+
+def bse_only_rows(cm, deliv, day, isin_to_sym, existing, known_names):
+    """036: BSE-only listings (ISIN not on NSE) as 'BSE:<scripcode>' screener
+    rows with tape_bse, price and board='BSE', plus companies rows for the
+    new ones. Returns (screener_rows, company_rows)."""
+    cands = []
+    for r in cm or []:
+        if r.get("FinInstrmTp") != "STK" or isin_to_sym.get(r.get("ISIN")):
+            continue
+        sym = f"BSE:{r.get('FinInstrmId')}"
+        val = _f(r.get("TtlTrfVal")) or 0
+        if sym in existing or val >= BSE_ONLY_MIN_TURNOVER:
+            cands.append((val, sym, r))
+    cands.sort(key=lambda x: -x[0])
+    rows, comps = [], []
+    for _, sym, r in cands[:BSE_ONLY_CAP]:
+        e = tape_bse_entry(r, deliv, day)
+        t = merge_tape(existing.get(sym), e)
+        rows.append({"symbol": sym, "tape_bse": t, "price": e["close"], "board": "BSE",
+                     "name": (r.get("FinInstrmNm") or r.get("TckrSymb") or sym)[:80]})
+        if sym not in known_names:
+            comps.append({"nse_symbol": sym, "name": (r.get("FinInstrmNm") or r.get("TckrSymb") or sym)[:80],
+                          "board": "BSE"})
+    return rows, comps
 
 
 def fno_rows(fo, day, known):

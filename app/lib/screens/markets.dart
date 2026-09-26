@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../charts.dart';
@@ -13,6 +11,7 @@ import '../models.dart';
 import '../remote_config.dart';
 import '../section_ribbon.dart';
 import '../sessions.dart';
+import '../sip.dart';
 import '../theme.dart';
 import '../ticks.dart';
 import 'feed.dart' show homeTab, marketsTab, filterPill, pendingStory;
@@ -341,7 +340,9 @@ class _MarketsBodyState extends State<MarketsBody> {
     'crypto': 'CRYPTO',
     'global': 'US',
     'movers': 'US',
+    'us_all': 'US',
     'odds': 'US',
+    'crypto_top': 'CRYPTO',
   };
 
   /// INDIA reads like MC's page: indices, trends, OI, top movers, then the
@@ -379,6 +380,7 @@ class _MarketsBodyState extends State<MarketsBody> {
   ];
   String _region = 'INDIA';
   String _scan = 'golden_cross';  // 035: the open SCANS pill
+  String _usQ = '';               // 036: S&P 500 search
 
   /// TRENDS bucket (blob key -> chip label).
   static const _buckets = [
@@ -461,6 +463,12 @@ class _MarketsBodyState extends State<MarketsBody> {
 
   List<_Sec> _sections() {
     final data = widget.data;
+    final usAll500 = [
+      for (final r in ((data.blobs['us_universe'] as Map?)?['rows'] as List? ?? const [])) r as List
+    ];
+    final cryptoTop = [
+      for (final r in ((data.blobs['crypto_top'] as Map?)?['rows'] as List? ?? const [])) r as List
+    ];
     final scans = (data.blobs['scans'] as Map?)?.cast<String, dynamic>() ?? const {};
     final scanLists = (scans['lists'] as Map?)?.cast<String, dynamic>() ?? const {};
     final corp = (data.blobs['corp_actions'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -1257,6 +1265,19 @@ class _MarketsBodyState extends State<MarketsBody> {
                       child: Text('+ Add fund',
                           style: mono.copyWith(fontSize: 12, color: green))),
               children: [
+                // 036: the MF screener + calculator doors
+                LedgerRow(
+                    lead: 'SCREEN',
+                    main: 'MF screener · every Direct-Growth scheme by returns, risk, age',
+                    trail: '›',
+                    onTap: () => Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (_) => const ScreensScreen(mf: true)))),
+                LedgerRow(
+                    lead: 'SIP',
+                    main: 'SIP · lumpsum · step-up · goal calculator',
+                    trail: '›',
+                    onTap: () => showSipSheet(context)),
+                const SizedBox(height: 6),
                 for (final t in mf)
                   _MfRow(t, data.followedMf.contains(t.meta['scheme_code']),
                       onFollowMf),
@@ -1625,6 +1646,84 @@ class _MarketsBodyState extends State<MarketsBody> {
                       ),
                   ], initial: 10),
                 ],
+              ]),
+        ),
+      if (usAll500.isNotEmpty)
+        (
+          id: 'us_all',
+          label: 'S&P 500',
+          child: LedgerSection('S&P 500',
+              stamp: data.blobUpdated['us_universe'],
+              stampPrefix: 'Yahoo',
+              footnote: 'all 500 constituents · 1y return · ★ within 2% of the 52-week high · hourly through the US session',
+              children: [
+                const SizedBox(height: 8),
+                TextField(
+                  onChanged: (v) => setState(() => _usQ = v.trim().toLowerCase()),
+                  style: mono.copyWith(fontSize: 13),
+                  decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'search name or symbol…',
+                      hintStyle: mono.copyWith(fontSize: 12, color: inkDim)),
+                ),
+                const SizedBox(height: 8),
+                LedgerTable(const [
+                  LtCol('Symbol', right: false),
+                  LtCol('Company', right: false, text: true),
+                  LtCol('Sector', right: false, text: true),
+                  LtCol('Price \$'),
+                  LtCol('Chg'),
+                  LtCol('1Y'),
+                ], [
+                  for (final r in usAll500)
+                    if (_usQ.isEmpty || '${r[0]} ${r[1]}'.toLowerCase().contains(_usQ))
+                      (
+                        cells: [
+                          '${r[0]}${r[6] == true ? ' ★' : ''}',
+                          '${r[1]}',
+                          '${r[2]}',
+                          r[3] is num ? fmtNum((r[3] as num).toDouble()) : '—',
+                          fmtPct((r[4] as num?)?.toDouble()),
+                          fmtPct((r[5] as num?)?.toDouble()),
+                        ],
+                        tone: ((r[4] as num?) ?? 0) >= 0 ? 1 : -1,
+                        onTap: () => openExternal(context, 'https://finance.yahoo.com/quote/${r[0]}'),
+                      ),
+                ], toneCol: 4, initial: 30),
+              ]),
+        ),
+      if (cryptoTop.isNotEmpty)
+        (
+          id: 'crypto_top',
+          label: 'TOP 100 CRYPTO',
+          child: LedgerSection('Top 100 crypto',
+              stamp: data.blobUpdated['crypto_top'],
+              stampPrefix: 'CoinGecko',
+              footnote: 'by market cap · ₹ prices · 24h and 7d change · tap for the CoinGecko page',
+              children: [
+                const SizedBox(height: 8),
+                LedgerTable(const [
+                  LtCol('Coin', right: false),
+                  LtCol('Name', right: false, text: true),
+                  LtCol('Price ₹'),
+                  LtCol('24h'),
+                  LtCol('7d'),
+                  LtCol('Mcap ₹ Cr'),
+                ], [
+                  for (final r in cryptoTop)
+                    (
+                      cells: [
+                        '${r[1]}',
+                        '${r[2]}',
+                        r[3] is num ? fmtNum((r[3] as num).toDouble()) : '—',
+                        fmtPct((r[4] as num?)?.toDouble()),
+                        fmtPct((r[5] as num?)?.toDouble()),
+                        r[6] is num ? fmtNum((r[6] as num).toDouble() / 1e7, decimals: 0) : '—',
+                      ],
+                      tone: ((r[4] as num?) ?? 0) >= 0 ? 1 : -1,
+                      onTap: () => openExternal(context, 'https://www.coingecko.com/en/coins/${r[0]}'),
+                    ),
+                ], toneCol: 3, initial: 25),
               ]),
         ),
       if (deals.isNotEmpty)
@@ -2647,23 +2746,19 @@ class _MfSearchSheetState extends State<MfSearchSheet> {
     if (q.trim().length < 3) return setState(() => _hits = const []);
     setState(() => _busy = true);
     try {
-      final r = await http
-          .get(Uri.parse(
-              'https://api.mfapi.in/mf/search?q=${Uri.encodeQueryComponent(q.trim())}'))
+      // 036: our own mf_metrics (Direct-Growth only by construction) instead
+      // of a third-party search call from the phone
+      final rows = await Supabase.instance.client
+          .from('mf_metrics')
+          .select('code,name')
+          .ilike('name', '%${q.trim()}%')
+          .order('name')
+          .limit(30)
           .timeout(const Duration(seconds: 10));
-      final all = (jsonDecode(r.body) as List).cast<Map>();
-      // Direct-Growth only: the Regular/IDCW variants of one fund are noise here.
       final hits = [
-        for (final h in all)
-          if (RegExp(r'direct', caseSensitive: false)
-                  .hasMatch('${h['schemeName']}') &&
-              RegExp(r'growth', caseSensitive: false)
-                  .hasMatch('${h['schemeName']}') &&
-              !RegExp(r'idcw|dividend', caseSensitive: false)
-                  .hasMatch('${h['schemeName']}'))
-            Map<String, dynamic>.from(h)
+        for (final r in rows) {'schemeCode': r['code'], 'schemeName': r['name']}
       ];
-      if (mounted) setState(() => _hits = hits.take(30).toList());
+      if (mounted) setState(() => _hits = hits);
     } catch (_) {
       if (mounted) setState(() => _hits = const []);
     } finally {
