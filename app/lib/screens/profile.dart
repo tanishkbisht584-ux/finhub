@@ -348,6 +348,16 @@ class AlertSettingsSectionState extends State<AlertSettingsSection> {
             activeThumbColor: green,
             onChanged: (v) => _toggle('keyword_spike', v),
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Nightly chart signals on my stocks',
+                style: serif.copyWith(fontSize: 15)),
+            subtitle: Text('one push at 8 pm when a pattern fires on a stock you hold or watch',
+                style: mono.copyWith(fontSize: 11, color: inkDim)),
+            value: _value('scans'),
+            activeThumbColor: green,
+            onChanged: (v) => _toggle('scans', v),
+          ),
         ]);
       },
     );

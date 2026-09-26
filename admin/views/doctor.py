@@ -15,7 +15,8 @@ MARKERS = {"001": "stories?select=id", "003": "profiles?select=id", "004": "stor
            "012": "stories?select=updated_at", "013": "analysis_requests?select=symbol",
            "014": "stories?select=claim_status", "016": "fundamentals?select=symbol",
            "017": "screener_metrics?select=symbol", "020": "personal_sends?select=user_id",
-           "032": "price_history?select=symbol", "034": "fno_chain?select=symbol"}
+           "032": "price_history?select=symbol", "034": "fno_chain?select=symbol",
+           "035": "user_drawings?select=symbol"}
 # constraint-only migrations are invisible to PostgREST — probe pg_constraint
 # through the Management API instead (no token -> status stays unknown)
 SQL_MARKERS = {

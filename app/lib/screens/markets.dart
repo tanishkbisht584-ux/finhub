@@ -353,6 +353,7 @@ class _MarketsBodyState extends State<MarketsBody> {
     'indices',
     'trends',
     'oi',
+    'scans',
     'index_chain',
     'top',
     'records',
@@ -377,6 +378,7 @@ class _MarketsBodyState extends State<MarketsBody> {
     'insider',
   ];
   String _region = 'INDIA';
+  String _scan = 'golden_cross';  // 035: the open SCANS pill
 
   /// TRENDS bucket (blob key -> chip label).
   static const _buckets = [
@@ -459,6 +461,8 @@ class _MarketsBodyState extends State<MarketsBody> {
 
   List<_Sec> _sections() {
     final data = widget.data;
+    final scans = (data.blobs['scans'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final scanLists = (scans['lists'] as Map?)?.cast<String, dynamic>() ?? const {};
     final corp = (data.blobs['corp_actions'] as Map?)?.cast<String, dynamic>() ?? const {};
     final corpActions = [
       for (final r in (corp['items'] as List? ?? const [])) Map<String, dynamic>.from(r as Map)
@@ -1553,6 +1557,38 @@ class _MarketsBodyState extends State<MarketsBody> {
                   for (final s in (records['ath'] as List?) ?? const [])
                     (cells: ['$s'], tone: 1, onTap: null),
                 ], initial: 10),
+              ]),
+        ),
+      if (scanLists.isNotEmpty)
+        (
+          id: 'scans',
+          label: 'SCANS',
+          child: LedgerSection('Scans',
+              stamp: data.blobUpdated['scans'],
+              footnote: 'patterns on the latest daily bar, largest companies first · as of ${dmy(scans['asof'])} · tap a name for its meaning',
+              children: [
+                const SizedBox(height: 8),
+                pillRow([
+                  for (final k in scanLists.keys)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: filterPill('${scanLabel[k] ?? k} ${(scans['counts'] as Map?)?[k] ?? ''}'.trim(),
+                          k == _scan, green, () => setState(() => _scan = k)),
+                    ),
+                ]),
+                const SizedBox(height: 8),
+                LedgerTable(const [
+                  LtCol('Symbol', right: false),
+                  LtCol('Company', right: false, text: true),
+                  LtCol('Price ₹'),
+                ], [
+                  for (final r in (scanLists[scanLists.containsKey(_scan) ? _scan : scanLists.keys.first] as List))
+                    (
+                      cells: ['${r['s']}', '${r['n'] ?? ''}', r['p'] is num ? fmtNum((r['p'] as num).toDouble()) : '—'],
+                      tone: 0,
+                      onTap: () => _openSymbol('${r['s']}'),
+                    ),
+                ], initial: 12),
               ]),
         ),
       (

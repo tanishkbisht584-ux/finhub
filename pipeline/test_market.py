@@ -322,7 +322,7 @@ def test_all_groups_registered():
                                              "fundamentals", "technicals",
                                              "macro", "nse", "bonds", "sentiment",
                                              "deep_new", "deep_warm", "deep_drain",
-                                             "screener", "screener_px", "stockanalysis", "bhav", "unlisted", "analysis_all"]
+                                             "screener", "screener_px", "stockanalysis", "bhav", "scans", "unlisted", "analysis_all"]
 
 
 def test_refresh_mf_new_fetches_only_unquoted_follows(monkeypatch):

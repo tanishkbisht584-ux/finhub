@@ -64,7 +64,8 @@ BLOB_CONTENT_MAX_H = {"bonds": 120, "flows": 120,
                       "shipping": 240,  # PortWatch publishes ~5 days behind
                       "freight": 312,  # SCFI/CCFI weekly Friday + lag budget
                       "monsoon": 48,
-                      "corp_actions": 30}  # hourly nse group stamps asof = today
+                      "corp_actions": 30,  # hourly nse group stamps asof = today
+                      "scans": 30}         # nightly 20:00 IST, asof = that day
 GROUP_FAILS = 3      # interval group: consecutive failures before it's a problem
                      # (daily groups alert on a single failure — one miss = a lost day)
 # Storage (26 Sep 2026: the free plan's 500 MB cap was hit at 692 MB and the
@@ -123,7 +124,7 @@ def blob_content_age_h(key, payload, now):
     elif key in ("flows", "participant_oi"):
         dates = [_parse_obs_date((payload or {}).get("date"))]
     elif key in ("macro_context", "cb_rates", "calendar", "shipping", "monsoon",
-                 "freight", "corp_actions"):
+                 "freight", "corp_actions", "scans"):
         dates = [_parse_obs_date((payload or {}).get("asof"))]
     elif key in ("trending", "move_context"):  # our own build clock, full ISO
         try:

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'charts.dart' show sparkAxisWidth;
+import 'drawings.dart';
 import 'indicators.dart';
 import 'models.dart';
 import 'theme.dart';
@@ -88,8 +89,20 @@ class PriceChart extends StatefulWidget {
       this.dividendDates = const [],
       this.secondary,
       this.intraday = false,
-      this.height = 220});
+      this.height = 220,
+      this.drawings = const [],
+      this.tool,
+      this.onDrawingsChanged,
+      this.onTextPrompt});
   final Bars bars;
+
+  /// 035: user drawings anchored in (time, price); [tool] armed = taps place
+  /// anchors (long-press-drag moves the nearest one, ERASE removes what was
+  /// tapped); null = the chart pans/zooms/crosshairs as before.
+  final List<Drawing> drawings;
+  final DrawKind? tool;
+  final void Function(List<Drawing>)? onDrawingsChanged;
+  final Future<String?> Function()? onTextPrompt;
   final Set<ChartLayer> layers;
   final double? baseline; // previous close (intraday)
   final List<(String, double)> pivots;
@@ -104,11 +117,83 @@ class PriceChart extends StatefulWidget {
   State<PriceChart> createState() => _PriceChartState();
 }
 
+/// The last paint's mapping, shared with the gesture layer so a tap turns
+/// into (time, price) with the very scale that is on screen.
+class _ChartMap {
+  int first = 0;
+  double slot = 1, lo = 0, span = 1, priceH = 1, width = 1;
+  List<DateTime> t = const [];
+
+  double xOfIndex(int i) => slot * (i - first + 0.5);
+  double yOf(double v) => priceH - (v - lo) / span * (priceH - 8) - 4;
+  double priceAt(double y) => lo + (priceH - 4 - y) / (priceH - 8) * span;
+
+  /// x for a timestamp: nearest bar, extrapolated by slot outside the series.
+  double xOf(DateTime time) {
+    if (t.isEmpty) return 0;
+    var lo_ = 0, hi_ = t.length - 1;
+    while (lo_ < hi_) {
+      final mid = (lo_ + hi_) ~/ 2;
+      if (t[mid].isBefore(time)) {
+        lo_ = mid + 1;
+      } else {
+        hi_ = mid;
+      }
+    }
+    if (lo_ == t.length - 1 && time.isAfter(t.last) && t.length > 1) {
+      final step = t.last.difference(t[t.length - 2]).inSeconds;
+      if (step > 0) return xOfIndex(t.length - 1) + slot * (time.difference(t.last).inSeconds / step);
+    }
+    return xOfIndex(lo_);
+  }
+
+  Offset toPx(DateTime time, double price) => Offset(xOf(time), yOf(price));
+}
+
 class _PriceChartState extends State<PriceChart> {
   int? _first, _last; // null = whole series
   int? _cross;
   int _startFirst = 0, _startLast = 0;
   double _startScale = 1;
+  final _map = _ChartMap();
+  final List<(DateTime, double)> _pending = [];   // anchors of the drawing in progress
+  int? _dragIdx, _dragAnchor;
+
+  (DateTime, double)? _anchorAt(Offset p, BoxConstraints c) {
+    if (widget.bars.t.length != _n) return null;
+    final i = _indexAt(p.dx, c);
+    return (widget.bars.t[i], _map.priceAt(p.dy));
+  }
+
+  Future<void> _placeAnchor(Offset p, BoxConstraints c) async {
+    final tool = widget.tool;
+    if (tool == null) return;
+    if (tool == DrawKind.erase) {
+      final hit = hitTest(widget.drawings, _map.toPx, p, right: _map.width);
+      if (hit != null) {
+        widget.onDrawingsChanged?.call([for (var k = 0; k < widget.drawings.length; k++) if (k != hit) widget.drawings[k]]);
+      }
+      return;
+    }
+    final a = _anchorAt(p, c);
+    if (a == null) return;
+    _pending.add(a);
+    if (_pending.length < anchorsFor(tool)) {
+      setState(() {});
+      return;
+    }
+    String? text;
+    if (tool == DrawKind.text) {
+      text = await widget.onTextPrompt?.call();
+      if (text == null || text.trim().isEmpty) {
+        setState(_pending.clear);
+        return;
+      }
+    }
+    final d = Drawing(tool, List.of(_pending), text: text);
+    _pending.clear();
+    widget.onDrawingsChanged?.call([...widget.drawings, d]);
+  }
 
   int get _n => widget.bars.c.length;
   int get _f => _first ?? 0;
@@ -160,12 +245,39 @@ class _PriceChartState extends State<PriceChart> {
             });
           }
         },
-        onLongPressStart: (d) => setState(() => _cross = _indexAt(d.localPosition.dx, c)),
-        onLongPressMoveUpdate: (d) => setState(() => _cross = _indexAt(d.localPosition.dx, c)),
-        onLongPressEnd: (_) => setState(() => _cross = null),
+        onTapUp: widget.tool == null ? null : (d) => _placeAnchor(d.localPosition, c),
+        onLongPressStart: (d) {
+          if (widget.tool != null && widget.tool != DrawKind.erase && widget.drawings.isNotEmpty) {
+            final hit = hitTest(widget.drawings, _map.toPx, d.localPosition, right: _map.width);
+            if (hit != null) {
+              setState(() {
+                _dragIdx = hit;
+                _dragAnchor = nearestAnchor(widget.drawings[hit], _map.toPx, d.localPosition);
+              });
+              return;
+            }
+          }
+          setState(() => _cross = _indexAt(d.localPosition.dx, c));
+        },
+        onLongPressMoveUpdate: (d) {
+          if (_dragIdx != null) {
+            final a = _anchorAt(d.localPosition, c);
+            if (a == null) return;
+            final ds = List.of(widget.drawings);
+            ds[_dragIdx!] = ds[_dragIdx!].withAnchor(_dragAnchor!, a);
+            widget.onDrawingsChanged?.call(ds);
+            return;
+          }
+          setState(() => _cross = _indexAt(d.localPosition.dx, c));
+        },
+        onLongPressEnd: (_) => setState(() {
+          _cross = null;
+          _dragIdx = _dragAnchor = null;
+        }),
         onDoubleTap: () => setState(() {
           _first = _last = null;
           _cross = null;
+          _pending.clear();
         }),
         child: CustomPaint(
           size: Size(c.maxWidth, widget.height),
@@ -180,6 +292,9 @@ class _PriceChartState extends State<PriceChart> {
             dividendDates: widget.dividendDates,
             secondary: widget.secondary,
             intraday: widget.intraday,
+            drawings: widget.drawings,
+            pending: _pending,
+            map: _map,
           ),
         ),
       );
@@ -198,7 +313,10 @@ class _PricePainter extends CustomPainter {
       required this.pivots,
       required this.dividendDates,
       required this.secondary,
-      required this.intraday});
+      required this.intraday,
+      this.drawings = const [],
+      this.pending = const [],
+      this.map});
   final Bars bars;
   final int first, last;
   final int? cross;
@@ -208,6 +326,9 @@ class _PricePainter extends CustomPainter {
   final List<DateTime> dividendDates;
   final List<double?>? secondary;
   final bool intraday;
+  final List<Drawing> drawings;
+  final List<(DateTime, double)> pending;
+  final _ChartMap? map;
 
   static const paneH = 44.0;
   static const gap = 6.0;
@@ -271,6 +392,14 @@ class _PricePainter extends CustomPainter {
     }
     final span = hi - lo == 0 ? 1.0 : hi - lo;
     double yOf(double v) => priceH - (v - lo) / span * (priceH - 8) - 4;
+    map
+      ?..first = first
+      ..slot = slot
+      ..lo = lo
+      ..span = span
+      ..priceH = priceH
+      ..width = w
+      ..t = bars.t.length == n ? bars.t : const [];
     final up = bars.c[last] >= (baseline ?? bars.c[first]);
     final tone = up ? green : red;
 
@@ -397,6 +526,19 @@ class _PricePainter extends CustomPainter {
         canvas.drawCircle(Offset(x, priceH - 6), 3, Paint()..color = amber);
         _text(canvas, 'D', Offset(x - 2.5, priceH - 18), amber, 8);
       }
+    }
+
+    // ---- 035: user drawings, in (time, price) space ----
+    if (map != null && bars.t.length == n && (drawings.isNotEmpty || pending.isNotEmpty)) {
+      canvas.save();
+      canvas.clipRect(Rect.fromLTWH(0, 0, w, priceH));
+      for (final d in drawings) {
+        _drawing(canvas, d, map!, w);
+      }
+      for (final p in pending) {
+        canvas.drawCircle(map!.toPx(p.$1, p.$2), 4, Paint()..color = amber);
+      }
+      canvas.restore();
     }
 
     // ---- secondary (P/E) on its own scale ----
@@ -590,6 +732,43 @@ class _PricePainter extends CustomPainter {
     }
   }
 
+  void _drawing(Canvas canvas, Drawing d, _ChartMap m, double w) {
+    final px = [for (final p in d.pts) m.toPx(p.$1, p.$2)];
+    final stroke = Paint()
+      ..color = amber
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke;
+    switch (d.kind) {
+      case DrawKind.trend:
+        canvas.drawLine(px[0], extendTrend(px[0], px[1], w), stroke);
+        canvas.drawCircle(px[0], 3, Paint()..color = amber);
+        canvas.drawCircle(px[1], 3, Paint()..color = amber);
+      case DrawKind.hline:
+        canvas.drawLine(Offset(0, px[0].dy), Offset(w, px[0].dy), stroke);
+        _text(canvas, _fmt(d.pts[0].$2), Offset(4, px[0].dy - 12), amber, 9);
+      case DrawKind.fib:
+        final x0 = math.min(px[0].dx, px[1].dx);
+        for (final (r, price) in fibLevels(d.pts[0].$2, d.pts[1].$2)) {
+          final y = m.yOf(price);
+          var x = x0;
+          while (x < w) {
+            canvas.drawLine(Offset(x, y), Offset(math.min(x + 4, w), y), stroke);
+            x += 8;
+          }
+          _text(canvas, '${(r * 100).toStringAsFixed(1)}% ${_fmt(price)}', Offset(x0 + 2, y - 11), amber, 8);
+        }
+      case DrawKind.rect:
+        final r = Rect.fromPoints(px[0], px[1]);
+        canvas.drawRect(r, Paint()..color = amber.withValues(alpha: 0.12));
+        canvas.drawRect(r, stroke);
+      case DrawKind.text:
+        canvas.drawCircle(px[0], 2.5, Paint()..color = amber);
+        _text(canvas, d.text ?? '', px[0] + const Offset(6, -6), amber, 10);
+      case DrawKind.erase:
+        break;
+    }
+  }
+
   static String _fmt(double v) => v >= 1000 ? fmtNum(v, decimals: 0) : v.toStringAsFixed(2);
   static String _fmtVol(double v) => v >= 1e7
       ? '${(v / 1e7).toStringAsFixed(1)} Cr'
@@ -618,5 +797,7 @@ class _PricePainter extends CustomPainter {
       o.cross != cross ||
       o.layers != layers ||
       o.baseline != baseline ||
-      o.secondary != secondary;
+      o.secondary != secondary ||
+      o.drawings != drawings ||
+      o.pending.length != pending.length;
 }

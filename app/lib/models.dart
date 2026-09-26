@@ -44,6 +44,24 @@ List<Outlet> storyTimeline(List<Outlet> group) {
 /// function's DEFINE_TERMS set is canonical; a term missing there just 400s
 /// and the sheet shows nothing. Longest-first so "reverse repo" wins over
 /// "repo rate"'s prefix.
+/// 035: scan id -> chip label / glossary term (pipeline/scans.py SCANS).
+const scanLabel = {
+  'golden_cross': 'GOLDEN CROSS', 'death_cross': 'DEATH CROSS', 'rsi_oversold': 'RSI OVERSOLD',
+  'rsi_overbought': 'RSI OVERBOUGHT', 'breakout_52w': '52W BREAKOUT', 'breakdown_52w': '52W BREAKDOWN',
+  'volume_spike': 'VOLUME SPIKE', 'macd_bull': 'MACD BULLISH', 'macd_bear': 'MACD BEARISH',
+  'gap_up': 'GAP UP', 'gap_down': 'GAP DOWN', 'nr7': 'NR7', 'inside_bar': 'INSIDE BAR',
+  'hammer': 'HAMMER', 'shooting_star': 'SHOOTING STAR', 'bullish_engulfing': 'BULLISH ENGULFING',
+  'bearish_engulfing': 'BEARISH ENGULFING', 'doji': 'DOJI',
+};
+const scanTerm = {
+  'golden_cross': 'golden cross', 'death_cross': 'death cross', 'rsi_oversold': 'rsi',
+  'rsi_overbought': 'rsi', 'breakout_52w': '52-week breakout', 'breakdown_52w': '52-week breakdown',
+  'volume_spike': 'volume spike', 'macd_bull': 'macd', 'macd_bear': 'macd', 'gap_up': 'gap up',
+  'gap_down': 'gap down', 'nr7': 'nr7', 'inside_bar': 'inside bar', 'hammer': 'hammer candle',
+  'shooting_star': 'shooting star', 'bullish_engulfing': 'bullish engulfing',
+  'bearish_engulfing': 'bearish engulfing', 'doji': 'doji',
+};
+
 const glossaryTerms = [
   'reverse repo',
   'repo rate',
@@ -168,6 +186,9 @@ const glossaryTerms = [
   'ex-date',
   'promoter',
   'max pain', 'record date',
+  // 035 scans
+  'golden cross', 'death cross', '52-week breakout', '52-week breakdown', 'volume spike', 'gap up', 'gap down',
+  'nr7', 'inside bar', 'hammer candle', 'shooting star', 'bullish engulfing', 'bearish engulfing', 'doji',
   // 033 screener breadth (26 Sep 2026)
   '10-year return', '52-week high', '52-week low', 'all-time low', 'analyst coverage', 'average pe', 'average true range', 'average volume', 'buyback yield', 'cash and equivalents', 'cash conversion', 'cash conversion cycle', 'change from open', 'current ratio', 'debt to ebitda', 'debt to equity', 'debt to free cash flow', 'debtor days', 'dii holding', 'dividend growth', 'dividend growth years', 'dividend payment years', 'dividend payout', 'ebitda margin', 'effective tax rate', 'enterprise value', 'eps growth', 'ev/ebit', 'ev/fcf', 'ev/sales', 'fcf margin', 'fii holding', 'forward pe', 'free cash flow', 'free cash flow per share', 'free float', 'gap up', 'gross margin', 'industry pe', 'institutional holding', 'interest cost', 'interest coverage', 'inventory days', 'lynch fair value', 'margin trend', 'max drawdown', 'net cash', 'net cash to market cap', 'net debt to ebitda', 'net profit', 'net worth', 'operating cash flow', 'operating margin', 'operating profit', 'other income', 'payable days', 'peg ratio', 'piotroski f-score', 'position in range', 'pretax margin', 'price to ebitda', 'price to free cash flow', 'price to operating cash flow', 'price to sales', 'profit growth', 'profitable years', 'public holding', 'quarterly growth', 'quick ratio', 'relative volume', 'return on assets', 'return on capital employed', 'return on equity', 'revenue growth years', 'revenue per employee', 'sales growth', 'shareholder yield', 'sharpe ratio', 'sortino ratio', 'tangible book value', 'total assets', 'total return', 'up days', 'wacc', 'working capital days',
 ];

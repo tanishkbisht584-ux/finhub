@@ -184,9 +184,10 @@ def metrics_row(sym, dates, closes, nifty, macd_hist=None):
     return out
 
 
-def metrics_rows(series, tech, tz, headers):
+def metrics_rows(series, tech, tz, headers, signals=None):
     nifty = nifty_closes(tz, headers)
-    return [metrics_row(s, d, c, nifty, (tech.get(s) or {}).get("macd_hist"))
+    return [{**metrics_row(s, d, c, nifty, (tech.get(s) or {}).get("macd_hist")),
+             "signals": (signals or {}).get(s, [])}
             for s, (d, c, _) in series.items()]
 
 

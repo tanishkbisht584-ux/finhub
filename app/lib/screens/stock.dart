@@ -15,6 +15,8 @@ import '../price_chart.dart';
 import '../models.dart';
 import '../remote_config.dart';
 import '../section_ribbon.dart';
+import '../drawings.dart';
+import '../glossary.dart' show showDefineSheet;
 import '../theme.dart';
 import '../ticks.dart';
 import 'alerts.dart';
@@ -63,6 +65,32 @@ class _StockScreenState extends State<StockScreen> {
   String _bar = 'D'; // Phase D: bar size, valid pairs in _barsFor
   Bars? _bars; // the range's own OHLCV; header numbers stay on the 1M quote
   Set<ChartLayer> _layers = {ChartLayer.vol};
+  // 035: drawings live on the account (user_drawings) with a prefs mirror
+  List<Drawing> _drawings = const [];
+  DrawKind? _tool;
+  bool _drawMode = false;
+  Timer? _saveTimer;
+
+  void _setDrawings(List<Drawing> ds) {
+    setState(() => _drawings = ds);
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 600), () => saveDrawings(widget.company.nseSymbol, ds));
+  }
+
+  Future<String?> _promptText() async {
+    final ctl = TextEditingController();
+    return showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              backgroundColor: surface,
+              title: Text('NOTE', style: monoLabel),
+              content: TextField(controller: ctl, autofocus: true, maxLength: 40, style: mono.copyWith(fontSize: 13)),
+              actions: [
+                TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('CANCEL')),
+                TextButton(onPressed: () => Navigator.of(ctx).pop(ctl.text), child: const Text('PLACE')),
+              ],
+            ));
+  }
   Quote? _seasonQ; // Yahoo max/1mo, fetched once: SEASONALITY
   String _swotTab = 's';
   int? _span; // statement tables: null = every period, else the last N
@@ -115,6 +143,12 @@ class _StockScreenState extends State<StockScreen> {
             });
       }
     }).catchError((_) {});
+  }
+
+  void _loadDrawings() {
+    loadDrawings(widget.company.nseSymbol).then((ds) {
+      if (mounted && ds.isNotEmpty) setState(() => _drawings = ds);
+    });
   }
 
   void _toggleLayer(ChartLayer l) {
@@ -197,7 +231,7 @@ class _StockScreenState extends State<StockScreen> {
             'industry,sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
             'ath_pct,from_atl_pct,days_since_hi52,days_since_lo52,hi52,lo52,mcap_bucket,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
-            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno,tape_bse,roe,mcap_cr,actions')
+            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno,tape_bse,roe,mcap_cr,actions,signals')
         .eq('symbol', widget.company.nseSymbol)
         .maybeSingle()
         .then((self) {
@@ -304,6 +338,7 @@ class _StockScreenState extends State<StockScreen> {
         setState(() => _quote = Quote.seed(t.price, t.prevClose ?? t.price));
       }
       _loadPeers();
+    _loadDrawings();
     }
 
     if (ticks.value[sym] != null) {
@@ -526,6 +561,10 @@ class _StockScreenState extends State<StockScreen> {
               dividendDates: [for (final d in q.dividends) d.date],
               secondary: pe,
               intraday: intraday,
+              drawings: _drawings,
+              tool: _drawMode ? _tool : null,
+              onDrawingsChanged: _setDrawings,
+              onTextPrompt: _promptText,
               height: 180 +
                   44.0 * [ChartLayer.vol, ChartLayer.rsi, ChartLayer.macd].where(_layers.contains).length)
         else
@@ -538,6 +577,31 @@ class _StockScreenState extends State<StockScreen> {
                 'P/E ${peLatest.toStringAsFixed(1)} · TTM, quarter-end steps',
                 style: mono.copyWith(fontSize: 10, color: amber)),
           ),
+        if (screener)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  filterPill('DRAW', _drawMode, amber, () => setState(() {
+                        _drawMode = !_drawMode;
+                        _tool ??= DrawKind.trend;
+                      }), fontSize: 10),
+                  if (_drawMode)
+                    for (final k in DrawKind.values)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: filterPill(drawKindLabel[k]!, _tool == k, k == DrawKind.erase ? red : amber,
+                            () => setState(() => _tool = k), fontSize: 10),
+                      ),
+                  if (_drawMode && _drawings.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: filterPill('CLEAR', false, inkDim, () => _setDrawings(const []), fontSize: 10),
+                    ),
+                ])),
+          ),
+        if (_drawMode) const HintBar('draw_v1', [('TAP', 'twice for a line, box or fib · once for a level or note'), ('HOLD', 'and drag an anchor to move it · ERASE then tap to remove')]),
         if (screener)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
@@ -1503,6 +1567,24 @@ class _StockScreenState extends State<StockScreen> {
 
   /// TECHNICALS: three one-word tiles, the MA read, every level against the
   /// close, then pivot levels from the last session (Phase 3).
+  /// 035: today's scan hits, each tappable for a definition.
+  Widget _signals() {
+    final sig = [for (final s in (_sa['signals'] as List? ?? const [])) '$s'];
+    return LedgerSection('Signals',
+        action: _stamp('scan · ${dmy(_sa['sa_price_date'])}'),
+        footnote: 'patterns on the latest daily bar (pipeline/scans.py) · tap one to read what it means',
+        children: [
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final s in sig)
+              filterPill(scanLabel[s] ?? s.replaceAll('_', ' ').toUpperCase(),
+                  s.contains('bull') || s.contains('golden') || s.contains('breakout') || s == 'hammer' || s == 'rsi_oversold',
+                  s.contains('bear') || s.contains('death') || s.contains('breakdown') || s == 'shooting_star' || s == 'rsi_overbought' ? red : green,
+                  () => showDefineSheet(context, scanTerm[s] ?? s.replaceAll('_', ' '))),
+          ]),
+        ]);
+  }
+
   Widget _technicals() => _onTicks((meta) {
         final tiles = techStats(meta);
         final q = _quote;
@@ -1861,6 +1943,8 @@ class _StockScreenState extends State<StockScreen> {
       if ((_meta['f'] as Map?)?['street'] != null)
         (id: 'forecast', label: 'FORECAST', child: _forecast()),
       (id: 'technicals', label: 'TECHNICALS', child: _technicals()),
+      if ((_sa['signals'] as List?)?.isNotEmpty == true)
+        (id: 'signals', label: 'SIGNALS', child: _signals()),
       if (_sa['tape'] != null)
         (id: 'delivery', label: 'DELIVERY', child: _delivery()),
       if (_sa['fno'] != null) (id: 'fno', label: 'F&O', child: _fno()),

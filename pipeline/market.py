@@ -154,7 +154,7 @@ DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
               "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30),
               "participant_oi": (19, 0), "shipping": (7, 30),
-              "monsoon": (9, 0), "bhav": (19, 30), "unlisted": (20, 30)}
+              "monsoon": (9, 0), "bhav": (19, 30), "unlisted": (20, 30), "scans": (20, 0)}
 
 
 def due(group, now):
@@ -880,7 +880,7 @@ def fetch_technicals_for(symbols, sb=None):
     """{symbol: computed t-dict} from the 1y daily chart, one call per symbol.
     With `sb`, the same payload also feeds price_history (032) — the close
     series used to be thrown away here; history.update merges it in-database."""
-    updates, series = {}, {}
+    updates, series, signals = {}, {}, {}
     for sym in symbols:
         try:
             r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
@@ -894,7 +894,9 @@ def fetch_technicals_for(symbols, sb=None):
                 updates[sym] = t
             if sb is not None:
                 import history
+                import scans
                 series[sym] = history.series_of(j, IST)
+                signals[sym] = scans.signals_for(q)   # 035: today's scan hits
         except Exception as e:
             print(f"MARKET technicals {sym}: {e}")
         time.sleep(0.3)
@@ -902,7 +904,7 @@ def fetch_technicals_for(symbols, sb=None):
         try:
             import history
             history.update(sb, series, IST, BROWSER_UA, TIMEOUT)
-            upsert(sb, history.metrics_rows(series, updates, IST, BROWSER_UA), table="screener_metrics")
+            upsert(sb, history.metrics_rows(series, updates, IST, BROWSER_UA, signals), table="screener_metrics")
         except Exception as e:  # noqa: BLE001 — history is a side channel, never blocks meta.t
             print(f"MARKET history: {e}")
     return updates
@@ -2353,6 +2355,12 @@ def refresh_stockanalysis(sb, now):
     return stockanalysis.refresh_stockanalysis(sb, now)
 
 
+def refresh_scans(sb, now):
+    """Nightly after the technicals pass: SCANS blob + one grouped push per holder (035)."""
+    import scans
+    return scans.refresh(sb, now)
+
+
 def refresh_bhav(sb, now):
     """Daily 19:30 IST: NSE archive bhavcopies -> screener_metrics.tape / .fno."""
     import bhav
@@ -2416,7 +2424,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("deep_new", refresh_deep_new), ("deep_warm", refresh_deep_warm),
           ("deep_drain", refresh_deep_drain),
           ("screener", refresh_screener), ("screener_px", refresh_screener_px),
-          ("stockanalysis", refresh_stockanalysis), ("bhav", refresh_bhav),
+          ("stockanalysis", refresh_stockanalysis), ("bhav", refresh_bhav), ("scans", refresh_scans),
           ("unlisted", refresh_unlisted), ("analysis_all", refresh_analysis_all))
 
 
