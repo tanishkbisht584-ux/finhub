@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../analysis.dart';
@@ -10,12 +11,15 @@ import '../charts.dart';
 import '../follows.dart';
 import '../fundamentals.dart';
 import '../ledger.dart';
+import '../price_chart.dart';
 import '../models.dart';
 import '../remote_config.dart';
 import '../section_ribbon.dart';
 import '../theme.dart';
 import '../ticks.dart';
+import 'alerts.dart';
 import 'ask.dart' show AskScreen;
+import '../alerts.dart' show loadAlerts;
 import 'feed.dart' show filterPill;
 import 'stock_sections.dart';
 import 'story_detail.dart';
@@ -39,6 +43,7 @@ class _StockScreenState extends State<StockScreen> {
   List<Story> _stories = const [];
   bool _storiesFailed = false;
   bool _following = false;
+  int _alertCount = 0; // Phase B: this symbol's active price alerts (bell tint)
   bool _togglingFollow = false;
   List<String> _events =
       const []; // NSE results/deals/insider lines (market_blobs)
@@ -55,10 +60,9 @@ class _StockScreenState extends State<StockScreen> {
   /// `sa_price_date`, i.e. the stockanalysis group has covered it.
   Map<String, dynamic> _sa = const {};
   String _range = '1M';
-  List<double> _chartCloses = const [];
-  List<DateTime> _chartTimes = const [];
-  Quote? _chartQ; // the range's own OHLC (candles); header numbers stay on 1M
-  bool _candles = false;
+  String _bar = 'D'; // Phase D: bar size, valid pairs in _barsFor
+  Bars? _bars; // the range's own OHLCV; header numbers stay on the 1M quote
+  Set<ChartLayer> _layers = {ChartLayer.vol};
   Quote? _seasonQ; // Yahoo max/1mo, fetched once: SEASONALITY
   String _swotTab = 's';
   int? _span; // statement tables: null = every period, else the last N
@@ -71,19 +75,29 @@ class _StockScreenState extends State<StockScreen> {
   bool _heat = false; // statement tables: tint cells by change vs prior period
   final _tracker = SectionTracker();
 
-  // Yahoo chart range/interval per pill; the 1M fetch doubles as the quote.
-  // 3Y has no Yahoo range value — it fetches 5y and trims client-side.
+  // Yahoo chart range per pill; the 1M/D fetch doubles as the quote. 3Y has
+  // no Yahoo range value — it fetches 5y and trims client-side. Bars per
+  // range are the pairs Yahoo serves (5m/15m ≤ 60 d, 1h ≤ 730 d).
   static const _ranges = {
-    '1D': ('1d', '5m'),
-    '5D': ('5d', '15m'),
-    '1M': ('1mo', '1d'),
-    '6M': ('6mo', '1d'),
-    '1Y': ('1y', '1d'),
-    '3Y': ('5y', '1wk'),
-    '5Y': ('5y', '1wk'),
-    '10Y': ('10y', '1mo'),
-    'MAX': ('max', '1mo')
+    '1D': '1d',
+    '5D': '5d',
+    '1M': '1mo',
+    '3M': '3mo',
+    '6M': '6mo',
+    '1Y': '1y',
+    '3Y': '5y',
+    '5Y': '5y',
+    'MAX': 'max',
   };
+  static const _intervals = {'5m': '5m', '15m': '15m', '1h': '1h', 'D': '1d', 'W': '1wk', 'M': '1mo'};
+  static List<String> _barsFor(String range) => switch (range) {
+        '1D' => const ['5m', '15m'],
+        '5D' => const ['15m', '1h'],
+        '1M' => const ['1h', 'D'],
+        '3M' => const ['D', 'W'],
+        _ => const ['D', 'W', 'M'],
+      };
+  bool get _intraday => _bar == '5m' || _bar == '15m' || _bar == '1h';
 
   @override
   void initState() {
@@ -91,6 +105,31 @@ class _StockScreenState extends State<StockScreen> {
     _load();
     _loadFundamentals();
     _loadSeasonality();
+    SharedPreferences.getInstance().then((p) {
+      final saved = p.getStringList('chart_layers_v1');
+      if (saved != null && mounted) {
+        setState(() => _layers = {
+              for (final s in saved)
+                for (final l in ChartLayer.values)
+                  if (l.name == s) l
+            });
+      }
+    }).catchError((_) {});
+  }
+
+  void _toggleLayer(ChartLayer l) {
+    setState(() {
+      if (l == ChartLayer.candle) {
+        _layers.contains(l) ? _layers.remove(l) : _layers.add(l);
+      } else {
+        _layers = {..._layers};
+        _layers.contains(l) ? _layers.remove(l) : _layers.add(l);
+      }
+      _layers = {..._layers};
+    });
+    SharedPreferences.getInstance()
+        .then((p) => p.setStringList('chart_layers_v1', [for (final l in _layers) l.name]))
+        .then((_) {}, onError: (_) {});
   }
 
   /// One monthly chart for the whole listing life — seasonality's only input.
@@ -190,34 +229,38 @@ class _StockScreenState extends State<StockScreen> {
 
   /// Re-fetch the chart at a pill's range; the header quote stays on the
   /// 1M/1d numbers from _load.
-  Future<void> _fetchRange(String label) async {
-    setState(() => _range = label);
-    final (rng, iv) = _ranges[label]!;
+  Future<void> _fetchRange(String label, {String? bar}) async {
+    final valid = _barsFor(label);
+    final b = bar != null && valid.contains(bar)
+        ? bar
+        : valid.contains(_bar)
+            ? _bar
+            : valid.first;
+    setState(() {
+      _range = label;
+      _bar = b;
+    });
+    final rng = _ranges[label]!, iv = _intervals[b]!;
     try {
       final r = await http.get(
         Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/'
-            '${widget.company.nseSymbol}.NS?range=$rng&interval=$iv'),
+            '${widget.company.nseSymbol}.NS?range=$rng&interval=$iv&events=div,splits'),
         headers: {'User-Agent': 'Mozilla/5.0'},
       ).timeout(const Duration(seconds: 10));
       if (!mounted || r.statusCode != 200) return;
       final q = Quote.fromChartJson(jsonDecode(r.body));
-      var closes = q.closes, times = q.times;
-      if (label == '3Y' && times.isNotEmpty) {
+      var bars = barsOf(q);
+      if (label == '3Y' && bars.t.isNotEmpty) {
+        // every series trimmed together — the old code trimmed closes only
+        // and CANDLE silently fell back to a line on 3Y
         final cutoff = DateTime.now().subtract(const Duration(days: 3 * 365));
-        final from = times.indexWhere((t) => t.isAfter(cutoff));
-        if (from > 0) {
-          closes = closes.sublist(from);
-          times = times.sublist(from);
-        }
+        final from = bars.t.indexWhere((t) => t.isAfter(cutoff));
+        if (from > 0) bars = sliceBars(bars, from);
       }
-      if (mounted && _range == label && closes.isNotEmpty) {
-        setState(() {
-          _chartCloses = closes;
-          _chartTimes = times;
-          _chartQ = q;
-        });
+      if (mounted && _range == label && _bar == b && bars.c.isNotEmpty) {
+        setState(() => _bars = bars);
       }
-    } catch (_) {} // pill just keeps the old line; retap retries
+    } catch (_) {} // pill just keeps the old chart; retap retries
   }
 
   /// Out-of-universe stock: no meta.f/meta.t yet. Ask the pipeline to backfill
@@ -286,11 +329,7 @@ class _StockScreenState extends State<StockScreen> {
           final q = Quote.fromChartJson(jsonDecode(r.body));
           setState(() {
             _quote = q;
-            if (_range == '1M') {
-              _chartCloses = q.closes;
-              _chartTimes = q.times;
-              _chartQ = q;
-            }
+            if (_range == '1M' && _bar == 'D') _bars = barsOf(q);
           });
         })
         .catchError((_) {
@@ -343,7 +382,26 @@ class _StockScreenState extends State<StockScreen> {
           .then((row) {
         if (mounted) setState(() => _following = row != null);
       }).catchError((_) {});
+      _loadAlertCount();
     }
+  }
+
+  void _loadAlertCount() {
+    loadAlerts(symbol: widget.company.nseSymbol).then((a) {
+      if (mounted) setState(() => _alertCount = a.where((x) => x.active).length);
+    }).catchError((_) {});
+  }
+
+  Future<void> _openAlerts() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: bg,
+      shape: const RoundedRectangleBorder(),
+      isScrollControlled: true,
+      builder: (_) => AlertSheet(widget.company.nseSymbol,
+          tick: ticks.value[widget.company.nseSymbol]),
+    );
+    _loadAlertCount();
   }
 
   Future<void> _toggleFollow() async {
@@ -387,6 +445,18 @@ class _StockScreenState extends State<StockScreen> {
   Map<String, dynamic> get _meta =>
       ticks.value[widget.company.nseSymbol]?.meta ?? const {};
 
+  /// Classic pivot / S1 / R1 from the last session of the 1M daily quote —
+  /// the same numbers TECHNICALS prints, so the chart never contradicts it.
+  List<(String, double)> _pivotLines(Quote q) {
+    if (q.highs.isEmpty || q.lows.isEmpty || q.closes.isEmpty) return const [];
+    final p = pivots(q.highs.last, q.lows.last, q.closes.last)['Classic'];
+    if (p == null) return const [];
+    return [
+      for (final k in const ['R1', 'P', 'S1'])
+        if (p[k] != null) (k, p[k]!)
+    ];
+  }
+
   List<Widget> _priceHeader() {
     final q = _quote;
     final up = q != null && q.price >= q.prevClose;
@@ -395,11 +465,10 @@ class _StockScreenState extends State<StockScreen> {
         ? ''
         : ((q.price - q.prevClose) / q.prevClose * 100).toStringAsFixed(2);
     final screener = remoteConfig.screenerPageEnabled;
-    final closes = screener && _chartCloses.isNotEmpty
-        ? _chartCloses
-        : q?.closes ?? const <double>[];
-    final pe = _showPe && _fund.quarter.length >= 4
-        ? peSeries(closes, _chartTimes, _fund.quarter)
+    final bars = screener && _bars != null ? _bars! : (q == null ? null : barsOf(q));
+    final closes = bars?.c ?? const <double>[];
+    final pe = _showPe && _fund.quarter.length >= 4 && bars != null
+        ? peSeries(closes, bars.t, _fund.quarter)
         : null;
     final peLatest =
         pe?.reversed.firstWhere((v) => v != null, orElse: () => null);
@@ -407,8 +476,7 @@ class _StockScreenState extends State<StockScreen> {
     final f = (meta['f'] as Map?)?.cast<String, dynamic>() ?? const {};
     final sectorLine =
         [f['sector'], f['industry']].whereType<String>().join(' · ');
-    final intraday = _range == '1D' || _range == '5D';
-    final cq = _chartQ;
+    final intraday = _intraday;
     final volLine = q == null
         ? null
         : [
@@ -450,16 +518,18 @@ class _StockScreenState extends State<StockScreen> {
         if (volLine != null && volLine.isNotEmpty)
           Text(volLine, style: mono.copyWith(fontSize: 10, color: inkDim)),
         const SizedBox(height: 12),
-        SizedBox(
-            height: 140,
-            child: _candles && cq != null && cq.opens.length == closes.length
-                ? Candles(cq.opens, cq.highs, cq.lows, closes,
-                    baseline: intraday ? q.prevClose : null, axis: true)
-                : Sparkline(closes, up ? green : red,
-                    secondary: pe,
-                    fill: true,
-                    baseline: intraday ? q.prevClose : null,
-                    axis: true)),
+        if (bars != null && bars.c.length >= 2)
+          PriceChart(bars,
+              layers: _layers,
+              baseline: intraday ? q.prevClose : null,
+              pivots: _pivotLines(q),
+              dividendDates: [for (final d in q.dividends) d.date],
+              secondary: pe,
+              intraday: intraday,
+              height: 180 +
+                  44.0 * [ChartLayer.vol, ChartLayer.rsi, ChartLayer.macd].where(_layers.contains).length)
+        else
+          const SizedBox(height: 140),
         const SizedBox(height: 10),
         if (peLatest != null)
           Padding(
@@ -481,21 +551,38 @@ class _StockScreenState extends State<StockScreen> {
                       label, _range == label, green, () => _fetchRange(label),
                       fontSize: 10),
                 ),
-              filterPill('CANDLE', _candles, amber,
-                  () => setState(() => _candles = !_candles),
-                  fontSize: 10),
-              if (_fund.quarter.length >= 4) ...[
-                const SizedBox(width: 6),
+              const SizedBox(width: 6),
+              for (final b in _barsFor(_range))
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: filterPill(b, _bar == b, amber,
+                      () => _fetchRange(_range, bar: b),
+                      fontSize: 10),
+                ),
+            ])),
+          ),
+        if (screener)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+              for (final l in ChartLayer.values)
+                if (l != ChartLayer.vwap || intraday)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: filterPill(chartLayerLabel[l]!, _layers.contains(l),
+                        l == ChartLayer.candle ? amber : green, () => _toggleLayer(l),
+                        fontSize: 9),
+                  ),
+              if (_fund.quarter.length >= 4)
                 filterPill('P/E', _showPe, amber,
                     () => setState(() => _showPe = !_showPe),
-                    fontSize: 10),
-              ],
+                    fontSize: 9),
             ])),
           ),
         Text(
-            intraday
-                ? 'dotted = previous close · Delayed price · Yahoo Finance'
-                : 'Delayed price · Yahoo Finance',
+            '${intraday ? 'dotted = previous close · ' : ''}drag to pan · pinch to zoom · hold for values · double-tap resets · Delayed price · Yahoo Finance',
             style: mono.copyWith(fontSize: 10)),
       ] else if (_quoteFailed)
         GestureDetector(
@@ -1884,6 +1971,15 @@ class _StockScreenState extends State<StockScreen> {
                         contextLabel: widget.company.name))),
                 icon: const Icon(Icons.question_answer_outlined, color: inkDim),
                 tooltip: 'Ask about ${widget.company.nseSymbol}',
+              ),
+              IconButton(
+                onPressed: _openAlerts,
+                icon: Icon(
+                    _alertCount > 0
+                        ? Icons.notifications_active_rounded
+                        : Icons.notifications_none_rounded,
+                    color: _alertCount > 0 ? amber : inkDim),
+                tooltip: 'Price alerts',
               ),
               IconButton(
                 onPressed: _toggleFollow,

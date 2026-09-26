@@ -15,7 +15,9 @@ import 'intro.dart';
 import 'screens/interests.dart';
 import 'screens/markets.dart';
 import 'screens/profile.dart';
+import 'models.dart' show Company;
 import 'screens/saved.dart';
+import 'screens/stock.dart';
 import 'screens/watchlist.dart';
 import 'share_palette.dart';
 import 'screens/sign_in.dart';
@@ -28,7 +30,29 @@ const supabasePublishableKey =
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
+/// Price-alert pushes (pipeline/price_alerts.py) carry `symbol`: land on
+/// that stock page. Symbol -> Company is one companies read; a miss is silent.
+Future<void> openSymbolFromPush(String symbol) async {
+  try {
+    final row = await Supabase.instance.client
+        .from('companies')
+        .select('id,name,nse_symbol')
+        .eq('nse_symbol', symbol)
+        .maybeSingle();
+    if (row == null) return;
+    track('alert_open', {'symbol': symbol});
+    navigatorKey.currentState?.push(MaterialPageRoute(
+        builder: (_) =>
+            StockScreen(company: Company.fromJson(Map<String, dynamic>.from(row)))));
+  } catch (_) {}
+}
+
 void _openStory(RemoteMessage m) {
+  final sym = m.data['symbol'] ?? '';
+  if (sym.isNotEmpty) {
+    openSymbolFromPush(sym);
+    return;
+  }
   final id = int.tryParse(m.data['story_id'] ?? '');
   if (id == null) return;
   final uid = Supabase.instance.client.auth.currentUser?.id;

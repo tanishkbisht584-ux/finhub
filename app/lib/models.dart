@@ -373,6 +373,9 @@ class Quote {
   final DateTime? asOf;
   final List<double> opens, highs, lows;
 
+  /// Phase D: per-bar volume aligned with [closes] (0 where Yahoo has none).
+  final List<double> volumes;
+
   /// Phase 4: corporate actions from the same call with `events=div,splits`
   /// (newest first). Empty unless the caller asked for events.
   final List<({DateTime date, double amount})> dividends;
@@ -396,6 +399,7 @@ class Quote {
         opens = const [],
         highs = const [],
         lows = const [],
+        volumes = const [],
         dividends = const [],
         splits = const [];
 
@@ -405,8 +409,9 @@ class Quote {
     final rawTimes = r['timestamp'] as List? ?? const [];
     List rawOf(String k) => q[k] as List? ?? const [];
     final rawO = rawOf('open'), rawH = rawOf('high'), rawL = rawOf('low');
+    final rawV = rawOf('volume');
     final closes = <double>[], opens = <double>[], highs = <double>[];
-    final lows = <double>[];
+    final lows = <double>[], volumes = <double>[];
     final times = <DateTime>[];
     for (var i = 0; i < rawCloses.length; i++) {
       final c = rawCloses[i];
@@ -419,6 +424,7 @@ class Quote {
       opens.add(bar(rawO));
       highs.add(bar(rawH));
       lows.add(bar(rawL));
+      volumes.add(i < rawV.length && rawV[i] != null ? (rawV[i] as num).toDouble() : 0);
       times.add(i < rawTimes.length
           ? DateTime.fromMillisecondsSinceEpoch(
               (rawTimes[i] as num).toInt() * 1000)
@@ -459,6 +465,7 @@ class Quote {
         opens: opens,
         highs: highs,
         lows: lows,
+        volumes: volumes,
         dividends: dividends,
         splits: splits);
   }
@@ -473,6 +480,7 @@ class Quote {
       this.opens = const [],
       this.highs = const [],
       this.lows = const [],
+      this.volumes = const [],
       this.dividends = const [],
       this.splits = const []});
 }

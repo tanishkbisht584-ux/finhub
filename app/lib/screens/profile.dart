@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../analytics.dart';
 
 import '../theme.dart';
+import 'alerts.dart';
 import 'portfolio.dart';
 import 'saved.dart';
 import 'watchlist.dart';
@@ -66,6 +67,14 @@ class ProfileScreen extends StatelessWidget {
           Text('ALERTS', style: monoLabel),
           const SizedBox(height: 8),
           const Divider(height: 1),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Price alerts', style: serif.copyWith(fontSize: 15)),
+            subtitle: Text('above / below / day move / 52-week', style: mono.copyWith(fontSize: 10)),
+            trailing: const Icon(Icons.chevron_right, color: inkDim, size: 20),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AlertsScreen())),
+          ),
           if (user != null) AlertSettingsSection(userId: user.id),
           const SizedBox(height: 32),
           Text('APP', style: monoLabel),

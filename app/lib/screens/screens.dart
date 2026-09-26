@@ -1,10 +1,12 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
+import '../screen_query.dart';
 import '../theme.dart';
 import 'feed.dart' show filterPill, showPillSheet;
 import 'stock.dart';
@@ -283,6 +285,25 @@ const List<MetricDef> metricDefs = [
     unit: '%',
     choices: [('≤ 0', false, 0), ('≤ 2', false, 2), ('≥ 5', true, 5)]
   ),
+  // Phase C (26 Sep): the universe technicals / quality columns 024-026 added.
+  (
+    col: 'rsi',
+    label: 'RSI',
+    unit: '',
+    choices: [('≤ 30', false, 30), ('≤ 40', false, 40), ('≥ 60', true, 60), ('≥ 70', true, 70)]
+  ),
+  (
+    col: 'altman_z',
+    label: 'ALTMAN Z',
+    unit: '',
+    choices: [('≥ 3', true, 3), ('≥ 1.8', true, 1.8), ('≤ 1.8', false, 1.8)]
+  ),
+  (
+    col: 'beta_5y',
+    label: 'BETA',
+    unit: '',
+    choices: [('≤ 0.8', false, 0.8), ('≤ 1', false, 1), ('≥ 1.2', true, 1.2)]
+  ),
 ];
 
 const List<ScreenPreset> screenPresets = [
@@ -416,6 +437,67 @@ Future<void> persistSavedScreens(List<SavedScreen> screens) async {
       'saved_screens', [for (final s in screens) encodeScreen(s)]);
 }
 
+/// Phase C (030): the account's screens, merged over the local cache (cloud
+/// wins on the same name), cache refreshed. Any failure → the local list.
+Future<List<SavedScreen>> syncSavedScreens() async {
+  final local = await loadSavedScreens();
+  final uid = Supabase.instance.client.auth.currentUser?.id;
+  if (uid == null) return local;
+  try {
+    final rows = await Supabase.instance.client
+        .from('user_screens')
+        .select('name,filters,sort_col,asc')
+        .eq('user_id', uid);
+    final cloud = <String, SavedScreen>{
+      for (final r in rows)
+        '${r['name']}': (
+          name: '${r['name']}',
+          filters: [
+            for (final f in (r['filters'] as List? ?? const []))
+              (metric: '${f['metric']}', gte: f['gte'] == true, value: (f['value'] as num).toDouble())
+          ],
+          sortCol: '${r['sort_col'] ?? 'mcap_cr'}',
+          asc: r['asc'] == true,
+        )
+    };
+    final merged = [
+      for (final s in local)
+        if (!cloud.containsKey(s.name)) s,
+      ...cloud.values,
+    ];
+    // local-only screens (saved before 030 / offline) go up now
+    for (final s in local) {
+      if (!cloud.containsKey(s.name)) await cloudSaveScreen(s);
+    }
+    await persistSavedScreens(merged);
+    return merged;
+  } catch (_) {
+    return local;
+  }
+}
+
+Future<void> cloudSaveScreen(SavedScreen s) async {
+  final uid = Supabase.instance.client.auth.currentUser?.id;
+  if (uid == null) return;
+  await Supabase.instance.client.from('user_screens').upsert({
+    'user_id': uid,
+    'name': s.name,
+    'query': screenQueryText(s.filters),
+    'filters': [
+      for (final f in s.filters) {'metric': f.metric, 'gte': f.gte, 'value': f.value}
+    ],
+    'sort_col': s.sortCol,
+    'asc': s.asc,
+    'updated_at': DateTime.now().toUtc().toIso8601String(),
+  });
+}
+
+Future<void> cloudDeleteScreen(String name) async {
+  final uid = Supabase.instance.client.auth.currentUser?.id;
+  if (uid == null) return;
+  await Supabase.instance.client.from('user_screens').delete().match({'user_id': uid, 'name': name});
+}
+
 MetricDef _def(String col) => metricDefs.firstWhere((m) => m.col == col);
 
 String _trim(double v) => v == v.roundToDouble() ? '${v.round()}' : '$v';
@@ -452,8 +534,14 @@ class ScreensBody extends StatelessWidget {
       this.onTapRow,
       this.savedNames = const [],
       this.onLoadSaved,
+      this.onDeleteSaved,
       this.updatedAt,
-      this.blurb});
+      this.blurb,
+      this.queryController,
+      this.queryError,
+      this.onRunQuery,
+      this.onCopyQuery,
+      this.onMore});
   final List<Map<String, dynamic>> rows;
   final List<ScreenFilter> filters;
   final String sortCol;
@@ -464,7 +552,16 @@ class ScreensBody extends StatelessWidget {
   final void Function(String symbol)? onTapRow;
   final List<String> savedNames;
   final void Function(int index)? onLoadSaved;
+  final void Function(int index)? onDeleteSaved; // long-press a saved chip
   final DateTime? updatedAt;
+
+  /// Phase C: the formula bar. Null hides it (preset pages, tests).
+  final TextEditingController? queryController;
+  final String? queryError;
+  final VoidCallback? onRunQuery, onCopyQuery;
+
+  /// Non-null when a further page of results exists.
+  final VoidCallback? onMore;
 
   /// One plain-words line under a preset's title — what this screen hunts.
   final String? blurb;
@@ -476,13 +573,50 @@ class ScreensBody extends StatelessWidget {
         Text(blurb!, style: mono.copyWith(fontSize: 10.5, color: inkDim)),
         const SizedBox(height: 12),
       ],
+      if (queryController != null && onRunQuery != null) ...[
+        Text('FORMULA', style: mono.copyWith(fontSize: 10, color: inkDim)),
+        const SizedBox(height: 6),
+        TextField(
+          key: const Key('screenQuery'),
+          controller: queryController,
+          minLines: 1,
+          maxLines: 3,
+          style: mono.copyWith(fontSize: 12),
+          textInputAction: TextInputAction.go,
+          onSubmitted: (_) => onRunQuery!(),
+          decoration: InputDecoration(
+              isDense: true,
+              hintText: 'e.g. ${screenQueryExamples.first}',
+              hintStyle: mono.copyWith(fontSize: 11, color: inkDim),
+              suffixIcon: IconButton(
+                  tooltip: 'Run',
+                  icon: const Icon(Icons.play_arrow_rounded, color: green),
+                  onPressed: onRunQuery)),
+        ),
+        if (queryError != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(queryError!, style: mono.copyWith(fontSize: 10, color: red)),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text('metric > number, joined with AND · > and < mean at least / at most',
+                style: mono.copyWith(fontSize: 9.5, color: inkDim)),
+          ),
+        const SizedBox(height: 10),
+      ],
       if (savedNames.isNotEmpty && onLoadSaved != null) ...[
-        Text('SAVED', style: mono.copyWith(fontSize: 10, color: inkDim)),
+        Text('SAVED${onDeleteSaved == null ? '' : ' · hold to delete'}',
+            style: mono.copyWith(fontSize: 10, color: inkDim)),
         const SizedBox(height: 6),
         Wrap(spacing: 6, runSpacing: 6, children: [
           for (var i = 0; i < savedNames.length; i++)
-            filterPill(savedNames[i], false, inkDim, () => onLoadSaved!(i),
-                fontSize: 10),
+            GestureDetector(
+              onLongPress: onDeleteSaved == null ? null : () => onDeleteSaved!(i),
+              child: filterPill(savedNames[i], false, inkDim, () => onLoadSaved!(i),
+                  fontSize: 10),
+            ),
         ]),
         const SizedBox(height: 10),
       ],
@@ -497,6 +631,8 @@ class ScreensBody extends StatelessWidget {
               fontSize: 10),
         if (onSave != null && filters.isNotEmpty)
           filterPill('SAVE', false, inkDim, onSave!, fontSize: 10),
+        if (onCopyQuery != null && filters.isNotEmpty)
+          filterPill('COPY', false, inkDim, onCopyQuery!, fontSize: 10),
       ]),
       const SizedBox(height: 14),
       if (rows.isEmpty)
@@ -546,10 +682,14 @@ class ScreensBody extends StatelessWidget {
               ]),
             ),
           ),
+        if (onMore != null)
+          TextButton(
+              onPressed: onMore,
+              child: Text('show 50 more', style: mono.copyWith(fontSize: 12, color: green))),
         const SizedBox(height: 10),
         Text(
             '${rows.length} matches'
-            '${rows.length == 50 ? ' (top 50)' : ''}'
+            '${onMore != null ? ' so far' : ''}'
             '${updatedAt != null ? ' · metrics as of ${fmtDayShort(updatedAt!)}' : ''}'
             ' · rebuilt daily',
             style: mono.copyWith(fontSize: 10)),
@@ -593,17 +733,67 @@ class _ScreensScreenState extends State<ScreensScreen> {
   List<Map<String, dynamic>> _rows = const [];
   bool _loading = true;
   bool _failed = false;
+  bool _hasMore = false;
   List<SavedScreen> _saved = const [];
+  // Phase C: the typed formula. Pills regenerate it; RUN parses it into pills.
+  late final TextEditingController _query =
+      TextEditingController(text: screenQueryText(_filters));
+  String? _queryError;
 
   @override
   void initState() {
     super.initState();
     _run();
     if (widget.preset == null) {
-      loadSavedScreens().then((s) {
+      syncSavedScreens().then((s) {
         if (mounted) setState(() => _saved = s);
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  void _setFilters(List<ScreenFilter> next) {
+    setState(() {
+      _filters = next;
+      _query.text = screenQueryText(next);
+      _queryError = null;
+    });
+    _run();
+  }
+
+  void _runQuery() {
+    final p = parseScreenQuery(_query.text);
+    if (p.error != null) {
+      setState(() => _queryError = p.error);
+      return;
+    }
+    setState(() {
+      _filters = p.filters;
+      _queryError = null;
+    });
+    _run();
+  }
+
+  Future<void> _copyQuery() async {
+    final text = _query.text.trim().isEmpty ? screenQueryText(_filters) : _query.text.trim();
+    if (text.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Formula copied')));
+    }
+  }
+
+  Future<void> _deleteSaved(int i) async {
+    final s = _saved[i];
+    final next = [..._saved.where((x) => x.name != s.name)];
+    await persistSavedScreens(next);
+    if (mounted) setState(() => _saved = next);
+    cloudDeleteScreen(s.name).then((_) {}, onError: (_) {});
   }
 
   Future<void> _save() async {
@@ -638,38 +828,43 @@ class _ScreensScreenState extends State<ScreensScreen> {
     ];
     await persistSavedScreens(next);
     if (mounted) setState(() => _saved = next);
+    cloudSaveScreen(next.last).then((_) {}, onError: (_) {});
   }
 
   void _loadSaved(int i) {
     final s = _saved[i];
     setState(() {
-      _filters = List.of(s.filters);
       _sortCol = s.sortCol;
       _asc = s.asc;
     });
-    _run();
+    _setFilters(List.of(s.filters));
   }
 
-  Future<void> _run() async {
+  static const _page = 50;
+
+  Future<void> _run({bool more = false}) async {
+    final start = more ? _rows.length : 0;
     setState(() {
-      _loading = true;
+      if (!more) _loading = true;
       _failed = false;
     });
     try {
       // explicit projection: the `sa` jsonb (stock-page extras) never rides
-      // along on a 50-row screen
+      // along on a 50-row screen; updated_at feeds the "as of" stamp
       var q = Supabase.instance.client.from('screener_metrics').select(
-          'symbol,name,price,${metricDefs.map((m) => m.col).join(',')}');
+          'symbol,name,price,updated_at,${metricDefs.map((m) => m.col).join(',')}');
       for (final f in _filters) {
         q = f.gte ? q.gte(f.metric, f.value) : q.lte(f.metric, f.value);
       }
       final rows = await q
           .order(_sortCol, ascending: _asc)
-          .limit(50)
+          .range(start, start + _page - 1)
           .timeout(const Duration(seconds: 10));
       if (!mounted) return;
+      final fresh = [for (final r in rows) Map<String, dynamic>.from(r)];
       setState(() {
-        _rows = [for (final r in rows) Map<String, dynamic>.from(r)];
+        _rows = more ? [..._rows, ...fresh] : fresh;
+        _hasMore = fresh.length == _page;
         _loading = false;
       });
     } catch (_) {
@@ -696,12 +891,10 @@ class _ScreensScreenState extends State<ScreensScreen> {
               (ctx2) {
                 void apply(bool gte, double value) {
                   Navigator.of(ctx2).pop();
-                  setState(() => _filters = [
-                        ..._filters
-                            .where((f) => f.metric != m.col || f.gte != gte),
-                        (metric: m.col, gte: gte, value: value),
-                      ]);
-                  _run();
+                  _setFilters([
+                    ..._filters.where((f) => f.metric != m.col || f.gte != gte),
+                    (metric: m.col, gte: gte, value: value),
+                  ]);
                 }
 
                 final ctl = TextEditingController();
@@ -814,14 +1007,18 @@ class _ScreensScreenState extends State<ScreensScreen> {
                   blurb: presetBlurbs[widget.preset?.name],
                   savedNames: [for (final s in _saved) s.name],
                   onLoadSaved: _saved.isEmpty ? null : _loadSaved,
-                  onRemoveFilter: (f) {
-                  setState(() => _filters = [..._filters.where((x) => x != f)]);
-                  _run();
-                },
+                  onDeleteSaved: _saved.isEmpty ? null : _deleteSaved,
+                  onRemoveFilter: (f) =>
+                      _setFilters([..._filters.where((x) => x != f)]),
                   onAddFilter: _addFilter,
                   onSort: _pickSort,
                   onSave: widget.preset == null ? _save : null,
-                  onTapRow: _openStock),
+                  onTapRow: _openStock,
+                  queryController: _query,
+                  queryError: _queryError,
+                  onRunQuery: _runQuery,
+                  onCopyQuery: _copyQuery,
+                  onMore: _hasMore ? () => _run(more: true) : null),
     );
   }
 }

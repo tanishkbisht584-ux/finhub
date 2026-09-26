@@ -865,10 +865,11 @@ def _fcm_token_is_dead(status_code, text):
     return status_code == 404 or (status_code == 400 and "UNREGISTERED" in (text or ""))
 
 
-def send_fcm_token(token, hook, headline, story_id, score):
+def send_fcm_token(token, hook, headline, story_id, score, data=None):
     """Direct-to-device variant of send_fcm for personalized alerts. Returns
     "sent" | "dead" | "fail" — the caller clears "dead" tokens and only
-    counts "sent" against the daily cap."""
+    counts "sent" against the daily cap. `data` merges extra keys into the
+    payload (price alerts send `symbol` so the app opens the stock page)."""
     creds = _fcm_creds()
     if creds is None:
         print(f"PERSONAL ALERT (FCM not configured): {hook}")
@@ -879,7 +880,7 @@ def send_fcm_token(token, hook, headline, story_id, score):
         json={"message": {"token": token,
                           "notification": {"title": hook, "body": headline},
                           "data": {"story_id": str(story_id), "hook": hook,
-                                   "impact_score": str(score)}}},
+                                   "impact_score": str(score), **(data or {})}}},
         timeout=30)
     if r.ok:
         return "sent"
@@ -1364,6 +1365,8 @@ def retention_sweep():
         sb("DELETE", f"pipeline_runs?ok=eq.true&started_at=lt.{iso(now - timedelta(hours=48))}")
         sb("DELETE", f"pipeline_runs?started_at=lt.{iso(now - timedelta(days=14))}")
         sb("DELETE", f"edge_log?created_at=lt.{iso(now - timedelta(days=30))}")
+        # Price-alert history (029): 90 d is plenty for a "what fired" list.
+        sb("DELETE", f"price_alert_fires?fired_at=lt.{iso(now - timedelta(days=90))}")
         # Last on purpose: a 404 here before some migration lands must not skip
         # the deletes above.
         sb("DELETE", f"qa_cache?created_at=lt.{iso(now - timedelta(days=QA_CACHE_RETENTION_DAYS))}")

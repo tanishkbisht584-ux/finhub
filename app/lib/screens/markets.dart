@@ -16,6 +16,7 @@ import '../sessions.dart';
 import '../theme.dart';
 import '../ticks.dart';
 import 'feed.dart' show homeTab, marketsTab, filterPill, pendingStory;
+import 'alerts.dart';
 import 'portfolio.dart';
 import 'screens.dart';
 import 'stock.dart';
@@ -635,9 +636,19 @@ class _MarketsBodyState extends State<MarketsBody> {
         label: 'WATCHLIST',
         child: LedgerSection('Watchlist',
             action: Builder(
-                builder: (context) => filterPill(
-                    'SEARCH', false, green, () => _openStockSearch(context),
-                    fontSize: 10)),
+                builder: (context) => Row(mainAxisSize: MainAxisSize.min, children: [
+                      filterPill(
+                          'ALERTS',
+                          false,
+                          green,
+                          () => Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => const AlertsScreen())),
+                          fontSize: 10),
+                      const SizedBox(width: 6),
+                      filterPill('SEARCH', false, green,
+                          () => _openStockSearch(context),
+                          fontSize: 10),
+                    ])),
             children: [
               if (watch.isEmpty)
                 Padding(

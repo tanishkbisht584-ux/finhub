@@ -377,12 +377,22 @@ def equity_universe(sb, now):
     return out[:EQUITY_CAP]
 
 
+PRICE_ALERTS_OFF = False  # set by refresh() from app_config.pipeline.groups_off
+
+
 def refresh_equities(sb, now):
     universe = equity_universe(sb, now)
     data = fetch_spark([f"{s}.NS" for s, _ in universe])
     rows = [row(s, "equity", n, p, now)
             for s, n in universe if (p := parse_spark(data.get(f"{s}.NS", {})))]
     n = upsert(sb, rows)
+    # Phase B (26 Sep): user price alerts ride the lap on the rows in memory.
+    # Never blocks quotes — an alerts failure is logged and the lap is a success.
+    try:
+        import price_alerts
+        price_alerts.evaluate(sb, rows, now, off=PRICE_ALERTS_OFF)
+    except Exception as e:  # noqa: BLE001
+        print(f"PRICE ALERTS: {e}")
     # Rows nobody refreshes any more (untagged, unfollowed) age out after a week.
     if now.astimezone(IST).hour == 3 and now.minute < 15:  # Z, not +00:00: "+" is a space in a URL
         sb("DELETE", "quotes?kind=eq.equity&updated_at=lt."
@@ -2407,6 +2417,8 @@ def refresh(sb, now=None):
         off = set(((rows[0]["value"] if rows else {}) or {}).get("groups_off") or [])
     except Exception:
         pass  # config unreadable -> run everything, as before
+    global PRICE_ALERTS_OFF
+    PRICE_ALERTS_OFF = "price_alerts" in off  # not a group: a flag the equity lap reads
     counts = {}
     for group, fn in todo:
         if group in off:  # _last_run untouched: re-enabling runs it promptly
