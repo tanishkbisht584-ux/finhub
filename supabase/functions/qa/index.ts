@@ -684,7 +684,7 @@ const DEFINE_TERMS = new Set([
   "p/e", "p/b", "p/s", "sharpe", "sortino", "atr", "piotroski", "graham number", "ev/ebitda",
   "roic", "interest cover", "fcf yield", "earnings yield", "all-time high",
   "max pain", "record date",
-  "fund age", "nav",
+  "fund age", "nav", "lookahead bias", "survivorship bias", "rebalance", "backtest",
   "golden cross", "death cross", "52-week breakout", "52-week breakdown", "volume spike", "gap up", "gap down",
   "nr7", "inside bar", "hammer candle", "shooting star", "bullish engulfing", "bearish engulfing", "doji",
   // 26 Sep 2026: every term the app underlines or the screener defines (033)

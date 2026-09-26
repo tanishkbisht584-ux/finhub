@@ -1958,6 +1958,15 @@ class _StockScreenState extends State<StockScreen> {
       (id: 'research', label: 'RESEARCH', child: _research()),
       if (_seasonQ != null)
         (id: 'seasonality', label: 'SEASONALITY', child: _seasonality()),
+      if (f.concalls.isNotEmpty)
+        (
+          id: 'concalls',
+          label: 'CONCALLS',
+          child: LedgerSection('Concall takeaways',
+              action: _stamp('AI · from the transcript'),
+              footnote: 'summarised by the pipeline from the transcript NSE published · guidance and risks are management\'s words, not advice',
+              children: [const SizedBox(height: 8), ConcallSection(f.concalls)])
+        ),
       if ((f.summary['pros'] as List?)?.isNotEmpty == true ||
           (f.summary['cons'] as List?)?.isNotEmpty == true)
         (

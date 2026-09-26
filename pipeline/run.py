@@ -61,11 +61,12 @@ KNOBS = ("MAX_AI_CALLS_PER_RUN", "AI_CONCURRENCY", "AI_PHASE_SECONDS", "DAILY_AI
          "MAX_ALERTS_PER_DAY", "QUIET_START_IST", "QUIET_END_IST", "QUIET_PIERCE_SCORE",
          "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "EVENTS_RETENTION_DAYS",
          "REJECTED_RETENTION_DAYS", "APPROVED_RETENTION_DAYS", "QA_CACHE_RETENTION_DAYS",
-         "SCAN_PUSH_CAP", "MF_DRAIN_CAP")
+         "SCAN_PUSH_CAP", "MF_DRAIN_CAP", "CONCALL_DAILY_CAP")
 MODEL_ENVS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL")  # ai.py reads env at call time
 AI_KNOBS = {"AI_RPM_PER_LANE": "RPM_PER_LANE", "AI_CALLS_PER_HOUR": "AI_CALLS_PER_HOUR"}  # -> ai module globals
 SCAN_PUSH_CAP = 300  # scans.py reads it through run at call time (035)
 MF_DRAIN_CAP = 150   # mf.py: schemes re-reduced per 5-min lap off NSE hours (036)
+CONCALL_DAILY_CAP = 40  # concalls.py: transcripts summarised per night, one Gemini call each (037)
 SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "market")
 
 

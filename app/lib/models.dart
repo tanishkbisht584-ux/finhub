@@ -186,7 +186,7 @@ const glossaryTerms = [
   'ex-date',
   'promoter',
   'max pain', 'record date',
-  'fund age', 'nav',
+  'fund age', 'nav', 'lookahead bias', 'survivorship bias', 'rebalance', 'backtest',
   // 035 scans
   'golden cross', 'death cross', '52-week breakout', '52-week breakdown', 'volume spike', 'gap up', 'gap down',
   'nr7', 'inside bar', 'hammer candle', 'shooting star', 'bullish engulfing', 'bearish engulfing', 'doji',

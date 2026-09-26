@@ -155,7 +155,8 @@ DAILY_SLOT = {"mf": (22, 30), "fundamentals": (16, 30), "technicals": (16, 15),
               "deep_warm": (17, 30), "screener": (18, 0), "worldmacro": (6, 0),
               "wikidata": (3, 0), "cpi": (18, 0), "cb_rates": (7, 0), "calendar": (6, 30),
               "participant_oi": (19, 0), "shipping": (7, 30),
-              "monsoon": (9, 0), "bhav": (19, 30), "unlisted": (20, 30), "scans": (20, 0)}
+              "monsoon": (9, 0), "bhav": (19, 30), "unlisted": (20, 30), "scans": (20, 0),
+              "backtests": (23, 0), "concalls": (1, 0)}
 
 
 def due(group, now):
@@ -801,7 +802,10 @@ def refresh_analysis_all(sb, now):
     # the audit (20 Sep) found meta.t on 45% of the sample only: the same
     # batch gets its technicals from the 1y chart, so TECHNICALS is populated
     # for the whole universe too (one chart call per symbol per day).
-    t_updates = fetch_technicals_for(needs_refresh(batch, existing, "t_at", now), sb=sb)
+    t_batch = needs_refresh(batch, existing, "t_at", now)
+    import history  # 032: symbols with no close history yet ride along, cap per lap
+    t_batch += [s for s in history.missing(sb, list(universe)) if s not in t_batch][:ANALYSIS_ALL_CAP]
+    t_updates = fetch_technicals_for(t_batch, sb=sb)
     return n + (merge_meta(sb, t_updates, "t", now) if t_updates else 0)
 
 
@@ -2417,6 +2421,19 @@ def refresh_us_universe(sb, now):
                              "updated_at": now.isoformat()}])
 
 
+def refresh_backtests(sb, now):
+    """Sunday 23:00 IST: presets + saved screens replayed over 3y (037)."""
+    import backtest
+    return backtest.refresh(sb, now)
+
+
+def refresh_concalls(sb, now):
+    """01:00 IST: up to CONCALL_DAILY_CAP transcript summaries (037)."""
+    import concalls
+    import run
+    return concalls.refresh(sb, now, cap=getattr(run, "CONCALL_DAILY_CAP", None))
+
+
 def refresh_scans(sb, now):
     """Nightly after the technicals pass: SCANS blob + one grouped push per holder (035)."""
     import scans
@@ -2489,6 +2506,7 @@ GROUPS = (("index", refresh_indices), ("equity", refresh_equities),
           ("stockanalysis", refresh_stockanalysis), ("bhav", refresh_bhav), ("scans", refresh_scans),
           ("mf_universe", refresh_mf_universe), ("mf_drain", refresh_mf_drain),
           ("us_universe", refresh_us_universe),
+          ("backtests", refresh_backtests), ("concalls", refresh_concalls),
           ("unlisted", refresh_unlisted), ("analysis_all", refresh_analysis_all))
 
 

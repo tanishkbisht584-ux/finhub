@@ -415,6 +415,60 @@ class _IndexChainPanelState extends State<IndexChainPanel> {
       ]);
 }
 
+// ---------------- 037: concall takeaways ----------------
+
+/// AI summaries of the published transcripts (fundamentals kind=concall),
+/// newest first; each card opens the PDF it was read from.
+class ConcallSection extends StatelessWidget {
+  const ConcallSection(this.calls, {super.key});
+  final Map<String, Map<String, dynamic>> calls; // date -> card
+
+  @override
+  Widget build(BuildContext context) {
+    final dates = calls.keys.toList()..sort((a, b) => b.compareTo(a));
+    if (dates.isEmpty) return const SizedBox.shrink();
+    Color tone(String? s) => s == 'confident' ? green : s == 'defensive' ? red : amber;
+    List<Widget> bullets(String label, List? items) => items == null || items.isEmpty
+        ? const []
+        : [
+            const SizedBox(height: 8),
+            Text(label, style: mono.copyWith(fontSize: 10, color: inkDim)),
+            for (final x in items.take(6))
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Text('· $x', style: mono.copyWith(fontSize: 11, color: ink, height: 1.35)),
+              ),
+          ];
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (final d in dates.take(4)) ...[
+        Row(children: [
+          Expanded(
+              child: Text('${dmy(d)} · ${calls[d]!['subject'] ?? ''}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: mono.copyWith(fontSize: 10, color: inkDim))),
+          if (calls[d]!['sentiment'] != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(border: Border.all(color: tone('${calls[d]!['sentiment']}'))),
+              child: Text('${calls[d]!['sentiment']}'.toUpperCase(),
+                  style: mono.copyWith(fontSize: 9, color: tone('${calls[d]!['sentiment']}'))),
+            ),
+        ]),
+        const SizedBox(height: 6),
+        Text('${calls[d]!['summary'] ?? ''}', style: serif.copyWith(fontSize: 14, height: 1.4)),
+        ...bullets('GUIDANCE', calls[d]!['guidance'] as List?),
+        ...bullets('RISKS', calls[d]!['risks'] as List?),
+        ...bullets('Q&A', calls[d]!['qa_highlights'] as List?),
+        if (calls[d]!['url'] != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: filterPill('OPEN TRANSCRIPT', false, green, () => openExternal(context, '${calls[d]!['url']}')),
+          ),
+        const SizedBox(height: 16),
+      ],
+    ]);
+  }
+}
+
 // ---------------- 034: corporate actions ----------------
 
 const actionLabel = {

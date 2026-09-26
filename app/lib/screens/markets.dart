@@ -366,6 +366,7 @@ class _MarketsBodyState extends State<MarketsBody> {
     'mood',
     'calendar',
     'corp_actions',
+    'concall_takeaways',
     'results',
     'earnings',
     'positioning',
@@ -463,6 +464,10 @@ class _MarketsBodyState extends State<MarketsBody> {
 
   List<_Sec> _sections() {
     final data = widget.data;
+    final takeaways = [
+      for (final r in ((data.blobs['concall_takeaways'] as Map?)?['items'] as List? ?? const []))
+        Map<String, dynamic>.from(r as Map)
+    ];
     final usAll500 = [
       for (final r in ((data.blobs['us_universe'] as Map?)?['rows'] as List? ?? const [])) r as List
     ];
@@ -1646,6 +1651,25 @@ class _MarketsBodyState extends State<MarketsBody> {
                       ),
                   ], initial: 10),
                 ],
+              ]),
+        ),
+      if (takeaways.isNotEmpty)
+        (
+          id: 'concall_takeaways',
+          label: 'CONCALL TAKEAWAYS',
+          child: LedgerSection('Concall takeaways',
+              stamp: data.blobUpdated['concall_takeaways'],
+              stampPrefix: 'AI',
+              footnote: 'the latest earnings-call transcripts, one line each · tap for the full card on the stock page',
+              children: [
+                const SizedBox(height: 8),
+                for (final t in takeaways)
+                  LedgerRow(
+                      lead: '${t['symbol']}',
+                      main: '${t['line'] ?? ''}',
+                      sub: '${dmy(t['date'])}${t['sentiment'] == null ? '' : ' · ${t['sentiment']}'}',
+                      trail: '›',
+                      onTap: () => _openSymbol('${t['symbol']}')),
               ]),
         ),
       if (usAll500.isNotEmpty)

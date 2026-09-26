@@ -74,3 +74,18 @@ def test_update_routes_missing_rows_to_refill(monkeypatch):
     assert ("POST", "rpc/history_merge") in calls
     assert sorted(r["symbol"] for r in written) == ["INFY", "TCS"]   # INFY missing, TCS bounced
     assert n == 1 + 2
+
+
+def test_missing_reads_once_and_grows_with_updates(monkeypatch):
+    reads = []
+
+    def fake_sb(method, path, **kw):
+        reads.append(path.split("?")[0])
+        return [{"symbol": "TCS"}]
+
+    history._have.update(at=0.0, syms=set())
+    monkeypatch.setattr(history, "_missing_table", False)
+    assert history.missing(fake_sb, ["TCS", "INFY", "WIPRO"]) == ["INFY", "WIPRO"]
+    assert history.missing(fake_sb, ["TCS", "INFY"]) == ["INFY"] and reads == ["price_history"]  # cached
+    history._have["syms"].add("INFY")
+    assert history.missing(fake_sb, ["TCS", "INFY", "WIPRO"]) == ["WIPRO"]

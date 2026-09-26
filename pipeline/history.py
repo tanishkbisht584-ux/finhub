@@ -86,6 +86,27 @@ def fetch_max(sym, tz, headers, timeout):
     return series_of(r.json(), tz)
 
 
+_have = {"at": 0.0, "syms": set()}
+
+
+def missing(sb, universe):
+    """Universe symbols with no price_history row yet (the fill rides the
+    technicals pass, which is gated on a 20 h t_at stamp — without this the
+    table stayed empty for a day after 032 landed). The row set is cached for
+    30 min and grown by update(), so a lap costs one 30 KB read at most."""
+    global _missing_table
+    if _missing_table:
+        return []
+    if time.monotonic() - _have["at"] > 1800:
+        try:
+            _have.update(at=time.monotonic(), syms={r["symbol"] for r in sb("GET", "price_history?select=symbol")})
+        except Exception as e:  # noqa: BLE001 — a failed read just means no boost this lap
+            if "price_history" in str(e):
+                _missing_table = True
+            return []
+    return [s for s in universe if s not in _have["syms"]]
+
+
 def update(sb, series, tz, headers, timeout=20):
     """series = {symbol: (dates, closes, vols)} from this lap's 1y charts.
     Rows that exist are merged in the database; the rest (and any the RPC
@@ -126,6 +147,7 @@ def update(sb, series, tz, headers, timeout=20):
     if rows:
         from market import upsert
         upsert(sb, rows, table="price_history")
+    _have["syms"].update(s for s in syms if s in have or s in {r["symbol"] for r in rows})
     if refill or merges:
         print(f"MARKET history: merged {len(merges)}, refilled {len(rows)}/{len(refill)}")
     return len(merges) + len(rows)

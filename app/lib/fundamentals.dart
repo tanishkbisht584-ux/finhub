@@ -7,7 +7,10 @@ import 'models.dart';
 class FundamentalsData {
   const FundamentalsData(
       this.annual, this.quarter, this.shareholding, this.summary, this.docs,
-      {this.summaryAt, this.hasDocsRow = false});
+      {this.summaryAt, this.hasDocsRow = false, this.concalls = const {}});
+
+  /// 037: call date -> {subject, url, summary, guidance, risks, qa_highlights, sentiment} (newest last)
+  final Map<String, Map<String, dynamic>> concalls;
 
   final Map<String, Map<String, dynamic>> annual; // 'FY2026' -> data, oldest first
   final Map<String, Map<String, dynamic>> quarter; // '2026-06' -> data
@@ -42,7 +45,11 @@ class FundamentalsData {
     return FundamentalsData(sorted('annual'), sorted('quarter'),
         sorted('shareholding'), byKind['summary']?['latest'] ?? const {},
         byKind['docs']?['latest'] ?? const {},
-        summaryAt: summaryAt, hasDocsRow: byKind.containsKey('docs'));
+        summaryAt: summaryAt, hasDocsRow: byKind.containsKey('docs'),
+        concalls: {
+          for (final e in sorted('concall').entries)
+            if (e.value['note'] == null && e.value['summary'] != null) e.key: e.value
+        });
   }
 }
 

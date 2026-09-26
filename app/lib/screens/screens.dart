@@ -6,7 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../glossary.dart' show showDefineSheet;
-import '../ledger.dart' show StatGrid, StatTile, pillRow;
+import '../charts.dart' show LabeledLine;
+import '../ledger.dart' show LedgerSection, StatGrid, StatTile, pillRow;
 import '../models.dart';
 import '../screen_query.dart';
 import '../sip.dart';
@@ -695,6 +696,7 @@ class _ScreensScreenState extends State<ScreensScreen> {
   void initState() {
     super.initState();
     _run();
+    _loadBacktest(widget.preset?.name);
     if (widget.preset == null) {
       syncSavedScreens().then((s) {
         // 036: MF screens are saved under an "MF:" prefix in the same table;
@@ -798,11 +800,37 @@ class _ScreensScreenState extends State<ScreensScreen> {
     setState(() {
       _sortCol = s.sortCol;
       _asc = s.asc;
+      _backtest = null;
     });
     _setFilters(List.of(s.filters));
+    _loadBacktest(s.name);
   }
 
   static const _page = 50;
+
+  /// 037: the cached weekly replay for this preset (zero owner) or saved screen.
+  Map<String, dynamic>? _backtest;
+  String? _backtestFor;
+
+  Future<void> _loadBacktest(String? name) async {
+    if (_mf || name == null || name == _backtestFor) return;
+    _backtestFor = name;
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final isPreset = screenPresets.any((p) => p.name == name);
+      final row = await Supabase.instance.client
+          .from('backtests')
+          .select('result,computed_at')
+          .match({'name': name, 'user_id': isPreset ? '00000000-0000-0000-0000-000000000000' : (uid ?? '')})
+          .maybeSingle();
+      if (!mounted) return;
+      setState(() => _backtest = row == null || row['result'] == null
+          ? null
+          : {...Map<String, dynamic>.from(row['result'] as Map), 'computed_at': row['computed_at']});
+    } catch (_) {
+      if (mounted) setState(() => _backtest = null);
+    }
+  }
 
   Future<void> _run({bool more = false}) async {
     final start = more ? _rows.length : 0;
@@ -1056,7 +1084,8 @@ class _ScreensScreenState extends State<ScreensScreen> {
                         style: mono.copyWith(fontSize: 13)),
                   ),
                 )
-              : ScreensBody(_rows,
+              : ListView(children: [
+                  ScreensBody(_rows,
                   filters: _filters,
                   sortCol: _sortCol,
                   updatedAt: stamp,
@@ -1075,6 +1104,53 @@ class _ScreensScreenState extends State<ScreensScreen> {
                   onRunQuery: _mf ? null : _runQuery,
                   onCopyQuery: _copyQuery,
                   onMore: _hasMore ? () => _run(more: true) : null),
+                  if (_backtest != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                      child: BacktestSection(_backtest!, name: _backtestFor ?? ''),
+                    ),
+                ]),
     );
+  }
+}
+
+/// 037: equal-weight monthly replay of a screen's top 20 vs Nifty, 3y.
+class BacktestSection extends StatelessWidget {
+  const BacktestSection(this.r, {super.key, required this.name});
+  final Map<String, dynamic> r;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final curve = [for (final v in (r['curve'] as List? ?? const [])) (v as num).toDouble()];
+    final nifty = [for (final v in (r['nifty'] as List? ?? const [])) (v as num).toDouble()];
+    if (curve.length < 3) return const SizedBox.shrink();
+    String pct(Object? v) => v is num ? '${v >= 0 ? '+' : ''}${v.toStringAsFixed(1)}%' : '—';
+    final beat = ((r['cagr'] as num?) ?? 0) >= ((r['nifty_cagr'] as num?) ?? 0);
+    final syms = [for (final s in (r['symbols'] as List? ?? const [])) '$s'];
+    return LedgerSection('Backtest · $name',
+        action: Text('weekly · ${dmy(r['computed_at'])}', style: mono.copyWith(fontSize: 10)),
+        footnote: 'today\'s top 20 matches, equal weight, rebalanced monthly from ${dmy(r['from'])} to ${dmy(r['to'])} · '
+            'survivorship and lookahead bias: these are the stocks that pass NOW, replayed backwards · not a forecast',
+        children: [
+          const SizedBox(height: 10),
+          LabeledLine(curve, [for (var i = 0; i < curve.length; i++) i % 12 == 0 ? dmy(r['dates']?[i]).substring(3) : ''],
+              beat ? green : red),
+          const SizedBox(height: 4),
+          LabeledLine(nifty, const [], inkDim),
+          const SizedBox(height: 10),
+          StatGrid([
+            StatTile('Screen CAGR', pct(r['cagr']), color: beat ? green : red),
+            StatTile('Nifty CAGR', pct(r['nifty_cagr'])),
+            StatTile('Max drawdown', pct(r['mdd']), sub: 'nifty ${pct(r['nifty_mdd'])}'),
+            StatTile('Beat Nifty', '${r['hit_rate'] ?? '—'}%', sub: 'of months'),
+            StatTile('Names', '${r['n'] ?? '—'}'),
+            StatTile('Value of 100', '₹${curve.last.toStringAsFixed(0)}', sub: 'nifty ₹${nifty.last.toStringAsFixed(0)}'),
+          ]),
+          if (syms.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(syms.join(' · '), style: mono.copyWith(fontSize: 10, color: inkDim)),
+          ],
+        ]);
   }
 }
