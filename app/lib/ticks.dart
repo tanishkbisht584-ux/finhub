@@ -16,6 +16,37 @@ void mergeTicks(Iterable<Tick> fresh) {
   ticks.value = {...ticks.value, for (final t in fresh) t.symbol: t};
 }
 
+/// 034: one underlying's full F&O chain (every expiry and strike) with
+/// `asof` folded in, or null (no row, table missing, offline).
+Future<Map<String, dynamic>?> fetchChain(String symbol) async {
+  try {
+    final r = await Supabase.instance.client
+        .from('fno_chain')
+        .select('asof,data')
+        .eq('symbol', symbol)
+        .maybeSingle();
+    if (r == null) return null;
+    return {'asof': r['asof'], ...Map<String, dynamic>.from(r['data'] as Map)};
+  } catch (_) {
+    return null;
+  }
+}
+
+/// symbol -> Company in one `companies` read (the push opener, the screener
+/// and Markets rows all used to carry their own copy). Null on a miss.
+Future<Company?> companyOf(String symbol) async {
+  try {
+    final row = await Supabase.instance.client
+        .from('companies')
+        .select('id,name,nse_symbol')
+        .eq('nse_symbol', symbol)
+        .maybeSingle();
+    return row == null ? null : Company.fromJson(Map<String, dynamic>.from(row));
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Pull `quotes` rows for [symbols] into [ticks]. Silent on failure — a price
 /// is a bonus on every surface that shows one, never a reason to show less.
 Future<void> loadTicks(Iterable<String> symbols) async {

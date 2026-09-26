@@ -2296,14 +2296,28 @@ def refresh_nse_blobs(sb, now, session=None):
         "flows": flows,
         "ipos": ipos,
         "fno": fno,
+        # 034: ex-dates / bonus / splits / rights (-7…+45 d) + board meetings
+        "corp_actions": lambda: corp_actions.shape_actions(
+            get("corporates-corporateActions", index="equities",
+                from_date=(ist - timedelta(days=corp_actions.WINDOW_BACK)).strftime("%d-%m-%Y"),
+                to_date=(ist + timedelta(days=corp_actions.WINDOW_AHEAD)).strftime("%d-%m-%Y")),
+            get("event-calendar", index="equities"), known, ist, parse_nse_date),
     }
+    import corp_actions
     rows = []
     for key, fn in jobs.items():
         try:
             rows.append({"key": key, "payload": fn(), "updated_at": now.isoformat()})
         except Exception as e:  # the old blob stays; the app shows its age
             print(f"MARKET NSE {key}: {e}")
-    return write_blobs(sb, rows)
+    n = write_blobs(sb, rows)
+    ca = next((r["payload"] for r in rows if r["key"] == "corp_actions"), None)
+    if ca:
+        try:  # per-symbol lists for the stock page (screener_metrics.actions, 034)
+            upsert(sb, corp_actions.per_symbol_rows(ca), table="screener_metrics")
+        except Exception as e:  # noqa: BLE001
+            print(f"MARKET NSE corp_actions rows: {e}")
+    return n
 
 
 def refresh_deep_new(sb, now):

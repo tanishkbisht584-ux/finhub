@@ -32,8 +32,9 @@ BSE_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0) FinFlick/1.0", "Referer":
 TAPE_DAYS = 22      # ~one trading month, the longest MC average
 FNO_STRIKES = 6     # strikes each side of the underlying kept in the chain
 NEAR = 0.15         # max-OI strikes must sit within ±15% of the underlying
-FUT_TYPES = ("STF",)
-OPT_TYPES = ("STO",)
+FUT_TYPES = ("STF", "IDF")   # 034: index futures/options too (codes confirmed by probe 36246785128)
+OPT_TYPES = ("STO", "IDO")
+INDEX_UNDERLYINGS = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
 
 
 def _f(v):
@@ -236,6 +237,73 @@ def tape_metrics(tape):
             "trades_avg22": round(sum(trades) / len(trades)) if trades else None}
 
 
+def max_pain(strikes):
+    """The strike where option writers' total payout is least: sum over strikes
+    of intrinsic value × OI on both sides (compact rows [k, ce_ltp, ce_oi, …])."""
+    best = None
+    for k, *_ in strikes:
+        pain = sum(max(0, k - s[0]) * (s[2] or 0) + max(0, s[0] - k) * (s[6] or 0) for s in strikes)
+        if best is None or pain < best[1]:
+            best = (k, pain)
+    return best[0] if best else None
+
+
+def chain_of(rows, day):
+    """One underlying's rows -> fno_chain.data: every expiry on/after `day`,
+    every strike with OI on either side, futures per expiry, headline PCR /
+    max OI / max pain from the nearest expiry. Strike row layout (034):
+    [k, ce_ltp, ce_oi, ce_chg, ce_vol, pe_ltp, pe_oi, pe_chg, pe_vol]."""
+    iso = day.isoformat()
+    futs = {r["XpryDt"]: r for r in rows if r.get("FinInstrmTp") in FUT_TYPES and (r.get("XpryDt") or "") >= iso}
+    und = _f(rows[0].get("UndrlygPric")) if rows else None
+    lot = _i(next((r.get("NewBrdLotQty") for r in rows if r.get("NewBrdLotQty")), None))
+    exps = {}
+    for r in rows:
+        if r.get("FinInstrmTp") not in OPT_TYPES or (r.get("XpryDt") or "") < iso:
+            continue
+        k, side = _f(r.get("StrkPric")), (r.get("OptnTp") or "").lower()
+        if k is None or side not in ("ce", "pe"):
+            continue
+        s = exps.setdefault(r["XpryDt"], {}).setdefault(k, [k, None, 0, 0, 0, None, 0, 0, 0])
+        b = 1 if side == "ce" else 5
+        s[b], s[b + 1], s[b + 2], s[b + 3] = (_f(r.get("ClsPric")), _i(r.get("OpnIntrst")) or 0,
+                                              _i(r.get("ChngInOpnIntrst")) or 0, _i(r.get("TtlTradgVol")) or 0)
+    expiries = sorted(set(exps) | set(futs))
+    if not expiries:
+        return None
+    exp = []
+    for e in expiries:
+        strikes = [s for s in sorted(exps.get(e, {}).values(), key=lambda s: s[0]) if s[2] or s[6]]
+        ce, pe = sum(s[2] for s in strikes), sum(s[6] for s in strikes)
+        f = futs.get(e)
+        fut = ([_f(f.get("LastPric")) or _f(f.get("ClsPric")), _f(f.get("PrvsClsgPric")),
+                _i(f.get("OpnIntrst")), _i(f.get("ChngInOpnIntrst")), _i(f.get("TtlTradgVol"))] if f else None)
+        exp.append({"e": e, "fut": fut, "pcr": round(pe / ce, 2) if ce else None, "s": strikes})
+    data = {"u": und, "lot": lot, "exp": exp}
+    near = next((x for x in exp if x["s"]), None)
+    if near:
+        ss = near["s"]
+        nearby = [s for s in ss if und and abs(s[0] / und - 1) <= NEAR] or ss
+        data.update({"pcr": near["pcr"], "max_ce": max(nearby, key=lambda s: s[2])[0],
+                     "max_pe": max(nearby, key=lambda s: s[6])[0], "max_pain": max_pain(ss)})
+    return data
+
+
+def chain_rows(fo, day, known):
+    """fno_chain rows for every underlying we know plus the index contracts."""
+    by = {}
+    for r in fo or []:
+        sym = r.get("TckrSymb")
+        if r.get("FinInstrmTp") in FUT_TYPES + OPT_TYPES and (sym in known or sym in INDEX_UNDERLYINGS):
+            by.setdefault(sym, []).append(r)
+    out = []
+    for sym, rows in by.items():
+        d = chain_of(rows, day)
+        if d:
+            out.append({"symbol": sym, "asof": day.isoformat(), "data": d})
+    return out
+
+
 def tape_rows(full, existing):
     """screener_metrics rows {symbol, tape, + tape metrics} for EQ rows of symbols we know."""
     out = []
@@ -278,6 +346,12 @@ def refresh_bhav(sb, now, day=None, session=requests):
     fo = fetch_fo(day, session)
     if fo is not None:
         n += upsert(sb, fno_rows(fo, day, set(existing)), table="screener_metrics", key="symbol")
+        try:  # 034: the full chain; a missing table (migration not applied) must not cost the tape
+            n += upsert(sb, chain_rows(fo, day, set(existing)), table="fno_chain", key="symbol")
+        except Exception as e:  # noqa: BLE001
+            if "fno_chain" not in str(e):
+                raise
+            print(f"BHAV chain {day}: {e}")
     try:  # BSE never blocks the NSE side
         n += refresh_bse(sb, day)
     except Exception as e:  # noqa: BLE001

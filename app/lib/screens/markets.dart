@@ -20,6 +20,7 @@ import 'alerts.dart';
 import 'portfolio.dart';
 import 'screens.dart';
 import 'stock.dart';
+import 'stock_sections.dart' show IndexChainPanel, actionsTable;
 
 /// Everything the Markets tab shows, from the pipeline's `quotes` and
 /// `market_blobs` tables (pipeline/market.py), plus the signed-in user's
@@ -352,6 +353,7 @@ class _MarketsBodyState extends State<MarketsBody> {
     'indices',
     'trends',
     'oi',
+    'index_chain',
     'top',
     'records',
     'moves',
@@ -361,6 +363,7 @@ class _MarketsBodyState extends State<MarketsBody> {
     'today',
     'mood',
     'calendar',
+    'corp_actions',
     'results',
     'earnings',
     'positioning',
@@ -403,17 +406,9 @@ class _MarketsBodyState extends State<MarketsBody> {
 
   /// A symbol from a blob row -> its stock page (same lookup as SCREENS).
   Future<void> _openSymbol(String symbol) async {
-    try {
-      final row = await Supabase.instance.client
-          .from('companies')
-          .select('id,name,nse_symbol')
-          .eq('nse_symbol', symbol)
-          .maybeSingle();
-      if (row == null || !mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => StockScreen(
-              company: Company.fromJson(Map<String, dynamic>.from(row)))));
-    } catch (_) {}
+    final c = await companyOf(symbol);
+    if (c == null || !mounted) return;
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => StockScreen(company: c)));
   }
 
   /// SECTORS horizon: which nse_indices field tints the tiles.
@@ -464,6 +459,13 @@ class _MarketsBodyState extends State<MarketsBody> {
 
   List<_Sec> _sections() {
     final data = widget.data;
+    final corp = (data.blobs['corp_actions'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final corpActions = [
+      for (final r in (corp['items'] as List? ?? const [])) Map<String, dynamic>.from(r as Map)
+    ];
+    final corpMeetings = [
+      for (final r in (corp['meetings'] as List? ?? const [])) Map<String, dynamic>.from(r as Map)
+    ];
     final onFollowMf = widget.onFollowMf;
     final onAddMf = widget.onAddMf;
     final allIdx = data.kind('index');
@@ -1551,6 +1553,42 @@ class _MarketsBodyState extends State<MarketsBody> {
                   for (final s in (records['ath'] as List?) ?? const [])
                     (cells: ['$s'], tone: 1, onTap: null),
                 ], initial: 10),
+              ]),
+        ),
+      (
+        id: 'index_chain',
+        label: 'INDEX OPTIONS',
+        child: LedgerSection('Index options',
+            footnote: 'every expiry and strike from the NSE F&O bhavcopy · picked index loads on tap',
+            children: [const SizedBox(height: 8), IndexChainPanel(fetch: fetchChain)]),
+      ),
+      if (corpActions.isNotEmpty || corpMeetings.isNotEmpty)
+        (
+          id: 'corp_actions',
+          label: 'CORPORATE ACTIONS',
+          child: LedgerSection('Corporate actions',
+              stamp: data.blobUpdated['corp_actions'],
+              footnote: 'NSE ex-dates (dividend, bonus, split, rights, buyback) for the last week and next 45 days · board meetings ahead',
+              children: [
+                const SizedBox(height: 8),
+                if (corpActions.isNotEmpty) actionsTable(corpActions, onTap: _openSymbol),
+                if (corpMeetings.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text('BOARD MEETINGS', style: monoLabel),
+                  const SizedBox(height: 6),
+                  LedgerTable(const [
+                    LtCol('Date', right: false),
+                    LtCol('Symbol', right: false),
+                    LtCol('Purpose', right: false, text: true),
+                  ], [
+                    for (final m in corpMeetings)
+                      (
+                        cells: [dmy(m['date']), '${m['symbol']}', '${m['purpose'] ?? ''}'],
+                        tone: 0,
+                        onTap: () => _openSymbol('${m['symbol']}'),
+                      ),
+                  ], initial: 10),
+                ],
               ]),
         ),
       if (deals.isNotEmpty)

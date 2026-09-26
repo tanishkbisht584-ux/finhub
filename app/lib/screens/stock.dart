@@ -197,7 +197,7 @@ class _StockScreenState extends State<StockScreen> {
             'industry,sector,ret_1w,ret_1m,ret_3m,ret_6m,ret_ytd,ret_1y,ret_3y,ret_5y,'
             'ath_pct,from_atl_pct,days_since_hi52,days_since_lo52,hi52,lo52,mcap_bucket,rel_vol,turnover_cr,sharpe,sortino,atr,graham_upside,f_score,ps,'
             'earnings_yield,fcf_yield,roic,int_cov,ev_ebitda,sector_pe,industry_pe,'
-            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno,tape_bse,roe,mcap_cr')
+            'shares_yoy,sa,sa_price_date,altman_z,hi52,lo52,ma50,ma200,rsi,trend,tape,fno,tape_bse,roe,mcap_cr,actions')
         .eq('symbol', widget.company.nseSymbol)
         .maybeSingle()
         .then((self) {
@@ -1052,7 +1052,15 @@ class _StockScreenState extends State<StockScreen> {
 
   /// F&O (Phase 4): the futures ladder and the nearest-expiry chain around
   /// the underlying, from the NSE F&O bhavcopy.
-  Widget _fno() {
+  late final Future<Map<String, dynamic>?> _chainF = fetchChain(widget.company.nseSymbol);
+
+  /// 034: the full chain (every expiry/strike) once it arrives; the ±6
+  /// nearest-expiry snapshot on the screener row until then.
+  Widget _fno() => FutureBuilder(
+      future: _chainF,
+      builder: (_, snap) => snap.data == null ? _fnoSnapshot() : ChainSection(snap.data!));
+
+  Widget _fnoSnapshot() {
     final f = (_sa['fno'] as Map?)?.cast<String, dynamic>();
     if (f == null) return const SizedBox.shrink();
     final futures = [
@@ -1152,21 +1160,38 @@ class _StockScreenState extends State<StockScreen> {
 
   /// ACTIONS (Phase 4): dividend and split history from Yahoo's events on
   /// the monthly chart call. Bonus / rights need an NSE source (not wired).
+  List<Map<String, dynamic>> get _nseActions => [
+        for (final a in (_sa['actions'] as List? ?? const [])) Map<String, dynamic>.from(a as Map)
+      ];
+
   Widget _actions() {
     final q = _seasonQ;
-    if (q == null || (q.dividends.isEmpty && q.splits.isEmpty)) {
+    final nse = _nseActions;
+    if (nse.isEmpty && (q == null || (q.dividends.isEmpty && q.splits.isEmpty))) {
       return const SizedBox.shrink();
+    }
+    if (q == null || (q.dividends.isEmpty && q.splits.isEmpty)) {
+      return LedgerSection('Corporate actions',
+          action: _stamp('NSE · upcoming & recent'),
+          footnote: 'ex-dates, bonus, splits, rights and board meetings from NSE',
+          children: [const SizedBox(height: 8), actionsTable(nse, symbol: false)]);
     }
     final year = DateTime.now().year;
     final ttm = q.dividends
         .where((d) => d.date.isAfter(DateTime.now().subtract(const Duration(days: 365))))
         .fold(0.0, (a, d) => a + d.amount);
     return LedgerSection('Corporate actions',
-        action: _stamp('Yahoo · per share'),
+        action: _stamp(nse.isEmpty ? 'Yahoo · per share' : 'NSE + Yahoo'),
         footnote:
-            'dividends by ex-date · splits by effective date · bonus and rights: source not wired yet',
+            'upcoming and recent from NSE (ex-dates, bonus, splits, rights, board meetings) · history from Yahoo by ex-date',
         children: [
           const SizedBox(height: 8),
+          if (nse.isNotEmpty) ...[
+            Text('NSE · UPCOMING & RECENT', style: monoLabel),
+            const SizedBox(height: 6),
+            actionsTable(nse, symbol: false),
+            const SizedBox(height: 12),
+          ],
           if (q.dividends.isNotEmpty) ...[
             LedgerRow(
                 lead: 'DIVIDENDS',
@@ -1840,8 +1865,9 @@ class _StockScreenState extends State<StockScreen> {
         (id: 'delivery', label: 'DELIVERY', child: _delivery()),
       if (_sa['fno'] != null) (id: 'fno', label: 'F&O', child: _fno()),
       (id: 'vitals', label: 'VITALS', child: _vitals()),
-      if (_seasonQ != null &&
-          (_seasonQ!.dividends.isNotEmpty || _seasonQ!.splits.isNotEmpty))
+      if (_nseActions.isNotEmpty ||
+          (_seasonQ != null &&
+              (_seasonQ!.dividends.isNotEmpty || _seasonQ!.splits.isNotEmpty)))
         (id: 'actions', label: 'ACTIONS', child: _actions()),
       (id: 'fundamentals', label: 'FUNDAMENTALS', child: _fundamentals()),
       if (_sa.isNotEmpty) (id: 'returns', label: 'STREET', child: _returns()),

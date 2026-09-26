@@ -5,6 +5,7 @@ import '../heat.dart';
 import '../ledger.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'feed.dart' show filterPill;
 
 /// Screener-style statement tables and strips for the stock page. All render
 /// from FundamentalsData; a row that is null in every period disappears, so
@@ -222,6 +223,228 @@ Widget growthGrid(Map<String, dynamic> cagr) {
 }
 
 /// Annual-report links + recent NSE announcements from the docs row.
+// ---------------- 034: full F&O chain ----------------
+
+/// Strike row as stored: [k, ceLtp, ceOi, ceChg, ceVol, peLtp, peOi, peChg, peVol].
+typedef StrikeRow = List<num?>;
+
+List<StrikeRow> strikesOf(Map<String, dynamic> expiry) => [
+      for (final s in (expiry['s'] as List? ?? const []))
+        [for (final v in (s as List)) v as num?]
+    ];
+
+/// PCR, max call/put OI strikes (within ±15 % of spot, all when spot is
+/// unknown) and max pain for one expiry.
+({double? pcr, num? maxCe, num? maxPe, num? maxPain}) chainStats(
+    List<StrikeRow> s, double? und) {
+  if (s.isEmpty) return (pcr: null, maxCe: null, maxPe: null, maxPain: null);
+  num oi(StrikeRow r, int i) => r[i] ?? 0;
+  final ce = s.fold<num>(0, (a, r) => a + oi(r, 2));
+  final pe = s.fold<num>(0, (a, r) => a + oi(r, 6));
+  final near = und == null
+      ? s
+      : [for (final r in s) if (((r[0]! / und) - 1).abs() <= 0.15) r];
+  final pool = near.isEmpty ? s : near;
+  StrikeRow best(int i) => pool.reduce((a, b) => oi(a, i) >= oi(b, i) ? a : b);
+  num? pain;
+  num? painV;
+  for (final r in s) {
+    final k = r[0]!;
+    final v = s.fold<num>(
+        0, (a, x) => a + (k - x[0]!).clamp(0, double.infinity) * oi(x, 2) + (x[0]! - k).clamp(0, double.infinity) * oi(x, 6));
+    if (painV == null || v < painV) {
+      painV = v;
+      pain = k;
+    }
+  }
+  return (
+    pcr: ce == 0 ? null : (pe / ce),
+    maxCe: best(2)[0],
+    maxPe: best(6)[0],
+    maxPain: pain,
+  );
+}
+
+/// The ±[each] strikes around the money (all when spot is unknown).
+List<StrikeRow> atmWindow(List<StrikeRow> s, double? und, int each) {
+  if (und == null || s.length <= 2 * each) return s;
+  var at = s.indexWhere((r) => r[0]! >= und);
+  if (at < 0) at = s.length;
+  final lo = (at - each).clamp(0, s.length);
+  final hi = (at + each).clamp(0, s.length);
+  return s.sublist(lo, hi);
+}
+
+/// Every expiry and strike for one underlying (fno_chain.data + asof):
+/// expiry pills, that expiry's futures line, PCR / max OI / max pain, and
+/// the ladder around the money with SHOW ALL.
+class ChainSection extends StatefulWidget {
+  const ChainSection(this.data, {super.key, this.title = 'F&O', this.stampPrefix = 'NSE'});
+  final Map<String, dynamic> data;
+  final String title;
+  final String stampPrefix;
+
+  @override
+  State<ChainSection> createState() => _ChainSectionState();
+}
+
+class _ChainSectionState extends State<ChainSection> {
+  int _exp = 0;
+  bool _all = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final exps = [
+      for (final e in (widget.data['exp'] as List? ?? const []))
+        Map<String, dynamic>.from(e as Map)
+    ];
+    if (exps.isEmpty) return const SizedBox.shrink();
+    final i = _exp.clamp(0, exps.length - 1);
+    final e = exps[i];
+    final und = (widget.data['u'] as num?)?.toDouble();
+    final lot = widget.data['lot'];
+    final strikes = strikesOf(e);
+    final st = chainStats(strikes, und);
+    final fut = (e['fut'] as List?)?.cast<num?>();
+    final shown = _all ? strikes : atmWindow(strikes, und, 8);
+    String n0(num? v) => v == null ? '—' : fmtNum(v.toDouble(), decimals: 0);
+    String px(num? v) => v == null ? '—' : fmtNum(v.toDouble());
+    String signed(num? v) => v == null ? '—' : '${v >= 0 ? '+' : '−'}${fmtNum(v.abs().toDouble(), decimals: 0)}';
+    return LedgerSection(widget.title,
+        action: Text('${widget.stampPrefix} · ${dmy(widget.data['asof'])}',
+            style: mono.copyWith(fontSize: 10)),
+        footnote:
+            'end-of-day bhavcopy · OI in contracts · lot ${n0(lot as num?)} · PCR = put OI ÷ call OI · max pain = strike where option writers pay least',
+        children: [
+          const SizedBox(height: 8),
+          pillRow([
+            for (var k = 0; k < exps.length; k++)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: filterPill(dmy(exps[k]['e']), k == i, amber, () => setState(() {
+                      _exp = k;
+                      _all = false;
+                    })),
+              ),
+          ]),
+          if (fut != null) ...[
+            const SizedBox(height: 10),
+            LedgerRow(
+                lead: 'FUTURE',
+                main: 'prev ₹${px(fut[1])} · OI ${n0(fut[2])} (${signed(fut[3])}) · vol ${n0(fut[4])}',
+                trail: '₹${px(fut[0])}',
+                trailColor: (fut[0] ?? 0) >= (fut[1] ?? 0) ? green : red),
+          ],
+          if (strikes.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            StatGrid([
+              StatTile('PCR', st.pcr == null ? '—' : st.pcr!.toStringAsFixed(2),
+                  color: (st.pcr ?? 0) >= 1 ? green : red,
+                  sub: (st.pcr ?? 0) >= 1 ? 'puts lead' : 'calls lead'),
+              StatTile('Max call OI', '₹${n0(st.maxCe)}', sub: 'resistance'),
+              StatTile('Max put OI', '₹${n0(st.maxPe)}', sub: 'support'),
+              StatTile('Max pain', '₹${n0(st.maxPain)}', sub: 'expiry magnet'),
+              if (und != null) StatTile('Spot', '₹${fmtNum(und)}'),
+              StatTile('Strikes', '${strikes.length}', sub: 'with OI'),
+            ]),
+            const SizedBox(height: 10),
+            LedgerTable(const [
+              LtCol('Call OI'),
+              LtCol('Δ'),
+              LtCol('Call ₹'),
+              LtCol('Strike'),
+              LtCol('Put ₹'),
+              LtCol('Δ'),
+              LtCol('Put OI'),
+            ], [
+              for (final s in shown)
+                (
+                  cells: [n0(s[2]), signed(s[3]), px(s[1]), n0(s[0]), px(s[5]), signed(s[7]), n0(s[6])],
+                  tone: und != null && s[0]! >= und ? 1 : -1,
+                  onTap: null,
+                ),
+            ], toneCol: 3),
+            if (shown.length < strikes.length || _all)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: filterPill(_all ? 'AROUND THE MONEY' : 'SHOW ALL ${strikes.length} STRIKES',
+                    false, green, () => setState(() => _all = !_all)),
+              ),
+          ],
+        ]);
+  }
+}
+
+/// Markets › INDEX OPTIONS: NIFTY / BANKNIFTY / FINNIFTY / MIDCPNIFTY pills,
+/// each chain fetched when picked (never part of the Markets poll).
+class IndexChainPanel extends StatefulWidget {
+  const IndexChainPanel({super.key, required this.fetch});
+  final Future<Map<String, dynamic>?> Function(String symbol) fetch;
+  static const indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'];
+
+  @override
+  State<IndexChainPanel> createState() => _IndexChainPanelState();
+}
+
+class _IndexChainPanelState extends State<IndexChainPanel> {
+  String _idx = IndexChainPanel.indices.first;
+  late Future<Map<String, dynamic>?> _f = widget.fetch(_idx);
+
+  @override
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        pillRow([
+          for (final s in IndexChainPanel.indices)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: filterPill(s, s == _idx, green, () => setState(() {
+                    _idx = s;
+                    _f = widget.fetch(s);
+                  })),
+            ),
+        ]),
+        FutureBuilder(
+            future: _f,
+            builder: (_, snap) => snap.connectionState != ConnectionState.done
+                ? Padding(padding: const EdgeInsets.all(12), child: appSpinner())
+                : snap.data == null
+                    ? Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text('$_idx chain not published yet — it lands with the evening bhavcopy',
+                            style: mono.copyWith(fontSize: 12)))
+                    : ChainSection(snap.data!, title: '$_idx options')),
+      ]);
+}
+
+// ---------------- 034: corporate actions ----------------
+
+const actionLabel = {
+  'dividend': 'DIVIDEND', 'bonus': 'BONUS', 'split': 'SPLIT', 'rights': 'RIGHTS',
+  'buyback': 'BUYBACK', 'agm': 'AGM', 'egm': 'EGM', 'board_meeting': 'BOARD MEET', 'other': 'OTHER',
+};
+
+/// DATE · SYMBOL · EVENT · DETAIL rows from `corp_actions` items (+ meetings).
+LedgerTable actionsTable(List<Map<String, dynamic>> items, {void Function(String)? onTap, bool symbol = true, int initial = 12}) {
+  final today = DateTime.now().toIso8601String().substring(0, 10);
+  return LedgerTable([
+    const LtCol('Date', right: false),
+    if (symbol) const LtCol('Symbol', right: false),
+    const LtCol('Event', right: false),
+    const LtCol('Detail', right: false, text: true),
+  ], [
+    for (final a in items)
+      (
+        cells: [
+          dmy(a['ex']),
+          if (symbol) '${a['symbol']}',
+          actionLabel[a['kind']] ?? '${a['kind']}'.toUpperCase(),
+          '${a['detail'] ?? a['subject'] ?? a['purpose'] ?? ''}',
+        ],
+        tone: '${a['ex']}'.compareTo(today) >= 0 ? 1 : 0,
+        onTap: onTap == null || a['symbol'] == null ? null : () => onTap('${a['symbol']}'),
+      ),
+  ], toneCol: 0, initial: initial);
+}
+
 /// 033: all-time / 52-week records from the screener row (+ its `sa` jsonb).
 List<Widget> recordRows(Map<String, dynamic> row) {
   final sa = (row['sa'] as Map?)?.cast<String, dynamic>() ?? const {};

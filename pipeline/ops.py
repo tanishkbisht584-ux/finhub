@@ -63,7 +63,8 @@ BLOB_CONTENT_MAX_H = {"bonds": 120, "flows": 120,
                       "participant_oi": 120,  # NSE file date; long weekend + holiday
                       "shipping": 240,  # PortWatch publishes ~5 days behind
                       "freight": 312,  # SCFI/CCFI weekly Friday + lag budget
-                      "monsoon": 48}
+                      "monsoon": 48,
+                      "corp_actions": 30}  # hourly nse group stamps asof = today
 GROUP_FAILS = 3      # interval group: consecutive failures before it's a problem
                      # (daily groups alert on a single failure — one miss = a lost day)
 # Storage (26 Sep 2026: the free plan's 500 MB cap was hit at 692 MB and the
@@ -122,7 +123,7 @@ def blob_content_age_h(key, payload, now):
     elif key in ("flows", "participant_oi"):
         dates = [_parse_obs_date((payload or {}).get("date"))]
     elif key in ("macro_context", "cb_rates", "calendar", "shipping", "monsoon",
-                 "freight"):
+                 "freight", "corp_actions"):
         dates = [_parse_obs_date((payload or {}).get("asof"))]
     elif key in ("trending", "move_context"):  # our own build clock, full ISO
         try:
@@ -206,7 +207,8 @@ def gather(repo, gh_token, deep=False):
         ages = {}
         for t, tbl, col in (("fundamentals", "fundamentals", "updated_at"),
                             ("screener_metrics", "screener_metrics", "updated_at"),
-                            ("stockanalysis", "screener_metrics", "sa_at")):
+                            ("stockanalysis", "screener_metrics", "sa_at"),
+                            ("fno_chain", "fno_chain", "updated_at")):  # 034, daily with bhav
             r2 = sb("GET", f"{tbl}?select={col}&order={col}.desc.nullslast&limit=1")
             if r2 and r2[0].get(col):
                 ages[t] = _age_h(r2[0][col], now)
@@ -459,8 +461,8 @@ def evaluate(f):
                  "market layer keeps running; this data goes stale until fixed.", "market", "market")
         for t, age in (f.get("fund_age_h") or {}).items():
             owners = {"fundamentals": {"deep_warm", "deep_new", "deep_drain"},
-                      "stockanalysis": {"stockanalysis"}}.get(t, {"screener"})
-            lim = SA_MAX_AGE_H if t == "stockanalysis" else FUND_MAX_AGE_H
+                      "stockanalysis": {"stockanalysis"}, "fno_chain": {"bhav"}}.get(t, {"screener"})
+            lim = SA_MAX_AGE_H if t == "stockanalysis" else 100 if t == "fno_chain" else FUND_MAX_AGE_H
             if age > lim and not owners & off:
                 prob(f"{t} stale", f"Newest {t} row is {age:.0f}h old (refreshes daily) — the screener "
                      "and stock pages are serving stale numbers.", "market", "market")

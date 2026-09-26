@@ -88,11 +88,12 @@ def test_refresh_bhav_writes_tape_for_known_symbols_and_fno(monkeypatch):
         posts.append(kw["json"])
 
     monkeypatch.setattr(market, "upsert", lambda sb_, rows, table, key: posts.append(rows) or len(rows))
-    assert bhav.refresh_bhav(sb, NOW, day=date(2026, 9, 18)) == 2
-    tape, fno = posts
+    assert bhav.refresh_bhav(sb, NOW, day=date(2026, 9, 18)) == 3
+    tape, fno, chain = posts                                            # 034: + the full chain
     assert [r["symbol"] for r in tape] == ["TCS"]                      # EQ only, known only
     assert [e["date"] for e in tape[0]["tape"]["d"]] == ["2026-09-18", "2026-09-17"]
     assert [r["symbol"] for r in fno] == ["TCS"] and fno[0]["fno"]["futures"][0]["expiry"] == "2026-09-29"
+    assert [r["symbol"] for r in chain] == ["TCS"] and chain[0]["data"]["exp"][0]["e"] == "2026-09-29"
 
 
 def test_group_registered_daily():
