@@ -125,8 +125,8 @@ with tab_flush:
     flush("Duplicate + rejected cards", f"status in ('duplicate','rejected') and created_at < now() - interval '{d1} days'",
           "dup")
     d2 = st.number_input("approved older than (days)", 1, 365, int(effective_knob("APPROVED_RETENTION_DAYS")))
-    flush("Approved cards (saved ones are kept)",
-          f"status = 'approved' and created_at < now() - interval '{d2} days' and id not in (select story_id from saves)",
+    flush("Approved cards (saved stories live on the phone, unaffected)",
+          f"status = 'approved' and created_at < now() - interval '{d2} days'",
           "appr", export_cols=EXPORT_COLS)
     flush("Cards in any other status (pending / flagged / …) older than 30 days",
           "status not in ('approved','duplicate','rejected') and created_at < now() - interval '30 days'", "other")

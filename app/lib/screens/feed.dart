@@ -1541,10 +1541,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
     super.dispose();
   }
 
-  bool _isSavedNow() {
-    final known = ref.read(savedProvider).valueOrNull;
-    return _pendingSave ?? (known?.any((s) => s.id == story.id) ?? false);
-  }
+  bool _isSavedNow() =>
+      _pendingSave ?? ref.read(savedProvider).any((s) => s.id == story.id);
 
   /// Toggles. Optimistic in both directions: the icon flips the instant you
   /// tap and only reverts if the write actually fails. Waiting on a network
@@ -1560,22 +1558,14 @@ class _StoryCardState extends ConsumerState<StoryCard>
     setState(() => _pendingSave = !was);
     HapticFeedback.selectionClick();
     if (!was && viaDoubleTap) _burst.forward(from: 0);
-    try {
-      final saves = Supabase.instance.client.from('saves');
-      if (was) {
-        await saves.delete().eq('user_id', user.id).eq('story_id', story.id);
-      } else {
-        await saves.upsert({'user_id': user.id, 'story_id': story.id});
-        track('save', {'story_id': story.id});
-      }
-      // The Saved tab reads its own provider; without this it kept serving the
-      // list it fetched on first open and the change never appeared there.
-      ref.invalidate(savedProvider);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _pendingSave = was); // never leave a lie on screen
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not ${was ? 'remove' : 'save'}: $e')));
+    // 26 Sep: saves live on the phone (saved_store.dart) — no round trip, no
+    // failure path worth a SnackBar. The events row is what the admin counts.
+    final store = ref.read(savedProvider.notifier);
+    if (was) {
+      await store.unsave(story.id);
+    } else {
+      await store.save(story);
+      track('save', {'story_id': story.id});
     }
   }
 
@@ -1734,9 +1724,8 @@ class _StoryCardState extends ConsumerState<StoryCard>
     final dir = directionColor(story.impactDirection);
     // The optimistic flag only knows about taps in this session; the saved list
     // is the source of truth, so a story saved earlier still shows filled.
-    final known = ref.watch(savedProvider).valueOrNull;
     final isSaved =
-        _pendingSave ?? (known?.any((s) => s.id == story.id) ?? false);
+        _pendingSave ?? ref.watch(savedProvider).any((s) => s.id == story.id);
     // top: false — the hero bleeds behind the status bar; _CardHero pads the
     // IMPACT line by the inset itself.
     return SafeArea(

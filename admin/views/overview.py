@@ -20,7 +20,7 @@ C = counts(tuple([
     f"stories?status=eq.approved&impact_score=gte.6&impact_score=lte.7&created_at=gte.{t}",
     f"stories?status=eq.approved&impact_score=gte.4&impact_score=lte.5&created_at=gte.{t}",
     f"stories?status=eq.approved&impact_score=lte.3&created_at=gte.{t}",
-    f"events?type=eq.view&created_at=gte.{week}", f"saves?saved_at=gte.{week}",
+    f"events?type=eq.view&created_at=gte.{week}", f"events?type=eq.save&created_at=gte.{week}",
     f"events?type=eq.share&created_at=gte.{week}", f"events?type=eq.alert_open&created_at=gte.{week}",
     f"events?type=eq.deep_read&created_at=gte.{week}", f"events?type=eq.qa_ask&created_at=gte.{week}",
     f"stories?created_at=gte.{t}", f"stories?status=eq.approved&created_at=gte.{t}",
@@ -153,10 +153,10 @@ with mc3:
 
 rd1, rd2 = st.columns(2)
 with rd1:
-    section("Readers · 7 days", "from the events table; saves from the saves table")
+    section("Readers · 7 days", "from the events table (saves live on the phone since 26 Sep; the save event still lands)")
     pct = lambda n: f" ({n * 100 // views}%)" if views else ""  # noqa: E731
     deep, asks = C[f"events?type=eq.deep_read&created_at=gte.{week}"], C[f"events?type=eq.qa_ask&created_at=gte.{week}"]
-    saves, shares = C[f"saves?saved_at=gte.{week}"], C[f"events?type=eq.share&created_at=gte.{week}"]
+    saves, shares = C[f"events?type=eq.save&created_at=gte.{week}"], C[f"events?type=eq.share&created_at=gte.{week}"]
     kv_rows([("Cards read", views), ("Readers", readers), ("Profiles (all)", C["profiles?select=id"]),
              ("Deep reads", f"{deep}{pct(deep)}"), ("Asks", asks),
              ("Saved", f"{saves}{pct(saves)}"), ("Shared", f"{shares}{pct(shares)}"),

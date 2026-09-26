@@ -1352,7 +1352,7 @@ QA_CACHE_RETENTION_DAYS = 7   # 2026-09-13: never pruned before. Answers are val
 def retention_sweep():
     """Delete events older than EVENTS_RETENTION_DAYS, rejected/duplicate cards
     older than REJECTED_RETENTION_DAYS and approved cards older than
-    APPROVED_RETENTION_DAYS (saved ones never). The cutoff is truncated to the
+    APPROVED_RETENTION_DAYS. The cutoff is truncated to the
     day, so the first run after midnight does the real delete and every other
     run that day matches nothing — a once-per-day guard with no state."""
     def day_cutoff(days):
@@ -1368,11 +1368,9 @@ def retention_sweep():
         sb("DELETE", f"stories?status=eq.rejected&created_at=lt.{rej}")
         sb("DELETE", f"stories?status=eq.duplicate&created_at=lt.{rej}")
         # Approved cards age out too (26 Sep: 28k unreachable rows were 40% of
-        # the table). Saved stories stay — the ids ride in the URL filter.
-        # ponytail: switch to an RPC if saves ever pass ~2k rows.
-        saved = sorted({str(r["story_id"]) for r in sb("GET", "saves?select=story_id")})
-        keep = f"&id=not.in.({','.join(saved)})" if saved else ""
-        sb("DELETE", f"stories?status=eq.approved&created_at=lt.{day_cutoff(APPROVED_RETENTION_DAYS)}{keep}")
+        # the table). Saved stories are the phone's copy (app saved_store.dart),
+        # so nothing here needs to be kept for them.
+        sb("DELETE", f"stories?status=eq.approved&created_at=lt.{day_cutoff(APPROVED_RETENTION_DAYS)}")
         # run/edge logs: 1 run row per loop iteration (~1900/day) would eat the
         # free tier in months — keep failures 14 d, healthy runs 48 h, edge 30 d
         now = datetime.now(timezone.utc)

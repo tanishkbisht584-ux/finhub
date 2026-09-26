@@ -56,7 +56,7 @@ with tab_one:
         kv_rows([("Cards viewed", ev["view"]), ("Shares", ev["share"]), ("Alert opens", ev["alert_open"]),
                  ("Asks (cap)", f"{ev['qa_ask']} / {edge_cap}"),
                  ("Deep reads generated (cap)", f"{ev['deep_read']} / {edge_cap}"),
-                 ("Saved stories (all time)", count(f"saves?user_id=eq.{uid}")),
+                 ("Saves (events, 90 d)", count(f"events?type=eq.save&user_id=eq.{uid}")),
                  ("App version", p.get("app_version") or "—"),
                  ("Last seen", (ago(p["last_seen_at"]) + " ago") if p.get("last_seen_at") else "—")])
         follows = sb("GET", f"follows?select=target_type,target_id&user_id=eq.{uid}&order=target_type")

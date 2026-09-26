@@ -15,6 +15,13 @@ class Outlet {
         url = j['source_url'] ?? '',
         publishedAt = DateTime.tryParse(j['published_at'] ?? ''),
         headline = j['headline'];
+
+  Map<String, dynamic> toJson() => {
+        'source_name': name,
+        'source_url': url,
+        'published_at': publishedAt?.toIso8601String(),
+        'headline': headline,
+      };
 }
 
 /// "The story so far": the cluster's episodes, oldest first, deduped by
@@ -283,6 +290,37 @@ class Story {
         whatsNext = j['whats_next'],
         claimStatus = j['claim_status'],
         isFeatured = j['is_featured'] == true;
+
+  /// Inverse of [Story.fromJson] (26 Sep: saved stories persist on the phone
+  /// as raw rows, the same shape the feed cache stores).
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'hook': hook,
+        'headline': headline,
+        'summary': summary,
+        'impact_direction': impactDirection,
+        'impact_strength': impactStrength,
+        'impact_horizon': impactHorizon,
+        'impact_score': impactScore,
+        'severity_level': severityLevel,
+        'confidence': confidence,
+        'source_name': sourceName,
+        'source_url': sourceUrl,
+        'category': category,
+        'sectors': sectors,
+        'image_url': imageUrl,
+        'video_url': videoUrl,
+        'cluster_id': clusterId,
+        'published_at': publishedAt?.toIso8601String(),
+        'outlets': [for (final o in outlets) o.toJson()],
+        'timeline': [for (final o in timeline) o.toJson()],
+        'companies': [for (final c in companies) c.toJson()],
+        'why_it_matters': whyItMatters,
+        'winners_losers': winnersLosers,
+        'whats_next': whatsNext,
+        'claim_status': claimStatus,
+        'is_featured': isFeatured,
+      };
 }
 
 class QaSource {
@@ -352,6 +390,8 @@ class Company {
       : id = j['id'],
         name = j['name'] ?? '',
         nseSymbol = j['nse_symbol'] ?? '';
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'nse_symbol': nseSymbol};
 }
 
 /// Parsed from Yahoo's keyless /v8/finance/chart/ endpoint. Deliberately only
