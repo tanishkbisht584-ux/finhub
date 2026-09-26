@@ -42,6 +42,7 @@ NAV = {
                    ("market", "Markets", ":material/candlestick_chart:"),
                    ("alerts", "Alerts", ":material/notifications_active:"),
                    ("ai", "AI", ":material/psychology:"),
+                   ("storage", "Storage", ":material/database:"),
                    ("doctor", "Doctor", ":material/stethoscope:")],
     "People": [("users", "Users", ":material/group:")],
     "Settings": [("integrations", "Integrations", ":material/hub:"),
@@ -87,7 +88,8 @@ FIX_HELP = {
     "platform": ("Supabase status page", "https://status.supabase.com"),
     "edge": ("Edge functions dashboard", f"https://supabase.com/dashboard/project/{PROJECT_REF}/functions"),
 }
-PAGE_FOR = {"logs": ("pipeline", "Pipeline · last run + stdout"),
+PAGE_FOR = {"storage": ("storage", "Storage · sizes + flush"),
+            "logs": ("pipeline", "Pipeline · last run + stdout"),
             "keys": ("ai", "AI · keys + lanes"),
             "review": ("review", "Review · pending + flagged"),
             "switch": ("pipeline", "Pipeline · switches"),

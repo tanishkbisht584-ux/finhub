@@ -1456,3 +1456,32 @@ def test_ops_blob_content_age_grades_frozen_upstreams():
     assert [(p["name"], p["fix"], p["area"]) for p in v["problems"]] == \
         [("blob content frozen", "market", "market")]
     assert "bonds" in v["problems"][0]["msg"] and "flows" not in v["problems"][0]["msg"]
+
+
+def test_ops_storage_thresholds_and_vacuum_gate():
+    """26 Sep: the watchdog watches pg_database_size through storage_stats()
+    (031). Soft line = alarm, hard line = urgent wording, bloat = a note; the
+    self-heal only fires with the token, off-hours, once a day, when it will
+    actually free space."""
+    import ops
+    from datetime import datetime, timedelta, timezone
+    base = {"errors": {}, "approved_age": 0.5, "ingested_age": 0.2, "top_age": 1.0, "flagged_hour": 0,
+            "switches": {}, "last_run_ok": True, "edge_calls": 10, "edge_failed": 1}
+    st = lambda mb, dead: {"db_mb": mb, "tables": [{"name": "stories", "rows": 1000, "dead": dead}]}  # noqa: E731
+    assert not [p for p in ops.evaluate({**base, "storage": st(355, 10)})["problems"] if p["name"] == "db size"]
+    soft = [p for p in ops.evaluate({**base, "storage": st(420, 10)})["problems"] if p["name"] == "db size"]
+    assert soft and soft[0]["fix"] == "storage" and "URGENT" not in soft[0]["msg"]
+    hard = [p for p in ops.evaluate({**base, "storage": st(480, 10)})["problems"] if p["name"] == "db size"]
+    assert hard and "URGENT" in hard[0]["msg"]
+    assert any("dead rows" in n for n in ops.evaluate({**base, "storage": st(355, 400)})["notes"])
+    assert ops.dead_ratio(st(1, 250), "stories") == 0.25 and ops.dead_ratio(st(1, 1), "nope") == 0
+
+    f = {"storage": st(420, 400)}
+    night = datetime(2026, 9, 28, 22, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    day = datetime(2026, 9, 28, 11, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    assert ops.vacuum_due(f, night, True, None) == ["stories"]
+    assert ops.vacuum_due(f, day, True, None) == []                       # market hours
+    assert ops.vacuum_due(f, night, False, None) == []                    # no token
+    assert ops.vacuum_due(f, night, True, night - timedelta(hours=3)) == []  # already today
+    assert ops.vacuum_due({"storage": st(300, 400)}, night, True, None) == []  # under the soft line
+    assert ops.vacuum_due({"storage": st(420, 10)}, night, True, None) == []   # nothing to reclaim

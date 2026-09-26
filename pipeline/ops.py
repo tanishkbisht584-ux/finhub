@@ -66,6 +66,16 @@ BLOB_CONTENT_MAX_H = {"bonds": 120, "flows": 120,
                       "monsoon": 48}
 GROUP_FAILS = 3      # interval group: consecutive failures before it's a problem
                      # (daily groups alert on a single failure — one miss = a lost day)
+# Storage (26 Sep 2026: the free plan's 500 MB cap was hit at 692 MB and the
+# project was one grace period from read-only). storage_stats() (031) is
+# read every pass; the watchdog reclaims disk itself when it holds the
+# Management API token, else it only raises the alarm.
+DB_CAP_MB = 500      # Supabase free plan
+DB_SOFT_MB = 400     # alert: open Storage and flush
+DB_HARD_MB = 470     # urgent wording
+DEAD_RATIO = 0.25    # dead/live rows in `stories` above this: VACUUM FULL is worth its lock
+VACUUM_TABLES = ("stories", "fundamentals")  # the only two big enough to matter
+PROJECT_REF = "hdgfdswzymfqgjqzqqve"
 
 
 def ops_push(title, body):
@@ -208,6 +218,12 @@ def gather(repo, gh_token, deep=False):
     except Exception as e:  # noqa: BLE001
         f["errors"]["fund"] = str(e)
 
+    # database size vs the free cap (031 RPC; absent before the migration = unknown)
+    try:
+        f["storage"] = sb("POST", "rpc/storage_stats", json={})
+    except Exception as e:  # noqa: BLE001
+        f["errors"]["storage"] = str(e)
+
     # our own run log (migration 010) — absent pre-migration, that's fine
     try:
         runs = sb("GET", "pipeline_runs?select=id,started_at,finished_at,ok,counts,errors"
@@ -323,6 +339,21 @@ def evaluate(f):
     if f.get("private"):
         prob("repo private", "Repo is PRIVATE — Actions free minutes will run out within a day; "
              "make it public or the pipeline stops.", "repo")
+    st_ = f.get("storage") or {}
+    db_mb = st_.get("db_mb")
+    if db_mb is not None:
+        if db_mb >= DB_HARD_MB:
+            prob("db size", f"Database {db_mb:.0f} MB of {DB_CAP_MB} — URGENT: the free plan goes READ-ONLY "
+                 "over the cap (login, feed, portfolio all freeze). Open Storage and flush now.",
+                 "storage", "supabase")
+        elif db_mb >= DB_SOFT_MB:
+            prob("db size", f"Database {db_mb:.0f} MB of {DB_CAP_MB} — heading for the free-plan cap; "
+                 "open Storage, flush old cards, reclaim disk.", "storage", "supabase")
+        for t in VACUUM_TABLES:
+            r = dead_ratio(st_, t)
+            if r >= DEAD_RATIO:
+                notes.append(f"{t} is {r:.0%} dead rows — Reclaim disk on the Storage page (or the watchdog "
+                             "does it off-hours when it holds the Management API token)")
     if f.get("crash_loop"):
         prob("crash loop", "Pipeline is CRASH-LOOPING (3 straight failed runs) — restarting won't help. "
              f"Likely a broken secret, dependency, or commit. Logs: {f.get('last_gh_url')}", "logs")
@@ -479,6 +510,66 @@ def evaluate(f):
     return {"problems": p, "notes": notes, "dispatch": dispatch}
 
 
+# ---------- storage self-heal ----------
+
+def dead_ratio(storage, table):
+    """dead / live rows for one table from storage_stats(), 0 when unknown."""
+    for t in (storage or {}).get("tables") or []:
+        if t.get("name") == table and (t.get("rows") or 0) > 0:
+            return (t.get("dead") or 0) / t["rows"]
+    return 0.0
+
+
+def vacuum_due(f, now, token_present, last_at):
+    """Which tables the watchdog should VACUUM FULL this pass: only with the
+    Management API token, only outside NSE hours (the lock pauses the feed for
+    ~1 min), at most once a day, and only when it will actually free space
+    (db over the soft line AND a bloated table). Pure for the tests."""
+    if not token_present:
+        return []
+    ist = now.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    if 9 <= ist.hour < 16 and ist.weekday() < 5:
+        return []
+    if last_at and (now - last_at) < timedelta(hours=20):
+        return []
+    st_ = f.get("storage") or {}
+    if (st_.get("db_mb") or 0) < DB_SOFT_MB:
+        return []
+    return [t for t in VACUUM_TABLES if dead_ratio(st_, t) >= DEAD_RATIO]
+
+
+def mgmt_sql(sql, token, timeout=600):
+    r = requests.post(f"https://api.supabase.com/v1/projects/{PROJECT_REF}/database/query",
+                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                      json={"query": sql}, timeout=timeout)
+    r.raise_for_status()
+    return r.json() if r.text else []
+
+
+def storage_self_heal(f, now):
+    """VACUUM FULL the bloated tables when vacuum_due says so; returns the
+    healed lines. Stamps app_config.pipeline.storage_vacuumed_at."""
+    token = os.environ.get("SUPABASE_ACCESS_TOKEN", "")
+    cfg = load_config()
+    last = cfg.get("storage_vacuumed_at")
+    last_at = datetime.fromisoformat(last) if last else None
+    due = vacuum_due(f, now, bool(token), last_at)
+    if not due:
+        return []
+    before = (f.get("storage") or {}).get("db_mb")
+    for t in due:
+        mgmt_sql(f"vacuum full {t}; analyze {t};", token)
+    after = (sb("POST", "rpc/storage_stats", json={}) or {}).get("db_mb")
+    sb("PATCH", "app_config?key=eq.pipeline", json={"value": {**cfg, "storage_vacuumed_at": iso(now)}})
+    line = f"VACUUM FULL {', '.join(due)}: database {before:.0f} → {after:.0f} MB" if before and after \
+        else f"VACUUM FULL {', '.join(due)}"
+    try:
+        ops_push("FinFlick storage", line)
+    except Exception as e:  # noqa: BLE001
+        print("ops push failed:", e)
+    return [line]
+
+
 # ---------- main: the hourly watchdog ----------
 
 def main():
@@ -496,6 +587,10 @@ def main():
     v = evaluate(f)
     needs_you = [p["msg"] for p in v["problems"]]
     healed = []
+    try:
+        healed += storage_self_heal(f, datetime.now(timezone.utc))
+    except Exception as e:  # noqa: BLE001
+        print("storage self-heal failed:", e)
     if v["dispatch"]:
         call(gh + "/actions/workflows/pipeline.yml/dispatches", "POST", json={"ref": "main"})
         healed.append(f"nothing ingested in {f.get('ingested_age', 0):.1f}h and no run was active — "
