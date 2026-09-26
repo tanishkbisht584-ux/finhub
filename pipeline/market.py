@@ -774,7 +774,7 @@ def refresh_analysis_all(sb, now):
     # the audit (20 Sep) found meta.t on 45% of the sample only: the same
     # batch gets its technicals from the 1y chart, so TECHNICALS is populated
     # for the whole universe too (one chart call per symbol per day).
-    t_updates = fetch_technicals_for(needs_refresh(batch, existing, "t_at", now))
+    t_updates = fetch_technicals_for(needs_refresh(batch, existing, "t_at", now), sb=sb)
     return n + (merge_meta(sb, t_updates, "t", now) if t_updates else 0)
 
 
@@ -876,22 +876,34 @@ def compute_technicals(closes, volumes):
     return t
 
 
-def fetch_technicals_for(symbols):
-    """{symbol: computed t-dict} from the 1y daily chart, one call per symbol."""
-    updates = {}
+def fetch_technicals_for(symbols, sb=None):
+    """{symbol: computed t-dict} from the 1y daily chart, one call per symbol.
+    With `sb`, the same payload also feeds price_history (032) — the close
+    series used to be thrown away here; history.update merges it in-database."""
+    updates, series = {}, {}
     for sym in symbols:
         try:
             r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS",
                              params={"range": "1y", "interval": "1d"},
                              headers=BROWSER_UA, timeout=TIMEOUT)
             r.raise_for_status()
-            q = r.json()["chart"]["result"][0]["indicators"]["quote"][0]
+            j = r.json()
+            q = j["chart"]["result"][0]["indicators"]["quote"][0]
             t = compute_technicals(q.get("close"), q.get("volume"))
             if t:
                 updates[sym] = t
+            if sb is not None:
+                import history
+                series[sym] = history.series_of(j, IST)
         except Exception as e:
             print(f"MARKET technicals {sym}: {e}")
         time.sleep(0.3)
+    if series:
+        try:
+            import history
+            history.update(sb, series, IST, BROWSER_UA, TIMEOUT)
+        except Exception as e:  # noqa: BLE001 — history is a side channel, never blocks meta.t
+            print(f"MARKET history: {e}")
     return updates
 
 
@@ -900,7 +912,9 @@ def refresh_technicals(sb, now):
     existing = {r["symbol"]: (r.get("meta") or {}) for r in
                 sb("GET", "quotes?select=symbol,meta&kind=eq.equity")}
     updates = fetch_technicals_for(
-        needs_refresh([s for s, _ in universe], existing, "t_at", now))
+        needs_refresh([s for s, _ in universe], existing, "t_at", now), sb=sb)
+    import history
+    history.refresh_calendar(sb, IST, BROWSER_UA)  # ^NSEI row with dates, daily
     return merge_meta(sb, updates, "t", now) if updates else 0
 
 
@@ -939,7 +953,7 @@ def refresh_analysis_new(sb, now):
     f_updates = fetch_fundamentals_for(needs_refresh(todo, existing, "f_at", now))
     if f_updates:
         n += merge_meta(sb, f_updates, "f", now)
-    t_updates = fetch_technicals_for(needs_refresh(todo, existing, "t_at", now))
+    t_updates = fetch_technicals_for(needs_refresh(todo, existing, "t_at", now), sb=sb)
     if t_updates:
         n += merge_meta(sb, t_updates, "t", now)
     return n

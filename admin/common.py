@@ -467,6 +467,8 @@ def knob_default(key):
     run, ai = pipeline_mod(), ai_mod()
     if key == "AI_RPM_PER_LANE":
         return ai.RPM_PER_LANE
+    if key == "AI_CALLS_PER_HOUR":
+        return ai.AI_CALLS_PER_HOUR
     if key == "GEMINI_MODELS":
         return ai.GEMINI_MODELS
     for _, _, model_env, models in ai.FALLBACKS:

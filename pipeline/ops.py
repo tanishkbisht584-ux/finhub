@@ -211,6 +211,10 @@ def gather(repo, gh_token, deep=False):
             if r2 and r2[0].get(col):
                 ages[t] = _age_h(r2[0][col], now)
         f["fund_age_h"] = ages
+        try:  # 032: absent before the migration = unknown, the check stays silent
+            f["history_rows"] = len(sb("GET", "price_history?select=symbol"))
+        except Exception as e:  # noqa: BLE001
+            f["errors"]["history"] = str(e)
         rows = sb("GET", "app_config?select=value,updated_at&key=eq.fund_audit")
         if rows:  # the fundamentals-panel completeness rollup (deep_warm writes it daily)
             f["fund_audit"] = rows[0]["value"] or {}
@@ -235,7 +239,10 @@ def gather(repo, gh_token, deep=False):
             f["last_run_id"] = done[0]["id"]
             f["last_run_errors"] = done[0].get("errors") or []
             cycles = [r for r in done if r.get("counts")]
-            starved = [r for r in cycles if (r["counts"].get("quota_blocked") or 0) > 0]
+            # 26 Sep 2026: ai.py now paces calls per hour, so "some deferred" is
+            # the normal state; starved means a cycle got NOTHING through.
+            starved = [r for r in cycles if (r["counts"].get("quota_blocked") or 0) > 0
+                       and not (r["counts"].get("processed") or 0)]
             f["starved_cycles"] = f"{len(starved)}/{len(cycles)}"
             f["starved"] = bool(cycles) and len(starved) >= len(cycles) / 2
         stuck = [r for r in runs if not r["finished_at"] and _age_h(r["started_at"], now) * 60 > RUN_STUCK_MIN]
@@ -357,6 +364,9 @@ def evaluate(f):
     if f.get("crash_loop"):
         prob("crash loop", "Pipeline is CRASH-LOOPING (3 straight failed runs) — restarting won't help. "
              f"Likely a broken secret, dependency, or commit. Logs: {f.get('last_gh_url')}", "logs")
+    if f.get("history_rows") == 0:
+        prob("history empty", "price_history (032) exists but holds no rows — the technicals pass "
+             "should fill it every lap; look for 'MARKET history' lines in the run log", "market", "market")
     if f.get("starved"):
         prob("ai starved", f"AI STARVED: {f.get('starved_cycles')} recent cycles deferred stories for lack of "
              "quota — keys exhausted or the secrets hold a single key (GEMINI_API_KEY / GROQ_API_KEY are "

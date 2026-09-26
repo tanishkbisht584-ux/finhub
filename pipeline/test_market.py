@@ -1508,7 +1508,7 @@ def test_refresh_analysis_all_creates_rows_then_refreshes_oldest(monkeypatch):
                         lambda syms, rng="5d": {"NEW.NS": {"close": [9.0, 10.0], "timestamp": [1, 2]}})  # GONE.NS: no data
     fetched, tech = [], []
     monkeypatch.setattr(market, "fetch_fundamentals_for", lambda syms: fetched.extend(syms) or {s: {"pe": 1} for s in syms})
-    monkeypatch.setattr(market, "fetch_technicals_for", lambda syms: tech.extend(syms) or {s: {"rsi14": 50} for s in syms})
+    monkeypatch.setattr(market, "fetch_technicals_for", lambda syms, **kw: tech.extend(syms) or {s: {"rsi14": 50} for s in syms})
     writes = []
     monkeypatch.setattr(market, "upsert", lambda sb_, rows, **k: writes.append(rows) or len(rows))
     assert market.refresh_analysis_all(sb, NOW) == 4

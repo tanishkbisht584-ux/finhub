@@ -88,7 +88,7 @@ BUILD_TIME = [
     ("POSTHOG project token", "app (const in source)", "app/lib/analytics.dart"),
     ("APP_VERSION", "app (dart-define at build)", "app/lib/theme.dart"),
 ]
-MODEL_KNOBS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL", "AI_RPM_PER_LANE")
+MODEL_KNOBS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL", "AI_RPM_PER_LANE", "AI_CALLS_PER_HOUR")
 PLURAL = {"GEMINI_API_KEY": "GEMINI_API_KEYS", "GROQ_API_KEY": "GROQ_API_KEYS"}
 GROUP_ORDER = ["Supabase", "Gemini", "Groq", "OpenRouter", "Tavily", "Firebase", "GitHub", "News APIs", "FRED", "Custom"]
 

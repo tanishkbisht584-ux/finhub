@@ -62,6 +62,7 @@ KNOBS = ("MAX_AI_CALLS_PER_RUN", "AI_CONCURRENCY", "AI_PHASE_SECONDS", "DAILY_AI
          "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "EVENTS_RETENTION_DAYS",
          "REJECTED_RETENTION_DAYS", "APPROVED_RETENTION_DAYS", "QA_CACHE_RETENTION_DAYS")
 MODEL_ENVS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL")  # ai.py reads env at call time
+AI_KNOBS = {"AI_RPM_PER_LANE": "RPM_PER_LANE", "AI_CALLS_PER_HOUR": "AI_CALLS_PER_HOUR"}  # -> ai module globals
 SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "market")
 
 
@@ -84,9 +85,9 @@ def apply_config(cfg):
             globals()[key] = int(v)
         elif key in MODEL_ENVS:
             os.environ[key] = str(v)
-        elif key == "AI_RPM_PER_LANE":
+        elif key in AI_KNOBS:
             import ai
-            ai.RPM_PER_LANE = int(v)
+            setattr(ai, AI_KNOBS[key], int(v))
     switches = cfg.get("switches") or {}
     return {name: bool(switches.get(name, True)) for name in SWITCHES}
 

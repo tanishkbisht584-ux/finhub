@@ -5,6 +5,7 @@ No writes. Current round (Sep 2026): zero-cost sweep #3 — IBJA gold, JODI oil,
 IMF IRFCL, FAO FPI, SCFI/CCFI, BDI, SEBI/RBI RSS liveness. All answered the
 dev IP on 5 Sep; this run confirms the runner's IP.
 """
+import json
 import re
 
 import requests
@@ -68,6 +69,16 @@ r = show("stockanalysis screener", "https://stockanalysis.com/_api/endpoints/scr
 if r is not None and r.ok and r.headers.get("content-type", "").startswith("application/json"):
     d = r.json().get("data") or {}
     print("  rows:", len(d.get("data") or []), "resultsCount:", d.get("resultsCount"))
-show("stockanalysis column-meta", "https://stockanalysis.com/_api/endpoints/screener/column-meta",
-     {"type": "quote", "v": "1"})
+r = show("stockanalysis column-meta", "https://stockanalysis.com/_api/endpoints/screener/column-meta",
+         {"type": "quote", "v": "1"})
+if r is not None and r.ok:  # 26 Sep: the full id list, for the screener-breadth column pick (P1)
+    try:
+        d = r.json().get("data") or {}
+        cols = d.get("columns") if isinstance(d, dict) else d
+        items = cols.items() if isinstance(cols, dict) else [(c.get("id"), c) for c in cols or []]
+        print("  SA columns:", len(items))
+        for cid, meta in items:
+            print(f"   {cid}: {json.dumps(meta)[:110]}")
+    except Exception as e:  # noqa: BLE001
+        print("  column-meta parse failed:", e, r.text[:400])
 print("\nprobe done")

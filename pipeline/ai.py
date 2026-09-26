@@ -6,7 +6,7 @@ import pathlib
 import re
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 
 import requests
 
@@ -31,6 +31,26 @@ def _throttle(lane):
         _next_slot[lane] = slot + gap
     if slot > now:
         time.sleep(slot - now)
+
+
+# Daily quota is what actually runs out (19 Sep 2026: the whole free pool was
+# gone by 01:30 IST, then 34k cycles blocked). RPM pacing cannot see that, so
+# every call also passes a rolling-hour gate: past AI_CALLS_PER_HOUR the call
+# raises QuotaExhausted and the story simply waits for the next lap — the
+# budget is spread over 24 h instead of burnt by dawn. Default 400/h ≈ 9.6k/day,
+# under the measured pool (9 keys); admin knob AI_CALLS_PER_HOUR.
+AI_CALLS_PER_HOUR = int(os.environ.get("AI_CALLS_PER_HOUR", "400"))
+_recent = deque()        # monotonic times of calls in the last hour
+
+
+def _pace():
+    with _gate_lock:
+        now = time.monotonic()
+        while _recent and now - _recent[0] > 3600:
+            _recent.popleft()
+        if len(_recent) >= AI_CALLS_PER_HOUR:
+            raise QuotaExhausted(f"hourly pace {AI_CALLS_PER_HOUR} reached; waits for the next lap")
+        _recent.append(now)
 
 
 def usage_report():
@@ -70,8 +90,10 @@ def _split(env, default=""):
 # The two -latest aliases are Google-maintained pointers to the current
 # generation: if every named model above is ever retired, they keep the
 # pipeline alive with no code change — retirement insurance, not extra quota.
+# 26 Sep 2026: gemini-2.5-flash-lite retired (404 for new users, dead lane
+# all day); 3.6-flash and 3-flash-preview answered 200 on our keys 19 Sep.
 GEMINI_MODELS = ("gemini-3.5-flash-lite,gemini-3.1-flash-lite,"
-                 "gemini-2.5-flash-lite,gemini-3.5-flash,"
+                 "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview,"
                  "gemini-flash-lite-latest,gemini-flash-latest")
 
 _cooldown = {}      # lane -> monotonic deadline before we try it again
@@ -287,6 +309,7 @@ def _fallback_chat(prompt):
 
 
 def _gemini(prompt):
+    _pace()
     last = None
     for key, model, lane in _live_lanes():
         _throttle(lane)
@@ -365,3 +388,30 @@ def process_story(source_name, headline, body):
         except (ValueError, KeyError, json.JSONDecodeError, requests.RequestException) as e:
             last_err = str(e)[:500]
     raise AIError(last_err)
+
+
+CONCALL_PROMPT = """You are a sell-side analyst. Below is the transcript of a listed Indian
+company's earnings conference call. Return ONLY a JSON object:
+{"summary": "<120-180 words, plain English, what management said and how the quarter went>",
+ "guidance": ["<numeric or directional guidance statements, max 6>"],
+ "risks": ["<risks or headwinds management admitted, max 5>"],
+ "qa_highlights": ["<sharpest analyst question + the answer, one line each, max 5>"],
+ "sentiment": "<confident|cautious|defensive>"}
+Numbers keep their units (₹ Cr, %, bps). Never invent figures absent from the text.
+
+TRANSCRIPT:
+{text}"""
+CONCALL_CHARS = 20000   # ~5k tokens; enough for prepared remarks + first Q&A
+
+
+def summarise_transcript(text):
+    """One call → the concall card (P5 of the free-parity plan). Raises AIError
+    / QuotaExhausted like process_story; callers defer, never fabricate."""
+    out = json.loads(_gemini(CONCALL_PROMPT.replace("{text}", text[:CONCALL_CHARS])))
+    if not isinstance(out, dict) or not out.get("summary"):
+        raise AIError("concall summary malformed")
+    return {"summary": str(out["summary"])[:1500],
+            "guidance": [str(x)[:200] for x in (out.get("guidance") or [])][:6],
+            "risks": [str(x)[:200] for x in (out.get("risks") or [])][:5],
+            "qa_highlights": [str(x)[:240] for x in (out.get("qa_highlights") or [])][:5],
+            "sentiment": out.get("sentiment") if out.get("sentiment") in ("confident", "cautious", "defensive") else None}

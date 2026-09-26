@@ -298,6 +298,130 @@ def tape_shapes():
     attempt("chart-databyindex", lambda: dump("chart-databyindex TCSEQN", get("chart-databyindex", index="TCSEQN"), 400))
 
 
+def free_parity():
+    """26 Sep 2026: every upstream shape the free-parity plan (P1-P5) assumes,
+    printed once from a runner so the parsers are written against reality:
+    F&O bhav instrument codes (index contracts), corporate-action feeds,
+    balance-sheet XBRL tags (instant contexts), SHP pledge tag, SME series,
+    the BSE scrip master."""
+    import re
+    from collections import Counter
+    from datetime import date, datetime, timedelta
+
+    import requests
+
+    from bhav import fetch_fo, fetch_full
+    from market import IST
+
+    day = datetime.now(IST).date() - timedelta(days=1)
+    fo = full = None
+    for _ in range(6):
+        if fo is None:
+            fo = fetch_fo(day)
+        if full is None:
+            full = fetch_full(day)
+        if fo and full:
+            break
+        day -= timedelta(days=1)
+    print(f"\n-- bhav day {day}: fo rows {len(fo or [])}, full rows {len(full or [])}")
+    if fo:
+        print("   FinInstrmTp counts:", Counter(r.get("FinInstrmTp") for r in fo).most_common())
+        for typ in ("IDF", "IDO", "STF", "STO"):
+            row = next((r for r in fo if r.get("FinInstrmTp") == typ), None)
+            print(f"   first {typ}:", json.dumps(row)[:600] if row else None)
+        idx = [r for r in fo if r.get("TckrSymb") in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")]
+        by = {}
+        for r in idx:
+            by.setdefault((r.get("TckrSymb"), r.get("FinInstrmTp")), set()).add(r.get("XpryDt"))
+        for k, v in sorted(by.items()):
+            print(f"   {k}: {len(v)} expiries {sorted(v)[:8]}")
+        print("   distinct TckrSymb:", len({r.get("TckrSymb") for r in fo}))
+    if full:
+        print("   SERIES counts:", Counter(r.get("SERIES") for r in full).most_common())
+        sm = next((r for r in full if r.get("SERIES") in ("SM", "ST")), None)
+        print("   first SME row:", json.dumps(sm)[:400] if sm else None)
+    for u in ("https://nsearchives.nseindia.com/content/equities/SME_EQUITY_L.csv",
+              "https://nsearchives.nseindia.com/emerge/corporates/content/SME_EQUITY_L.csv",
+              "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"):
+        try:
+            r = requests.get(u, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+            print(f"   [{r.status_code}] {u} {len(r.text)} chars: {r.text[:160]!r}")
+        except Exception as e:  # noqa: BLE001
+            print(f"   FAILED {u}: {e}")
+
+    print("\n-- corporate actions feeds")
+    frm = (date.today() - timedelta(days=7)).strftime("%d-%m-%Y")
+    to = (date.today() + timedelta(days=45)).strftime("%d-%m-%Y")
+    for label, path, params in (
+            ("corporates-corporateActions", "corporates-corporateActions", {"index": "equities", "from_date": frm, "to_date": to}),
+            ("corporate-board-meetings", "corporate-board-meetings", {"index": "equities"}),
+            ("event-calendar", "event-calendar", {"index": "equities", "from_date": frm, "to_date": to}),
+            ("corporates-corporateActions (no dates)", "corporates-corporateActions", {"index": "equities"})):
+        try:
+            j = get(path, **params)
+            rows = rows_of(j)
+            print(f"   {label}: type={type(j).__name__} rows={len(rows)} top-keys={sorted(j)[:10] if isinstance(j, dict) else None}")
+            for r in rows[:3]:
+                print("     ", json.dumps(r)[:500])
+        except Exception as e:  # noqa: BLE001
+            print(f"   {label}: FAILED {e}")
+    bse = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.bseindia.com/", "Origin": "https://www.bseindia.com"}
+    for label, u, params in (
+            ("bse forthcoming corp actions", "https://api.bseindia.com/BseIndiaAPI/api/Corpforthres/w",
+             {"scripcode": "", "Fdate": "", "TDate": "", "Purposecode": "", "strSearch": "S",
+              "ddlindustrys": "", "ddlcategorys": "E", "segment": "0"}),
+            ("bse scrip master", "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w",
+             {"Group": "", "Scripcode": "", "industry": "", "segment": "Equity", "status": "Active"})):
+        try:
+            r = requests.get(u, params=params, headers=bse, timeout=30)
+            print(f"   {label}: [{r.status_code}] {r.headers.get('content-type', '?')[:30]} {len(r.text)} chars")
+            print("     ", r.text[:700].replace("\n", " "))
+        except Exception as e:  # noqa: BLE001
+            print(f"   {label}: FAILED {e}")
+
+    print("\n-- balance-sheet XBRL tags (instant contexts) + SHP pledge tag")
+    for sym in ("RELIANCE", "HDFCBANK"):
+        try:
+            rows = rows_of(get("integrated-filing-results", index="equities", symbol=sym,
+                               type="Integrated Filing- Financials", period="Quarterly"))
+        except Exception as e:  # noqa: BLE001
+            print(f"   {sym}: listing FAILED {e}")
+            continue
+        xmls = [(r.get("toDate"), r.get("xbrl")) for r in rows if (r.get("xbrl") or "").lower().endswith(".xml")]
+        print(f"   {sym}: {len(rows)} filings, {len(xmls)} with xml; newest: {xmls[:4]}")
+        for to_date, u in xmls[:3]:
+            try:
+                xml = s.get(u, timeout=25).text
+            except Exception as e:  # noqa: BLE001
+                print(f"     {u}: FAILED {e}")
+                continue
+            inst = dict(re.findall(r"<xbrli:context id=\"([^\"]+)\">.*?<xbrli:instant>([^<]+)</xbrli:instant>", xml, re.S))
+            print(f"     {to_date} {u[-60:]}: {len(inst)} instant contexts {list(inst.items())[:6]}")
+            seen = {}
+            for m in re.finditer(r"<(?:[\w.-]+:)?(\w+)[^>]*contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml):
+                name, ctx, val = m.group(1), m.group(2), m.group(3).strip()
+                if ctx in inst and val and name not in seen:
+                    seen[name] = (inst[ctx], val)
+            print(f"     {len(seen)} instant-context elements:")
+            for name, (d, val) in list(seen.items())[:120]:
+                print(f"       {name} = ({d}, {val[:30]})")
+            if seen:
+                break
+    try:
+        rows = rows_of(get("corporate-share-holdings-master", index="equities", symbol="RELIANCE"))
+        u = rows[0].get("xbrl") if rows else None
+        xml = s.get(u, timeout=25).text if u else ""
+        names = sorted({m.group(1) for m in re.finditer(r"<(?:[\w.-]+:)?(\w+)[^>]*contextRef=", xml)
+                        if re.search(r"Pledg|Encumb", m.group(1))})
+        print("   SHP pledge-ish elements:", names)
+        for name in names[:6]:
+            for m in list(re.finditer(rf"<[\w.-]+:{name}[^>]*contextRef=\"([^\"]+)\"[^>]*>([^<]*)<", xml))[:6]:
+                print(f"     {name} [{m.group(1)}] = {m.group(2).strip()}")
+    except Exception as e:  # noqa: BLE001
+        print(f"   SHP pledge: FAILED {e}")
+
+
+show("free-parity plan shapes (F&O codes, corp actions, BS tags, pledge, SME, BSE)", free_parity)
 show("tape shapes (quote / trade_info / derivative / actions / meetings)", tape_shapes)
 show("results listing 2025+ (industrial + bank)", results_listing)
 show("market shapes (F&O, 52wk, announcements)", market_shapes)

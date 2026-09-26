@@ -268,7 +268,7 @@ def test_refresh_analysis_new_creates_row_and_merges_both_metas(monkeypatch):
     monkeypatch.setattr(market, "fetch_fundamentals_for",
                         lambda syms: {"ABC": {"pe": 10.0}} if syms == ["ABC"] else {})
     monkeypatch.setattr(market, "fetch_technicals_for",
-                        lambda syms: {"ABC": {"rsi14": 50.0}} if syms == ["ABC"] else {})
+                        lambda syms, **kw: {"ABC": {"rsi14": 50.0}} if syms == ["ABC"] else {})
     merged = []
     monkeypatch.setattr(market, "merge_meta",
                         lambda sb_, updates, key, now: merged.append((key, updates)) or 1)
@@ -300,7 +300,7 @@ def test_refresh_analysis_new_partial_failure_retries_only_missing_half(monkeypa
     monkeypatch.setattr(market, "fetch_fundamentals_for",
                         lambda syms: calls["f"].append(list(syms)) or {})   # Yahoo down
     monkeypatch.setattr(market, "fetch_technicals_for",
-                        lambda syms: calls["t"].append(list(syms)) or {})
+                        lambda syms, **kw: calls["t"].append(list(syms)) or {})
     assert market.refresh_analysis_new(sb, NOW) == 0
     assert calls["f"] == [["ABC"]] and calls["t"] == [[]]    # fresh t_at skipped
 
@@ -310,7 +310,7 @@ def test_refresh_analysis_new_served_symbol_costs_nothing(monkeypatch):
     sb = _req_sb([{"symbol": "ABC"}], [{"nse_symbol": "ABC", "name": "ABC Ltd"}],
                  [{"symbol": "ABC", "meta": {"f_at": NOW.isoformat(), "t_at": NOW.isoformat()}}], [])
     monkeypatch.setattr(market, "fetch_fundamentals_for", lambda syms: fetched.append(list(syms)) or {})
-    monkeypatch.setattr(market, "fetch_technicals_for", lambda syms: fetched.append(list(syms)) or {})
+    monkeypatch.setattr(market, "fetch_technicals_for", lambda syms, **kw: fetched.append(list(syms)) or {})
     monkeypatch.setattr(market, "fetch_spark", lambda syms: (_ for _ in ()).throw(AssertionError("no spark")))
     assert market.refresh_analysis_new(sb, NOW) == 0
     assert fetched == [[], []]
