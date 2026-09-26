@@ -16,6 +16,7 @@ import '../sessions.dart';
 import '../theme.dart';
 import '../ticks.dart';
 import 'feed.dart' show homeTab, marketsTab, filterPill, pendingStory;
+import 'portfolio.dart';
 import 'screens.dart';
 import 'stock.dart';
 
@@ -346,6 +347,7 @@ class _MarketsBodyState extends State<MarketsBody> {
   static const _order = [
     'sessions',
     'sectors',
+    'portfolio',
     'indices',
     'trends',
     'oi',
@@ -625,6 +627,9 @@ class _MarketsBodyState extends State<MarketsBody> {
                 _heatLegend(scale),
               ]),
         ),
+      // Phase A (26 Sep): the holdings strip sits above the watchlist — the
+      // one question a holder has on opening Markets is "how am I doing".
+      (id: 'portfolio', label: 'PORTFOLIO', child: const PortfolioSummary()),
       (
         id: 'watch',
         label: 'WATCHLIST',

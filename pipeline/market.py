@@ -310,11 +310,37 @@ def refresh_global(sb, now):
     return upsert(sb, rows)
 
 
+def _pairs_for(sb, symbols):
+    """[(nse_symbol, name)] for bare symbols, in the companies table's order.
+    Values quoted: M&M etc. would break a bare in.() filter."""
+    if not symbols:
+        return []
+    vals = ",".join(f'"{quote(s, safe="")}"' for s in symbols)
+    return [(c["nse_symbol"], c["name"]) for c in
+            sb("GET", f"companies?select=nse_symbol,name&nse_symbol=in.({vals})")]
+
+
+def user_symbols(sb):
+    """Symbols someone holds in a portfolio (028 view `user_symbols`; 029 adds
+    active price alerts). Absent until the migration lands -> []."""
+    try:
+        return [r["symbol"] for r in sb("GET", "user_symbols?select=symbol")]
+    except requests.HTTPError as e:
+        if "user_symbols" not in str(e):
+            raise
+        print("MARKET user_symbols: migration 028 missing")
+        return []
+
+
 def equity_universe(sb, now):
-    """[(nse_symbol, name)] — followed companies first, then user-requested
-    symbols (analysis_requests, <48 h), then those tagged on a story in the
-    last 48 h, deduped, capped. Only these get a quote row."""
+    """[(nse_symbol, name)] — portfolio/alert symbols first (a stale holding
+    price is worse than a stale follow), then followed companies, then
+    user-requested symbols (analysis_requests, <48 h), then those tagged on a
+    story in the last 48 h, deduped, capped. Only these get a quote row.
+    ponytail: past EQUITY_CAP the follows truncate first; watch the count in
+    market_status if portfolios alone approach 200."""
     since = (now - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    user_pairs = _pairs_for(sb, user_symbols(sb))
     followed = [int(f["target_id"]) for f in sb("GET", "follows?select=target_id&target_type=eq.company")
                 if str(f["target_id"]).isdigit()]
     # Most-followed first (ties keep follow order): with EQUITY_CAP in play the
@@ -342,11 +368,7 @@ def equity_universe(sb, now):
     pairs = [by_id[c] for c in ids if c in by_id]
     requested = [r["symbol"] for r in
                  sb("GET", f"analysis_requests?select=symbol&requested_at=gte.{since}")]
-    if requested:  # values quoted: M&M etc. would break a bare in.() filter
-        vals = ",".join(f'"{quote(s, safe="")}"' for s in requested)
-        req_pairs = [(c["nse_symbol"], c["name"]) for c in
-                     sb("GET", f"companies?select=nse_symbol,name&nse_symbol=in.({vals})")]
-        pairs = pairs[:followed_n] + req_pairs + pairs[followed_n:]
+    pairs = user_pairs + pairs[:followed_n] + _pairs_for(sb, requested) + pairs[followed_n:]
     out, have = [], set()
     for sym, name in pairs:
         if sym not in have:

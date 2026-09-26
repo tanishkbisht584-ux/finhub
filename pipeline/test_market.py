@@ -122,6 +122,8 @@ def test_mf_due_once_per_nav_day_after_2230_ist(monkeypatch):
 
 def test_equity_universe_followed_first_then_tagged_capped(monkeypatch):
     def sb(method, path, **kw):
+        if path.startswith("user_symbols"):
+            return []
         if path.startswith("follows"):
             return [{"target_id": "1"}, {"target_id": "2"}, {"target_id": "x"}]
         if path.startswith("story_companies"):
@@ -138,10 +140,41 @@ def test_equity_universe_followed_first_then_tagged_capped(monkeypatch):
     assert [s for s, _ in syms] == ["C1", "C2", "C3"]  # followed first, cap honoured
 
 
+def test_equity_universe_user_symbols_first_and_tolerates_missing_view(monkeypatch):
+    """028: portfolio symbols outrank follows under the cap; before the
+    migration lands the view 404s and the universe is unchanged."""
+    import requests as rq
+    have_view = True
+
+    def sb(method, path, **kw):
+        if path.startswith("user_symbols"):
+            if not have_view:
+                raise rq.HTTPError("404 user_symbols: relation does not exist")
+            return [{"symbol": "TCS"}, {"symbol": "M&M"}]
+        if path.startswith("follows"):
+            return [{"target_id": "1"}, {"target_id": "1"}, {"target_id": "2"}]
+        if path.startswith("story_companies") or path.startswith("analysis_requests"):
+            return []
+        if path.startswith("companies?select=nse_symbol,name&nse_symbol=in."):
+            assert 'M%26M' in path  # quoted, never a bare &
+            return [{"nse_symbol": "TCS", "name": "TCS"}, {"nse_symbol": "M&M", "name": "Mahindra"}]
+        if path.startswith("companies"):
+            ids = re.search(r"id=in\.\(([^)]*)\)", path).group(1).split(",")
+            return [{"id": int(i), "nse_symbol": f"C{i}", "name": f"Co {i}"} for i in ids]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(market, "EQUITY_CAP", 3)
+    assert [s for s, _ in market.equity_universe(sb, NOW)] == ["TCS", "M&M", "C1"]
+    have_view = False
+    assert [s for s, _ in market.equity_universe(sb, NOW)] == ["C1", "C2"]
+
+
 def test_equity_universe_popular_followed_win_cap(monkeypatch):
     """Under the cap, the symbols MORE users follow rank first -- not the ones
     the earliest users happened to follow."""
     def sb(method, path, **kw):
+        if path.startswith("user_symbols"):
+            return []
         if path.startswith("follows"):
             return [{"target_id": t} for t in ["1", "2", "2", "3", "3", "3"]]
         if path.startswith("story_companies") or path.startswith("analysis_requests"):

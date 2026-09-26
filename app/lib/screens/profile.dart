@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../analytics.dart';
 
 import '../theme.dart';
+import 'portfolio.dart';
 import 'saved.dart';
 import 'watchlist.dart';
 
@@ -83,6 +84,13 @@ class ProfileScreen extends StatelessWidget {
             title: Text('Watchlist', style: serif.copyWith(fontSize: 15)),
             trailing: const Icon(Icons.chevron_right, color: inkDim, size: 20),
             onTap: () => _pushPlain(context, const WatchlistScreen()),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Portfolio', style: serif.copyWith(fontSize: 15)),
+            trailing: const Icon(Icons.chevron_right, color: inkDim, size: 20),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const PortfolioScreen())),
           ),
           if (kTermsUrl.isNotEmpty)
             ListTile(

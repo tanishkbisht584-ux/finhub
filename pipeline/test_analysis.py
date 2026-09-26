@@ -318,6 +318,8 @@ def test_refresh_analysis_new_served_symbol_costs_nothing(monkeypatch):
 
 def test_equity_universe_orders_followed_requested_tagged_and_caps(monkeypatch):
     def sb(method, path, **kw):
+        if path.startswith("user_symbols"):
+            return []
         if path.startswith("follows"):
             return [{"target_id": "1"}]
         if path.startswith("story_companies"):
