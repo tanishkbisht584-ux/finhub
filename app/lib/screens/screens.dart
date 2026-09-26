@@ -446,7 +446,7 @@ Future<List<SavedScreen>> syncSavedScreens() async {
   try {
     final rows = await Supabase.instance.client
         .from('user_screens')
-        .select('name,filters,sort_col,asc')
+        .select('name,filters,sort_col,sort_asc')
         .eq('user_id', uid);
     final cloud = <String, SavedScreen>{
       for (final r in rows)
@@ -457,7 +457,7 @@ Future<List<SavedScreen>> syncSavedScreens() async {
               (metric: '${f['metric']}', gte: f['gte'] == true, value: (f['value'] as num).toDouble())
           ],
           sortCol: '${r['sort_col'] ?? 'mcap_cr'}',
-          asc: r['asc'] == true,
+          asc: r['sort_asc'] == true,
         )
     };
     final merged = [
@@ -487,7 +487,7 @@ Future<void> cloudSaveScreen(SavedScreen s) async {
       for (final f in s.filters) {'metric': f.metric, 'gte': f.gte, 'value': f.value}
     ],
     'sort_col': s.sortCol,
-    'asc': s.asc,
+    'sort_asc': s.asc,
     'updated_at': DateTime.now().toUtc().toIso8601String(),
   });
 }

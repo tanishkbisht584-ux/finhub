@@ -971,9 +971,26 @@ def test_retention_cutoff_is_date_truncated(monkeypatch):
     assert method == "DELETE"
     assert "events?created_at=lt." in path
     assert "T00:00:00" in path
-    # rejected cards too — and ONLY rejected: an approved card is the product
-    rej = [p for m, p in calls if p.startswith("stories?")]
-    assert rej == [p for p in rej if "status=eq.rejected" in p and "T00:00:00" in p] and len(rej) == 1
+    # 26 Sep: rejected, duplicate and approved cards all age out; saved ids are
+    # exempt from the approved delete (the fake `saves` read returns none here)
+    stories = [p for m, p in calls if m == "DELETE" and p.startswith("stories?")]
+    assert [p.split("&")[0] for p in stories] == [
+        "stories?status=eq.rejected", "stories?status=eq.duplicate", "stories?status=eq.approved"]
+    assert all("T00:00:00" in p for p in stories) and "id=not.in" not in stories[-1]
+
+
+def test_retention_sweep_keeps_saved_stories(monkeypatch):
+    """A saved card never ages out: the approved delete carries id=not.in.(...)"""
+    import run
+    calls = []
+
+    def fake_sb(m, p, **k):
+        calls.append((m, p))
+        return [{"story_id": 2038}, {"story_id": 1998}] if p.startswith("saves") else []
+    monkeypatch.setattr(run, "sb", fake_sb)
+    run.retention_sweep()
+    appr = [p for m, p in calls if p.startswith("stories?status=eq.approved")]
+    assert len(appr) == 1 and appr[0].endswith("&id=not.in.(1998,2038)")
 
 
 def test_dead_model_lane_benched_not_fatal(monkeypatch):

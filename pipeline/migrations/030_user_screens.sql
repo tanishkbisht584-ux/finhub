@@ -9,7 +9,7 @@ create table if not exists user_screens (
   query      text,                     -- the typed formula, when there was one
   filters    jsonb not null default '[]'::jsonb,
   sort_col   text not null default 'mcap_cr',
-  asc        boolean not null default false,
+  sort_asc   boolean not null default false,   -- `asc` is reserved in Postgres
   updated_at timestamptz not null default now(),
   primary key (user_id, name)
 );

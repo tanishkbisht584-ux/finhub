@@ -60,7 +60,7 @@ KNOBS = ("MAX_AI_CALLS_PER_RUN", "AI_CONCURRENCY", "AI_PHASE_SECONDS", "DAILY_AI
          "SILENT_SOURCE_DAYS", "REVIVE_AFTER_HOURS", "TRUSTED_SOLO_MINUTES", "TRUSTED_AUTHORITY",
          "MAX_ALERTS_PER_DAY", "QUIET_START_IST", "QUIET_END_IST", "QUIET_PIERCE_SCORE",
          "PERSONAL_CAP_PER_DAY", "PERSONAL_MIN_SCORE", "OG_FETCH_CAP", "EVENTS_RETENTION_DAYS",
-         "REJECTED_RETENTION_DAYS")
+         "REJECTED_RETENTION_DAYS", "APPROVED_RETENTION_DAYS")
 MODEL_ENVS = ("GEMINI_MODELS", "GROQ_MODEL", "OPENROUTER_MODEL")  # ai.py reads env at call time
 SWITCHES = ("pipeline", "auto_approve", "alerts", "personal_alerts", "chief_editor", "market")
 
@@ -1336,10 +1336,13 @@ def auto_approve():
 
 EVENTS_RETENTION_DAYS = 90   # spec M8: events grows on every swipe, forever,
                              # against a 500 MB free tier — this makes it run for years
-REJECTED_RETENTION_DAYS = 30  # 2026-08-23: rejected rows were 26% of stories (9.6k) and
-                              # nobody ever sees one; they only exist as "seen this url".
-                              # ~2k stories/day since the throughput fix → 500 MB in ~4
-                              # months; this roughly halves that. Approved cards: never.
+REJECTED_RETENTION_DAYS = 7   # 2026-09-26: rejected AND duplicate rows only exist as "seen
+                              # this url"; duplicates were never pruned and the two were 51%
+                              # of 188k rows (DB 692/500 MB, read-only threat). A feed that
+                              # resurfaces a week-old link just gets rejected again.
+APPROVED_RETENTION_DAYS = 30  # 2026-09-26: the feed, watchlist and Ask only look at recent
+                              # cards; older rows were 511 MB of dead weight. Saved stories
+                              # are exempt. Steady state ~200 MB at ~3.7k rows/day.
 QA_CACHE_RETENTION_DAYS = 7   # 2026-09-13: never pruned before. Answers are valid for
                               # <= 24 h anyway; glossary defines re-warm lazily (~100 terms).
                               # ponytail: age-only prune; flag defines in answer_json if
@@ -1347,18 +1350,29 @@ QA_CACHE_RETENTION_DAYS = 7   # 2026-09-13: never pruned before. Answers are val
 
 
 def retention_sweep():
-    """Delete events older than EVENTS_RETENTION_DAYS. The cutoff is truncated
-    to the day, so the first run after midnight does the real delete and every
-    other run that day matches nothing — a once-per-day guard with no state."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=EVENTS_RETENTION_DAYS)) \
-        .replace(hour=0, minute=0, second=0, microsecond=0)
+    """Delete events older than EVENTS_RETENTION_DAYS, rejected/duplicate cards
+    older than REJECTED_RETENTION_DAYS and approved cards older than
+    APPROVED_RETENTION_DAYS (saved ones never). The cutoff is truncated to the
+    day, so the first run after midnight does the real delete and every other
+    run that day matches nothing — a once-per-day guard with no state."""
+    def day_cutoff(days):
+        return iso((datetime.now(timezone.utc) - timedelta(days=days))
+                   .replace(hour=0, minute=0, second=0, microsecond=0))
+
+    cutoff = day_cutoff(EVENTS_RETENTION_DAYS)
     try:
-        sb("DELETE", f"events?created_at=lt.{iso(cutoff)}")
-        # A rejected story's only job after a month is holding a url_hash; a
-        # feed that resurfaces a 30-day-old link just gets it rejected again.
-        rej = (datetime.now(timezone.utc) - timedelta(days=REJECTED_RETENTION_DAYS)) \
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-        sb("DELETE", f"stories?status=eq.rejected&created_at=lt.{iso(rej)}")
+        sb("DELETE", f"events?created_at=lt.{cutoff}")
+        # A rejected or duplicate story's only job is holding a url_hash; a
+        # feed that resurfaces a week-old link just gets rejected again.
+        rej = day_cutoff(REJECTED_RETENTION_DAYS)
+        sb("DELETE", f"stories?status=eq.rejected&created_at=lt.{rej}")
+        sb("DELETE", f"stories?status=eq.duplicate&created_at=lt.{rej}")
+        # Approved cards age out too (26 Sep: 28k unreachable rows were 40% of
+        # the table). Saved stories stay — the ids ride in the URL filter.
+        # ponytail: switch to an RPC if saves ever pass ~2k rows.
+        saved = sorted({str(r["story_id"]) for r in sb("GET", "saves?select=story_id")})
+        keep = f"&id=not.in.({','.join(saved)})" if saved else ""
+        sb("DELETE", f"stories?status=eq.approved&created_at=lt.{day_cutoff(APPROVED_RETENTION_DAYS)}{keep}")
         # run/edge logs: 1 run row per loop iteration (~1900/day) would eat the
         # free tier in months — keep failures 14 d, healthy runs 48 h, edge 30 d
         now = datetime.now(timezone.utc)
